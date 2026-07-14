@@ -323,6 +323,26 @@ var require_httpServer = __commonJS({
   }
 });
 
+// node_modules/terminus-node-bridge/dist/buffer.js
+var require_buffer = __commonJS({
+  "node_modules/terminus-node-bridge/dist/buffer.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.bufferToString = bufferToString3;
+    exports.bufferLength = bufferLength2;
+    exports.concatBuffersToString = concatBuffersToString2;
+    function bufferToString3(chunk, encoding = "utf8") {
+      return chunk.toString(encoding);
+    }
+    function bufferLength2(chunk) {
+      return chunk.length;
+    }
+    function concatBuffersToString2(chunks, encoding = "utf8") {
+      return Buffer.concat(chunks).toString(encoding);
+    }
+  }
+});
+
 // node_modules/terminus-node-bridge/dist/index.js
 var require_dist = __commonJS({
   "node_modules/terminus-node-bridge/dist/index.js"(exports) {
@@ -351,6 +371,7 @@ var require_dist = __commonJS({
     __exportStar(require_fs(), exports);
     __exportStar(require_process(), exports);
     __exportStar(require_httpServer(), exports);
+    __exportStar(require_buffer(), exports);
   }
 });
 
@@ -453,7 +474,7 @@ function readBody(req, maxBytes) {
     const chunks = [];
     let total = 0;
     req.onData((chunk) => {
-      total += chunk.length;
+      total += (0, import_terminus_node_bridge.bufferLength)(chunk);
       if (total > maxBytes) {
         reject(new Error("body exceeds max size"));
         req.destroy();
@@ -461,7 +482,7 @@ function readBody(req, maxBytes) {
       }
       chunks.push(chunk);
     });
-    req.onEnd(() => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.onEnd(() => resolve((0, import_terminus_node_bridge.concatBuffersToString)(chunks)));
     req.onError(reject);
   });
 }
@@ -11017,7 +11038,7 @@ var PtyProcess = class extends TypedEmitter {
     );
     this.child = child;
     child.onStdout((chunk) => this.emit("data", chunk));
-    child.onStderr((chunk) => this.emit("stderr", chunk.toString("utf8")));
+    child.onStderr((chunk) => this.emit("stderr", (0, import_terminus_node_bridge5.bufferToString)(chunk)));
     child.onControlData((chunk) => this.handleControlChunk(chunk));
     child.onError((err) => this.emit("error", err));
     child.onClose((code) => this.emit("exit", { code }));
@@ -11035,7 +11056,7 @@ var PtyProcess = class extends TypedEmitter {
     (_a5 = this.child) == null ? void 0 : _a5.kill(signal);
   }
   handleControlChunk(chunk) {
-    this.controlBuf += chunk.toString("utf8");
+    this.controlBuf += (0, import_terminus_node_bridge5.bufferToString)(chunk);
     let idx;
     while ((idx = this.controlBuf.indexOf("\n")) !== -1) {
       const line = this.controlBuf.slice(0, idx);
@@ -11543,7 +11564,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
     });
     this.pty.on("data", (chunk) => {
       var _a6;
-      return (_a6 = this.term) == null ? void 0 : _a6.write(chunk.toString("utf8"));
+      return (_a6 = this.term) == null ? void 0 : _a6.write((0, import_terminus_node_bridge8.bufferToString)(chunk));
     });
     this.pty.on("stderr", (text) => new import_obsidian3.Notice(`Terminus: ${text.trim()}`));
     this.pty.on("error", (err) => new import_obsidian3.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));

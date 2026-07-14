@@ -1,4 +1,4 @@
-import { createHttpServer, type SimpleHttpRequest, type SimpleHttpResponse, type SimpleHttpServer } from "terminus-node-bridge";
+import { createHttpServer, bufferLength, concatBuffersToString, type SimpleHttpRequest, type SimpleHttpResponse, type SimpleHttpServer } from "terminus-node-bridge";
 import { PreToolUseHookPayload } from "../hooks/types";
 
 export interface RegisteredPanel {
@@ -111,7 +111,7 @@ function readBody(req: SimpleHttpRequest, maxBytes: number): Promise<string> {
     const chunks: Buffer[] = [];
     let total = 0;
     req.onData((chunk) => {
-      total += chunk.length;
+      total += bufferLength(chunk);
       if (total > maxBytes) {
         reject(new Error("body exceeds max size"));
         req.destroy();
@@ -119,7 +119,7 @@ function readBody(req: SimpleHttpRequest, maxBytes: number): Promise<string> {
       }
       chunks.push(chunk);
     });
-    req.onEnd(() => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.onEnd(() => resolve(concatBuffersToString(chunks)));
     req.onError(reject);
   });
 }

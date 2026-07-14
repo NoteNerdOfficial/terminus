@@ -1,5 +1,5 @@
 import { TypedEmitter } from "../node/emitter";
-import { spawnWithControlChannel, type SpawnedProcess } from "terminus-node-bridge";
+import { spawnWithControlChannel, bufferToString, type SpawnedProcess } from "terminus-node-bridge";
 
 export interface PtyProcessOptions {
   pythonBin: string;
@@ -56,7 +56,7 @@ export class PtyProcess extends TypedEmitter<PtyProcessEvents> {
     this.child = child;
 
     child.onStdout((chunk) => this.emit("data", chunk));
-    child.onStderr((chunk) => this.emit("stderr", chunk.toString("utf8")));
+    child.onStderr((chunk) => this.emit("stderr", bufferToString(chunk)));
     child.onControlData((chunk) => this.handleControlChunk(chunk));
     child.onError((err) => this.emit("error", err));
     child.onClose((code) => this.emit("exit", { code }));
@@ -75,7 +75,7 @@ export class PtyProcess extends TypedEmitter<PtyProcessEvents> {
   }
 
   private handleControlChunk(chunk: Buffer): void {
-    this.controlBuf += chunk.toString("utf8");
+    this.controlBuf += bufferToString(chunk);
     let idx: number;
     while ((idx = this.controlBuf.indexOf("\n")) !== -1) {
       const line = this.controlBuf.slice(0, idx);

@@ -2,7 +2,7 @@ import { ItemView, Notice, TFile, ViewStateResult, WorkspaceLeaf } from "obsidia
 import { IDecoration, Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { pathJoin, pathRelative, randomHex, getAllEnvVars } from "terminus-node-bridge";
+import { pathJoin, pathRelative, randomHex, getAllEnvVars, bufferToString } from "terminus-node-bridge";
 import { PtyProcess } from "../pty/PtyProcess";
 import { getShellIntegrationEnv } from "../pty/shellIntegration";
 import { buildDiff } from "../server/diff";
@@ -199,7 +199,7 @@ export class TerminalView extends ItemView {
       },
     });
 
-    this.pty.on("data", (chunk: Buffer) => this.term?.write(chunk.toString("utf8")));
+    this.pty.on("data", (chunk: Buffer) => this.term?.write(bufferToString(chunk)));
     this.pty.on("stderr", (text: string) => new Notice(`Terminus: ${text.trim()}`));
     this.pty.on("error", (err) => new Notice(`Terminus: PTY error: ${errorMessage(err)}`));
     this.pty.on("exit", ({ code }: { code: number | null }) => {
