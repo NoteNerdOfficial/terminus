@@ -12,18 +12,17 @@
   "license": "MIT",
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
-    "diff": "^9.0.0",
-    "@xterm/addon-serialize": "^0.14.0"
+    "diff": "^9.0.0"
   },
   "devDependencies": {
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/view": "^6.0.0",
     "@types/node": "^16.11.6",
-    "builtin-modules": "^3.3.0",
     "esbuild": "^0.17.19",
     "obsidian": "latest",
     "tslib": "2.4.0",
-    "typescript": "4.7.4",
-    "@codemirror/state": "^6.0.0",
-    "@codemirror/view": "^6.0.0"
+    "typescript": "4.7.4"
   }
 }

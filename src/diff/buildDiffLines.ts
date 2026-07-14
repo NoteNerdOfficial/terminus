@@ -58,7 +58,7 @@ export function buildDiffLines(oldText: string, newText: string): DiffLine[] {
 
       if (removedLines.length === addedLines.length) {
         for (let k = 0; k < removedLines.length; k++) {
-          const wordParts = diffWordsWithSpace(removedLines[k]!, addedLines[k]!);
+          const wordParts = diffWordsWithSpace(removedLines[k], addedLines[k]);
           lines.push({ lineNumber: lineNumber++, marker: "-", segments: buildSegments(wordParts, "removed") });
           lines.push({ lineNumber: lineNumber++, marker: "+", segments: buildSegments(wordParts, "added") });
         }

@@ -198,7 +198,7 @@
 
 /* Pending Changes sidebar panel -- Design 3a ("Scoped groups, one primary
    CTA") from the approved Diff Panel Redesign. This palette is hardcoded
-   (not built from Obsidian's --background-*/--text-* theme variables) so
+   (not built from Obsidian's --background-* / --text-* theme variables) so
    the panel matches the design exactly regardless of the user's active
    Obsidian theme -- a deliberate exception to the rest of the plugin,
    which stays theme-adaptive. */

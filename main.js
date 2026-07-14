@@ -11060,7 +11060,7 @@ var CommandHelpModal = class extends import_obsidian2.Modal {
 var TERMINUS_VIEW_TYPE = "terminus-view";
 var SCROLLBACK_PERSIST_LINES = 1e3;
 function resolveMonospaceFontStack() {
-  const resolved = getComputedStyle(document.body).getPropertyValue("--font-monospace").trim();
+  const resolved = getComputedStyle(activeDocument.body).getPropertyValue("--font-monospace").trim();
   const fallback = "Menlo, Monaco, Consolas, monospace";
   return resolved ? `${resolved}, ${fallback}` : fallback;
 }
@@ -11944,7 +11944,7 @@ function renderDiffLine(container, line) {
         text: segment2.text
       });
     } else {
-      content.appendChild(document.createTextNode(segment2.text));
+      content.appendChild(activeDocument.createTextNode(segment2.text));
     }
   }
 }
@@ -11981,7 +11981,7 @@ var RemovedGhostWidget = class extends import_view.WidgetType {
     this.text = text;
   }
   toDOM() {
-    const span = document.createElement("span");
+    const span = activeDocument.createElement("span");
     span.className = "terminus-inline-diff-remove-line";
     span.textContent = this.text;
     return span;
@@ -11996,20 +11996,20 @@ var DiffControlsWidget = class extends import_view.WidgetType {
     this.overlay = overlay;
   }
   toDOM() {
-    const bar = document.createElement("div");
+    const bar = activeDocument.createElement("div");
     bar.className = "terminus-inline-diff-controls";
-    const label = document.createElement("span");
+    const label = activeDocument.createElement("span");
     label.className = "terminus-inline-diff-label";
     label.textContent = "Terminus \xB7 applied change";
     bar.appendChild(label);
-    const reject = document.createElement("button");
+    const reject = activeDocument.createElement("button");
     reject.textContent = "Reject";
     reject.className = "terminus-inline-diff-reject";
     reject.addEventListener("click", (e) => {
       e.preventDefault();
       this.overlay.onReject();
     });
-    const accept = document.createElement("button");
+    const accept = activeDocument.createElement("button");
     accept.textContent = "Accept";
     accept.className = "terminus-inline-diff-accept mod-cta";
     accept.addEventListener("click", (e) => {
@@ -12314,7 +12314,7 @@ function renderSplitCell(row, side, kind, lineNumber, cellLine) {
         text: segment2.text
       });
     } else {
-      content.appendChild(document.createTextNode(segment2.text));
+      content.appendChild(activeDocument.createTextNode(segment2.text));
     }
   }
 }
@@ -12380,7 +12380,7 @@ var DiffSplitView = class extends import_obsidian6.ItemView {
 async function openDiffSplitView(plugin, changeId) {
   const leaf = plugin.app.workspace.getLeaf(true);
   await leaf.setViewState({ type: DIFF_SPLIT_VIEW_TYPE, active: true, state: { changeId } });
-  plugin.app.workspace.revealLeaf(leaf);
+  await plugin.app.workspace.revealLeaf(leaf);
 }
 
 // src/modals/ActionLogModal.ts
@@ -13190,8 +13190,8 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
       void this.openTerminal(evt);
     });
     this.addCommand({
-      id: "open-terminus",
-      name: "Open Terminus",
+      id: "open",
+      name: "Open",
       callback: () => void this.openTerminal()
     });
     this.addCommand({
@@ -13202,31 +13202,26 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     this.addCommand({
       id: "increase-terminal-font-size",
       name: "Increase terminal font size",
-      hotkeys: [{ modifiers: ["Mod"], key: "=" }],
       callback: () => void this.setFontSize(this.settings.fontSize + 1)
     });
     this.addCommand({
       id: "decrease-terminal-font-size",
       name: "Decrease terminal font size",
-      hotkeys: [{ modifiers: ["Mod"], key: "-" }],
       callback: () => void this.setFontSize(this.settings.fontSize - 1)
     });
     this.addCommand({
       id: "reset-terminal-font-size",
       name: "Reset terminal font size",
-      hotkeys: [{ modifiers: ["Mod"], key: "0" }],
       callback: () => void this.setFontSize(DEFAULT_SETTINGS.fontSize)
     });
     this.addCommand({
       id: "accept-oldest-pending-change",
       name: "Accept oldest pending change",
-      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "Enter" }],
       callback: () => void this.resolveOldestPendingChange(true)
     });
     this.addCommand({
       id: "reject-oldest-pending-change",
       name: "Reject oldest pending change",
-      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "Backspace" }],
       callback: () => void this.resolveOldestPendingChange(false)
     });
     this.addCommand({
@@ -13246,10 +13241,10 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     });
     this.app.workspace.onLayoutReady(() => void this.revealPendingChangesView());
   }
-  async onunload() {
+  onunload() {
     if (this.revealPendingChangesTimer)
       clearTimeout(this.revealPendingChangesTimer);
-    await this.reviewServer.stop();
+    void this.reviewServer.stop();
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -13344,7 +13339,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
       leaf = (_b = workspace.getRightLeaf(false)) != null ? _b : workspace.getLeaf("tab");
       await leaf.setViewState({ type: PENDING_CHANGES_VIEW_TYPE, active: true });
     }
-    workspace.revealLeaf(leaf);
+    await workspace.revealLeaf(leaf);
   }
   /** Ribbon clicks always carry a MouseEvent to anchor a placement menu to;
    *  a command-palette/hotkey invocation doesn't, so "Always ask" falls
@@ -13393,7 +13388,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
         break;
     }
     await leaf.setViewState({ type: TERMINUS_VIEW_TYPE, active: true });
-    workspace.revealLeaf(leaf);
+    await workspace.revealLeaf(leaf);
   }
   allocateTerminalNumber() {
     return this.nextTerminalNumber++;

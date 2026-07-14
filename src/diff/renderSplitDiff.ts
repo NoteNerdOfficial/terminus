@@ -80,9 +80,9 @@ function buildHunkSides(oldValue: string, newValue: string): { oldLines: CellLin
     const oldLines: CellLine[] = [];
     const newLines: CellLine[] = [];
     for (let k = 0; k < oldRaw.length; k++) {
-      const wordParts = diffWordsWithSpace(oldRaw[k]!, newRaw[k]!);
-      oldLines.push({ text: oldRaw[k]!, segments: buildSegments(wordParts, "removed") });
-      newLines.push({ text: newRaw[k]!, segments: buildSegments(wordParts, "added") });
+      const wordParts = diffWordsWithSpace(oldRaw[k], newRaw[k]);
+      oldLines.push({ text: oldRaw[k], segments: buildSegments(wordParts, "removed") });
+      newLines.push({ text: newRaw[k], segments: buildSegments(wordParts, "added") });
     }
     return { oldLines, newLines };
   }
@@ -192,7 +192,7 @@ function renderSplitCell(
         text: segment.text,
       });
     } else {
-      content.appendChild(document.createTextNode(segment.text));
+      content.appendChild(activeDocument.createTextNode(segment.text));
     }
   }
 }

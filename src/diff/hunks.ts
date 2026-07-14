@@ -47,7 +47,7 @@ export function computeSplitParts(oldText: string, newText: string): SplitPart[]
   let i = 0;
 
   while (i < diffParts.length) {
-    const part = diffParts[i]!;
+    const part = diffParts[i];
 
     if (!part.added && !part.removed) {
       result.push({
@@ -66,7 +66,7 @@ export function computeSplitParts(oldText: string, newText: string): SplitPart[]
 
     if (part.removed && diffParts[i + 1]?.added) {
       const oldValue = part.value;
-      const newValue = diffParts[i + 1]!.value;
+      const newValue = diffParts[i + 1].value;
       result.push({
         type: "hunk",
         index: hunkIndex++,

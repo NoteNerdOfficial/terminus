@@ -41,7 +41,7 @@ class RemovedGhostWidget extends WidgetType {
     super();
   }
   toDOM(): HTMLElement {
-    const span = document.createElement("span");
+    const span = activeDocument.createElement("span");
     span.className = "terminus-inline-diff-remove-line";
     span.textContent = this.text;
     return span;
@@ -56,14 +56,14 @@ class DiffControlsWidget extends WidgetType {
     super();
   }
   toDOM(): HTMLElement {
-    const bar = document.createElement("div");
+    const bar = activeDocument.createElement("div");
     bar.className = "terminus-inline-diff-controls";
-    const label = document.createElement("span");
+    const label = activeDocument.createElement("span");
     label.className = "terminus-inline-diff-label";
     label.textContent = "Terminus · applied change";
     bar.appendChild(label);
 
-    const reject = document.createElement("button");
+    const reject = activeDocument.createElement("button");
     reject.textContent = "Reject";
     reject.className = "terminus-inline-diff-reject";
     reject.addEventListener("click", (e) => {
@@ -71,7 +71,7 @@ class DiffControlsWidget extends WidgetType {
       this.overlay.onReject();
     });
 
-    const accept = document.createElement("button");
+    const accept = activeDocument.createElement("button");
     accept.textContent = "Accept";
     accept.className = "terminus-inline-diff-accept mod-cta";
     accept.addEventListener("click", (e) => {

@@ -85,5 +85,5 @@ export class DiffSplitView extends ItemView {
 export async function openDiffSplitView(plugin: TerminusPlugin, changeId: string): Promise<void> {
   const leaf = plugin.app.workspace.getLeaf(true);
   await leaf.setViewState({ type: DIFF_SPLIT_VIEW_TYPE, active: true, state: { changeId } });
-  plugin.app.workspace.revealLeaf(leaf);
+  await plugin.app.workspace.revealLeaf(leaf);
 }

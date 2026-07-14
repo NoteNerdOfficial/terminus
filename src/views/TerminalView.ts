@@ -28,7 +28,7 @@ const SCROLLBACK_PERSIST_LINES = 1000;
  * monospace font to a literal string at runtime instead.
  */
 function resolveMonospaceFontStack(): string {
-  const resolved = getComputedStyle(document.body).getPropertyValue("--font-monospace").trim();
+  const resolved = getComputedStyle(activeDocument.body).getPropertyValue("--font-monospace").trim();
   const fallback = "Menlo, Monaco, Consolas, monospace";
   return resolved ? `${resolved}, ${fallback}` : fallback;
 }

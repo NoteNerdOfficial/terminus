@@ -91,8 +91,8 @@ export default class TerminusPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "open-terminus",
-      name: "Open Terminus",
+      id: "open",
+      name: "Open",
       callback: () => void this.openTerminal(),
     });
 
@@ -105,32 +105,27 @@ export default class TerminusPlugin extends Plugin {
     this.addCommand({
       id: "increase-terminal-font-size",
       name: "Increase terminal font size",
-      hotkeys: [{ modifiers: ["Mod"], key: "=" }],
       callback: () => void this.setFontSize(this.settings.fontSize + 1),
     });
     this.addCommand({
       id: "decrease-terminal-font-size",
       name: "Decrease terminal font size",
-      hotkeys: [{ modifiers: ["Mod"], key: "-" }],
       callback: () => void this.setFontSize(this.settings.fontSize - 1),
     });
     this.addCommand({
       id: "reset-terminal-font-size",
       name: "Reset terminal font size",
-      hotkeys: [{ modifiers: ["Mod"], key: "0" }],
       callback: () => void this.setFontSize(DEFAULT_SETTINGS.fontSize),
     });
 
     this.addCommand({
       id: "accept-oldest-pending-change",
       name: "Accept oldest pending change",
-      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "Enter" }],
       callback: () => void this.resolveOldestPendingChange(true),
     });
     this.addCommand({
       id: "reject-oldest-pending-change",
       name: "Reject oldest pending change",
-      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "Backspace" }],
       callback: () => void this.resolveOldestPendingChange(false),
     });
     this.addCommand({
@@ -156,9 +151,9 @@ export default class TerminusPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => void this.revealPendingChangesView());
   }
 
-  async onunload(): Promise<void> {
+  onunload(): void {
     if (this.revealPendingChangesTimer) clearTimeout(this.revealPendingChangesTimer);
-    await this.reviewServer.stop();
+    void this.reviewServer.stop();
   }
 
   async loadSettings(): Promise<void> {
@@ -258,7 +253,7 @@ export default class TerminusPlugin extends Plugin {
       leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf("tab");
       await leaf.setViewState({ type: PENDING_CHANGES_VIEW_TYPE, active: true });
     }
-    workspace.revealLeaf(leaf);
+    await workspace.revealLeaf(leaf);
   }
 
   /** Ribbon clicks always carry a MouseEvent to anchor a placement menu to;
@@ -310,7 +305,7 @@ export default class TerminusPlugin extends Plugin {
         break;
     }
     await leaf.setViewState({ type: TERMINUS_VIEW_TYPE, active: true });
-    workspace.revealLeaf(leaf);
+    await workspace.revealLeaf(leaf);
   }
 
   allocateTerminalNumber(): number {

@@ -87,7 +87,7 @@ function renderDiffLine(container: HTMLElement, line: DiffLine): void {
         text: segment.text,
       });
     } else {
-      content.appendChild(document.createTextNode(segment.text));
+      content.appendChild(activeDocument.createTextNode(segment.text));
     }
   }
 }
