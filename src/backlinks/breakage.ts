@@ -11,13 +11,19 @@ const BLOCK_ID_RE = /\^([a-zA-Z0-9-]+)\s*$/gm;
 
 function extractHeadings(text: string): Set<string> {
   const headings = new Set<string>();
-  for (const m of text.matchAll(HEADING_RE)) headings.add(m[1].trim());
+  for (const m of text.matchAll(HEADING_RE)) {
+    const heading = m[1];
+    if (heading !== undefined) headings.add(heading.trim());
+  }
   return headings;
 }
 
 function extractBlockIds(text: string): Set<string> {
   const ids = new Set<string>();
-  for (const m of text.matchAll(BLOCK_ID_RE)) ids.add(m[1]);
+  for (const m of text.matchAll(BLOCK_ID_RE)) {
+    const id = m[1];
+    if (id !== undefined) ids.add(id);
+  }
   return ids;
 }
 

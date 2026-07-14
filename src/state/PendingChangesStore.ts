@@ -219,6 +219,7 @@ export class PendingChangesStore extends EventEmitter {
     const idx = this.history.findIndex((h) => h.historyId === historyId);
     if (idx === -1) return;
     const [item] = this.history.splice(idx, 1);
+    if (!item) return;
 
     if (item.accepted) {
       await this.applyOldState(item.diff);

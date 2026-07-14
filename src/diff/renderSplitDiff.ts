@@ -80,9 +80,12 @@ function buildHunkSides(oldValue: string, newValue: string): { oldLines: CellLin
     const oldLines: CellLine[] = [];
     const newLines: CellLine[] = [];
     for (let k = 0; k < oldRaw.length; k++) {
-      const wordParts = diffWordsWithSpace(oldRaw[k], newRaw[k]);
-      oldLines.push({ text: oldRaw[k], segments: buildSegments(wordParts, "removed") });
-      newLines.push({ text: newRaw[k], segments: buildSegments(wordParts, "added") });
+      const oldLine = oldRaw[k];
+      const newLine = newRaw[k];
+      if (oldLine === undefined || newLine === undefined) continue;
+      const wordParts = diffWordsWithSpace(oldLine, newLine);
+      oldLines.push({ text: oldLine, segments: buildSegments(wordParts, "removed") });
+      newLines.push({ text: newLine, segments: buildSegments(wordParts, "added") });
     }
     return { oldLines, newLines };
   }

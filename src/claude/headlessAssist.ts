@@ -135,9 +135,10 @@ function parseSuggestion(text: string): FixSuggestion | null {
   }
 
   const match = text.match(/\{[\s\S]*\}/);
-  if (match) {
+  const matchedText = match?.[0];
+  if (matchedText !== undefined) {
     try {
-      const embedded = JSON.parse(match[0]);
+      const embedded = JSON.parse(matchedText);
       if (isFixSuggestion(embedded)) return embedded;
     } catch {
       // fall through to unstructured
