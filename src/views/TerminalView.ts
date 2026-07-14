@@ -2,8 +2,7 @@ import { ItemView, Notice, TFile, ViewStateResult, WorkspaceLeaf } from "obsidia
 import { IDecoration, Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { pathJoin, pathRelative, randomHex } from "../node/fs";
-import { getAllEnvVars } from "../node/process";
+import { pathJoin, pathRelative, randomHex, getAllEnvVars } from "terminus-node-bridge";
 import { PtyProcess } from "../pty/PtyProcess";
 import { getShellIntegrationEnv } from "../pty/shellIntegration";
 import { buildDiff } from "../server/diff";

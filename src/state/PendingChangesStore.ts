@@ -1,5 +1,5 @@
 import { TypedEmitter } from "../node/emitter";
-import { deleteFileIfExists, writeTextFile } from "../node/fs";
+import { deleteFileIfExists, writeTextFile } from "terminus-node-bridge";
 import { PreToolUseHookPayload } from "../hooks/types";
 import { DiffResult } from "../server/diff";
 import type { BrokenBacklink } from "../backlinks/breakage";

@@ -1,5 +1,5 @@
 import { Menu, Notice, Plugin, WorkspaceLeaf } from "obsidian";
-import { pathBasename, pathJoin } from "./node/fs";
+import { pathBasename, pathJoin } from "terminus-node-bridge";
 import { ReviewServer } from "./server/ReviewServer";
 import { provisionClaudeSettings, getVaultBasePath, getHookBridgePath } from "./hooks/provisionSettings";
 import { resolvePython3, resolveUserShell } from "./pty/shellDetect";

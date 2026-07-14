@@ -1,5 +1,4 @@
-import { pathRelative } from "../node/fs";
-import { execFileText } from "../node/process";
+import { pathRelative, execFileText } from "terminus-node-bridge";
 
 /**
  * Returns the file's content as of the vault's last git commit, or null if

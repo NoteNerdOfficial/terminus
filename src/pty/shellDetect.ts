@@ -1,5 +1,4 @@
-import { fileExistsSync } from "../node/fs";
-import { execFileText, getEnvVar } from "../node/process";
+import { fileExistsSync, execFileText, getEnvVar } from "terminus-node-bridge";
 
 const PYTHON3_CANDIDATES = [
   "/usr/bin/python3",

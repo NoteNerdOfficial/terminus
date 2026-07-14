@@ -1,5 +1,5 @@
 import { ItemView, MarkdownRenderer, Notice, WorkspaceLeaf } from "obsidian";
-import { pathBasename, pathRelative } from "../node/fs";
+import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { PendingChange, ResolvedChange } from "../state/PendingChangesStore";
 import { computeDiffStats, renderDiffBody } from "../diff/renderDiff";
 import { openFileWithInlineDiff } from "../editor/openWithDiff";

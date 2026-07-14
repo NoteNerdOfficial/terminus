@@ -1,4 +1,4 @@
-import { makeDirRecursive, pathDirname, readTextFileIfExists, writeTextFile } from "../node/fs";
+import { makeDirRecursive, pathDirname, readTextFileIfExists, writeTextFile } from "terminus-node-bridge";
 
 export interface ActionLogEntry {
   timestamp: number;

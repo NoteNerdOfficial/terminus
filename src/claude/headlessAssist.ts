@@ -1,5 +1,4 @@
-import { fileExistsSync } from "../node/fs";
-import { execFileText, type ExecFileError } from "../node/process";
+import { fileExistsSync, execFileText, type ExecFileError } from "terminus-node-bridge";
 import { tryLoginShellWhich } from "../pty/shellDetect";
 
 const TIMEOUT_MS = 45_000;

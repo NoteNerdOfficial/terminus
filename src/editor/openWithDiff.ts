@@ -1,6 +1,6 @@
 import { App, MarkdownView, Notice, TFile } from "obsidian";
 import { EditorView } from "@codemirror/view";
-import { pathBasename, pathRelative } from "../node/fs";
+import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { setInlineDiff } from "./inlineDiff";
 import { PendingChange, PendingChangesStore } from "../state/PendingChangesStore";
 import { errorMessage } from "../util/errors";

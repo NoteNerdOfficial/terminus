@@ -1,4 +1,4 @@
-import { pathBasename, pathJoin } from "../node/fs";
+import { pathBasename, pathJoin } from "terminus-node-bridge";
 
 /**
  * Computes env vars that tell pty_helper.py's build_child_env() to

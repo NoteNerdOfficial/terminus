@@ -1,5 +1,5 @@
 import { App, FileSystemAdapter, PluginManifest } from "obsidian";
-import { appendTextFile, makeDirRecursive, pathJoin, readTextFileIfExists, writeTextFile } from "../node/fs";
+import { appendTextFile, makeDirRecursive, pathJoin, readTextFileIfExists, writeTextFile } from "terminus-node-bridge";
 
 interface HookCommandEntry {
   type: "command";

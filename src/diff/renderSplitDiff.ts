@@ -1,5 +1,5 @@
 import { Notice } from "obsidian";
-import { pathBasename } from "../node/fs";
+import { pathBasename } from "terminus-node-bridge";
 import { diffWordsWithSpace } from "diff";
 import { buildDiffLines, buildSegments, DiffLineSegment, splitLines } from "./buildDiffLines";
 import { renderMinimap } from "./renderDiff";

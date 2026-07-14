@@ -1,4 +1,4 @@
-import { createHttpServer, type SimpleHttpRequest, type SimpleHttpResponse, type SimpleHttpServer } from "../node/httpServer";
+import { createHttpServer, type SimpleHttpRequest, type SimpleHttpResponse, type SimpleHttpServer } from "terminus-node-bridge";
 import { PreToolUseHookPayload } from "../hooks/types";
 
 export interface RegisteredPanel {

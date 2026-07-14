@@ -1,5 +1,5 @@
 import { App, Modal } from "obsidian";
-import { pathBasename } from "../node/fs";
+import { pathBasename } from "terminus-node-bridge";
 import { ActionLog, ActionLogEntry } from "../state/ActionLog";
 
 export class ActionLogModal extends Modal {

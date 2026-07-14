@@ -1,4 +1,4 @@
-import { readTextFileIfExists } from "../node/fs";
+import { readTextFileIfExists } from "terminus-node-bridge";
 import { PreToolUseHookPayload } from "../hooks/types";
 
 export interface DiffResult {

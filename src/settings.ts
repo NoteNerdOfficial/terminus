@@ -1,5 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
-import { getEnvVar } from "./node/process";
+import { getEnvVar } from "terminus-node-bridge";
 import type TerminusPlugin from "./main";
 
 export type TerminalPlacement = "ask" | "tab" | "split-right" | "split-down" | "window";

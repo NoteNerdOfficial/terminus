@@ -10,6 +10,9 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __commonJS = (cb, mod) => function __require() {
+  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -32,6 +35,325 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
+// node_modules/terminus-node-bridge/dist/fs.js
+var require_fs = __commonJS({
+  "node_modules/terminus-node-bridge/dist/fs.js"(exports) {
+    "use strict";
+    var __createBinding = exports && exports.__createBinding || (Object.create ? function(o2, m2, k2, k22) {
+      if (k22 === void 0)
+        k22 = k2;
+      var desc = Object.getOwnPropertyDescriptor(m2, k2);
+      if (!desc || ("get" in desc ? !m2.__esModule : desc.writable || desc.configurable)) {
+        desc = { enumerable: true, get: function() {
+          return m2[k2];
+        } };
+      }
+      Object.defineProperty(o2, k22, desc);
+    } : function(o2, m2, k2, k22) {
+      if (k22 === void 0)
+        k22 = k2;
+      o2[k22] = m2[k2];
+    });
+    var __setModuleDefault = exports && exports.__setModuleDefault || (Object.create ? function(o2, v3) {
+      Object.defineProperty(o2, "default", { enumerable: true, value: v3 });
+    } : function(o2, v3) {
+      o2["default"] = v3;
+    });
+    var __importStar = exports && exports.__importStar || function() {
+      var ownKeys = function(o2) {
+        ownKeys = Object.getOwnPropertyNames || function(o3) {
+          var ar2 = [];
+          for (var k2 in o3)
+            if (Object.prototype.hasOwnProperty.call(o3, k2))
+              ar2[ar2.length] = k2;
+          return ar2;
+        };
+        return ownKeys(o2);
+      };
+      return function(mod) {
+        if (mod && mod.__esModule)
+          return mod;
+        var result = {};
+        if (mod != null) {
+          for (var k2 = ownKeys(mod), i = 0; i < k2.length; i++)
+            if (k2[i] !== "default")
+              __createBinding(result, mod, k2[i]);
+        }
+        __setModuleDefault(result, mod);
+        return result;
+      };
+    }();
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.pathJoin = pathJoin5;
+    exports.pathBasename = pathBasename8;
+    exports.pathDirname = pathDirname2;
+    exports.pathRelative = pathRelative5;
+    exports.fileExistsSync = fileExistsSync3;
+    exports.readTextFileIfExists = readTextFileIfExists4;
+    exports.writeTextFile = writeTextFile4;
+    exports.appendTextFile = appendTextFile2;
+    exports.makeDirRecursive = makeDirRecursive3;
+    exports.deleteFileIfExists = deleteFileIfExists2;
+    exports.randomHex = randomHex2;
+    var fs_1 = require("fs");
+    var fsPromises = __importStar(require("fs/promises"));
+    var nodePath = __importStar(require("path"));
+    var crypto_1 = require("crypto");
+    function pathJoin5(...segments) {
+      return nodePath.join(...segments);
+    }
+    function pathBasename8(filePath, ext) {
+      return nodePath.basename(filePath, ext);
+    }
+    function pathDirname2(filePath) {
+      return nodePath.dirname(filePath);
+    }
+    function pathRelative5(from, to) {
+      return nodePath.relative(from, to);
+    }
+    function fileExistsSync3(filePath) {
+      return (0, fs_1.existsSync)(filePath);
+    }
+    function isEnoent(err) {
+      return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+    }
+    async function readTextFileIfExists4(filePath) {
+      try {
+        return await fsPromises.readFile(filePath, "utf8");
+      } catch (err) {
+        if (isEnoent(err))
+          return null;
+        throw err;
+      }
+    }
+    async function writeTextFile4(filePath, content) {
+      await fsPromises.writeFile(filePath, content, "utf8");
+    }
+    async function appendTextFile2(filePath, content) {
+      await fsPromises.appendFile(filePath, content, "utf8");
+    }
+    async function makeDirRecursive3(dirPath) {
+      await fsPromises.mkdir(dirPath, { recursive: true });
+    }
+    async function deleteFileIfExists2(filePath) {
+      try {
+        await fsPromises.unlink(filePath);
+      } catch (err) {
+        if (!isEnoent(err))
+          throw err;
+      }
+    }
+    function randomHex2(byteLength) {
+      return (0, crypto_1.randomBytes)(byteLength).toString("hex");
+    }
+  }
+});
+
+// node_modules/terminus-node-bridge/dist/process.js
+var require_process = __commonJS({
+  "node_modules/terminus-node-bridge/dist/process.js"(exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.ExecFileError = void 0;
+    exports.getEnvVar = getEnvVar3;
+    exports.getAllEnvVars = getAllEnvVars2;
+    exports.execFileText = execFileText4;
+    exports.spawnWithControlChannel = spawnWithControlChannel2;
+    var child_process_1 = require("child_process");
+    function getEnvVar3(name) {
+      return process.env[name];
+    }
+    function getAllEnvVars2() {
+      return { ...process.env };
+    }
+    var ExecFileError = class extends Error {
+    };
+    exports.ExecFileError = ExecFileError;
+    function execFileText4(command, args, options = {}) {
+      return new Promise((resolve, reject) => {
+        (0, child_process_1.execFile)(command, args, { encoding: "utf8", ...options }, (error, stdout, stderr) => {
+          if (error) {
+            const errWithFields = error;
+            const execErr = new ExecFileError(error.message);
+            execErr.killed = errWithFields.killed;
+            execErr.signal = errWithFields.signal;
+            execErr.stderr = typeof stderr === "string" ? stderr : void 0;
+            execErr.code = errWithFields.code;
+            reject(execErr);
+            return;
+          }
+          resolve({
+            stdout: typeof stdout === "string" ? stdout : "",
+            stderr: typeof stderr === "string" ? stderr : ""
+          });
+        });
+      });
+    }
+    function spawnWithControlChannel2(command, args, options) {
+      const child = (0, child_process_1.spawn)(command, args, {
+        cwd: options.cwd,
+        env: options.env,
+        stdio: ["pipe", "pipe", "pipe", "pipe"]
+      });
+      const controlStream = child.stdio[3];
+      const hasControlStream = controlStream !== null && controlStream !== void 0 && "on" in controlStream && "write" in controlStream;
+      return {
+        onStdout: (listener) => {
+          child.stdout.on("data", listener);
+        },
+        onStderr: (listener) => {
+          child.stderr.on("data", listener);
+        },
+        writeStdin: (data) => {
+          child.stdin.write(data, "utf8");
+        },
+        onControlData: (listener) => {
+          if (hasControlStream)
+            controlStream.on("data", listener);
+        },
+        writeControl: (data) => {
+          if (hasControlStream)
+            controlStream.write(data);
+        },
+        onError: (listener) => {
+          child.on("error", listener);
+        },
+        onClose: (listener) => {
+          child.on("close", listener);
+        },
+        kill: (signal) => {
+          child.kill(signal);
+        }
+      };
+    }
+  }
+});
+
+// node_modules/terminus-node-bridge/dist/httpServer.js
+var require_httpServer = __commonJS({
+  "node_modules/terminus-node-bridge/dist/httpServer.js"(exports) {
+    "use strict";
+    var __createBinding = exports && exports.__createBinding || (Object.create ? function(o2, m2, k2, k22) {
+      if (k22 === void 0)
+        k22 = k2;
+      var desc = Object.getOwnPropertyDescriptor(m2, k2);
+      if (!desc || ("get" in desc ? !m2.__esModule : desc.writable || desc.configurable)) {
+        desc = { enumerable: true, get: function() {
+          return m2[k2];
+        } };
+      }
+      Object.defineProperty(o2, k22, desc);
+    } : function(o2, m2, k2, k22) {
+      if (k22 === void 0)
+        k22 = k2;
+      o2[k22] = m2[k2];
+    });
+    var __setModuleDefault = exports && exports.__setModuleDefault || (Object.create ? function(o2, v3) {
+      Object.defineProperty(o2, "default", { enumerable: true, value: v3 });
+    } : function(o2, v3) {
+      o2["default"] = v3;
+    });
+    var __importStar = exports && exports.__importStar || function() {
+      var ownKeys = function(o2) {
+        ownKeys = Object.getOwnPropertyNames || function(o3) {
+          var ar2 = [];
+          for (var k2 in o3)
+            if (Object.prototype.hasOwnProperty.call(o3, k2))
+              ar2[ar2.length] = k2;
+          return ar2;
+        };
+        return ownKeys(o2);
+      };
+      return function(mod) {
+        if (mod && mod.__esModule)
+          return mod;
+        var result = {};
+        if (mod != null) {
+          for (var k2 = ownKeys(mod), i = 0; i < k2.length; i++)
+            if (k2[i] !== "default")
+              __createBinding(result, mod, k2[i]);
+        }
+        __setModuleDefault(result, mod);
+        return result;
+      };
+    }();
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.createHttpServer = createHttpServer2;
+    var http = __importStar(require("http"));
+    function createHttpServer2(handler) {
+      const server = http.createServer((req, res) => {
+        const wrappedReq = {
+          method: req.method,
+          url: req.url,
+          authorizationHeader: req.headers.authorization,
+          onData: (listener) => req.on("data", listener),
+          onEnd: (listener) => req.on("end", listener),
+          onError: (listener) => req.on("error", listener),
+          destroy: () => req.destroy()
+        };
+        const wrappedRes = {
+          writeHead: (statusCode, headers) => {
+            res.writeHead(statusCode, headers);
+          },
+          end: (body) => {
+            res.end(body);
+          },
+          get headersSent() {
+            return res.headersSent;
+          }
+        };
+        handler(wrappedReq, wrappedRes);
+      });
+      return {
+        listen: (port, host, onListening) => {
+          server.listen(port, host, onListening);
+        },
+        onError: (listener) => {
+          server.once("error", listener);
+        },
+        close: (onClosed) => {
+          server.close(() => onClosed());
+        },
+        getBoundPort: () => {
+          const address = server.address();
+          return address && typeof address === "object" ? address.port : null;
+        }
+      };
+    }
+  }
+});
+
+// node_modules/terminus-node-bridge/dist/index.js
+var require_dist = __commonJS({
+  "node_modules/terminus-node-bridge/dist/index.js"(exports) {
+    "use strict";
+    var __createBinding = exports && exports.__createBinding || (Object.create ? function(o2, m2, k2, k22) {
+      if (k22 === void 0)
+        k22 = k2;
+      var desc = Object.getOwnPropertyDescriptor(m2, k2);
+      if (!desc || ("get" in desc ? !m2.__esModule : desc.writable || desc.configurable)) {
+        desc = { enumerable: true, get: function() {
+          return m2[k2];
+        } };
+      }
+      Object.defineProperty(o2, k22, desc);
+    } : function(o2, m2, k2, k22) {
+      if (k22 === void 0)
+        k22 = k2;
+      o2[k22] = m2[k2];
+    });
+    var __exportStar = exports && exports.__exportStar || function(m2, exports2) {
+      for (var p2 in m2)
+        if (p2 !== "default" && !Object.prototype.hasOwnProperty.call(exports2, p2))
+          __createBinding(exports2, m2, p2);
+    };
+    Object.defineProperty(exports, "__esModule", { value: true });
+    __exportStar(require_fs(), exports);
+    __exportStar(require_process(), exports);
+    __exportStar(require_httpServer(), exports);
+  }
+});
+
 // src/main.ts
 var main_exports = {};
 __export(main_exports, {
@@ -39,104 +361,10 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian11 = require("obsidian");
-
-// src/node/fs.ts
-var import_fs = require("fs");
-var fsPromises = __toESM(require("fs/promises"));
-var nodePath = __toESM(require("path"));
-var import_crypto = require("crypto");
-function pathJoin(...segments) {
-  return nodePath.join(...segments);
-}
-function pathBasename(filePath, ext) {
-  return nodePath.basename(filePath, ext);
-}
-function pathDirname(filePath) {
-  return nodePath.dirname(filePath);
-}
-function pathRelative(from, to) {
-  return nodePath.relative(from, to);
-}
-function fileExistsSync(filePath) {
-  return (0, import_fs.existsSync)(filePath);
-}
-function isEnoent(err) {
-  return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
-}
-async function readTextFileIfExists(filePath) {
-  try {
-    return await fsPromises.readFile(filePath, "utf8");
-  } catch (err) {
-    if (isEnoent(err))
-      return null;
-    throw err;
-  }
-}
-async function writeTextFile(filePath, content) {
-  await fsPromises.writeFile(filePath, content, "utf8");
-}
-async function appendTextFile(filePath, content) {
-  await fsPromises.appendFile(filePath, content, "utf8");
-}
-async function makeDirRecursive(dirPath) {
-  await fsPromises.mkdir(dirPath, { recursive: true });
-}
-async function deleteFileIfExists(filePath) {
-  try {
-    await fsPromises.unlink(filePath);
-  } catch (err) {
-    if (!isEnoent(err))
-      throw err;
-  }
-}
-function randomHex(byteLength) {
-  return (0, import_crypto.randomBytes)(byteLength).toString("hex");
-}
-
-// src/node/httpServer.ts
-var http = __toESM(require("http"));
-function createHttpServer(handler) {
-  const server = http.createServer((req, res) => {
-    const wrappedReq = {
-      method: req.method,
-      url: req.url,
-      authorizationHeader: req.headers.authorization,
-      onData: (listener) => req.on("data", listener),
-      onEnd: (listener) => req.on("end", listener),
-      onError: (listener) => req.on("error", listener),
-      destroy: () => req.destroy()
-    };
-    const wrappedRes = {
-      writeHead: (statusCode, headers) => {
-        res.writeHead(statusCode, headers);
-      },
-      end: (body) => {
-        res.end(body);
-      },
-      get headersSent() {
-        return res.headersSent;
-      }
-    };
-    handler(wrappedReq, wrappedRes);
-  });
-  return {
-    listen: (port, host, onListening) => {
-      server.listen(port, host, onListening);
-    },
-    onError: (listener) => {
-      server.once("error", listener);
-    },
-    close: (onClosed) => {
-      server.close(() => onClosed());
-    },
-    getBoundPort: () => {
-      const address = server.address();
-      return address && typeof address === "object" ? address.port : null;
-    }
-  };
-}
+var import_terminus_node_bridge18 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
+var import_terminus_node_bridge = __toESM(require_dist());
 var MAX_BODY_BYTES = 5 * 1024 * 1024;
 var ReviewServer = class {
   constructor() {
@@ -148,7 +376,7 @@ var ReviewServer = class {
     var _a5;
     if (this.server)
       return this.port;
-    const server = createHttpServer((req, res) => {
+    const server = (0, import_terminus_node_bridge.createHttpServer)((req, res) => {
       this.handleRequest(req, res).catch((err) => {
         if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "text/plain" });
@@ -240,6 +468,7 @@ function readBody(req, maxBytes) {
 
 // src/hooks/provisionSettings.ts
 var import_obsidian = require("obsidian");
+var import_terminus_node_bridge2 = __toESM(require_dist());
 function isClaudeSettingsFile(value) {
   return typeof value === "object" && value !== null;
 }
@@ -255,16 +484,16 @@ function getVaultBasePath(app) {
 }
 function getHookBridgePath(app, manifest) {
   const basePath = getVaultBasePath(app);
-  return pathJoin(basePath, app.vault.configDir, "plugins", manifest.id, "resources", "hook-bridge.sh");
+  return (0, import_terminus_node_bridge2.pathJoin)(basePath, app.vault.configDir, "plugins", manifest.id, "resources", "hook-bridge.sh");
 }
 async function provisionClaudeSettings(app, manifest) {
   var _a5, _b, _c2;
   const basePath = getVaultBasePath(app);
-  const claudeDir = pathJoin(basePath, ".claude");
-  const settingsPath = pathJoin(claudeDir, "settings.local.json");
+  const claudeDir = (0, import_terminus_node_bridge2.pathJoin)(basePath, ".claude");
+  const settingsPath = (0, import_terminus_node_bridge2.pathJoin)(claudeDir, "settings.local.json");
   const hookCommand = getHookBridgePath(app, manifest);
-  await makeDirRecursive(claudeDir);
-  const raw = await readTextFileIfExists(settingsPath);
+  await (0, import_terminus_node_bridge2.makeDirRecursive)(claudeDir);
+  const raw = await (0, import_terminus_node_bridge2.readTextFileIfExists)(settingsPath);
   let settings = {};
   if (raw && raw.trim()) {
     const parsed = JSON.parse(raw);
@@ -289,92 +518,25 @@ async function provisionClaudeSettings(app, manifest) {
     changed = true;
   }
   if (changed) {
-    await writeTextFile(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+    await (0, import_terminus_node_bridge2.writeTextFile)(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
   await ensureGitignoreEntry(basePath);
 }
 async function ensureGitignoreEntry(basePath) {
   var _a5;
-  const gitignorePath = pathJoin(basePath, ".gitignore");
-  const existing = (_a5 = await readTextFileIfExists(gitignorePath)) != null ? _a5 : "";
+  const gitignorePath = (0, import_terminus_node_bridge2.pathJoin)(basePath, ".gitignore");
+  const existing = (_a5 = await (0, import_terminus_node_bridge2.readTextFileIfExists)(gitignorePath)) != null ? _a5 : "";
   const lines = existing.split("\n");
   if (lines.some((l) => l.trim() === GITIGNORE_LINE))
     return;
   const needsNewline = existing.length > 0 && !existing.endsWith("\n");
   const addition = `${needsNewline ? "\n" : ""}${GITIGNORE_LINE}
 `;
-  await appendTextFile(gitignorePath, addition);
-}
-
-// src/node/process.ts
-var import_child_process = require("child_process");
-function getEnvVar(name) {
-  return process.env[name];
-}
-function getAllEnvVars() {
-  return { ...process.env };
-}
-var ExecFileError = class extends Error {
-};
-function execFileText(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    (0, import_child_process.execFile)(command, args, { encoding: "utf8", ...options }, (error, stdout, stderr) => {
-      if (error) {
-        const errWithFields = error;
-        const execErr = new ExecFileError(error.message);
-        execErr.killed = errWithFields.killed;
-        execErr.signal = errWithFields.signal;
-        execErr.stderr = typeof stderr === "string" ? stderr : void 0;
-        execErr.code = errWithFields.code;
-        reject(execErr);
-        return;
-      }
-      resolve({
-        stdout: typeof stdout === "string" ? stdout : "",
-        stderr: typeof stderr === "string" ? stderr : ""
-      });
-    });
-  });
-}
-function spawnWithControlChannel(command, args, options) {
-  const child = (0, import_child_process.spawn)(command, args, {
-    cwd: options.cwd,
-    env: options.env,
-    stdio: ["pipe", "pipe", "pipe", "pipe"]
-  });
-  const controlStream = child.stdio[3];
-  const hasControlStream = controlStream !== null && controlStream !== void 0 && "on" in controlStream && "write" in controlStream;
-  return {
-    onStdout: (listener) => {
-      child.stdout.on("data", listener);
-    },
-    onStderr: (listener) => {
-      child.stderr.on("data", listener);
-    },
-    writeStdin: (data) => {
-      child.stdin.write(data, "utf8");
-    },
-    onControlData: (listener) => {
-      if (hasControlStream)
-        controlStream.on("data", listener);
-    },
-    writeControl: (data) => {
-      if (hasControlStream)
-        controlStream.write(data);
-    },
-    onError: (listener) => {
-      child.on("error", listener);
-    },
-    onClose: (listener) => {
-      child.on("close", listener);
-    },
-    kill: (signal) => {
-      child.kill(signal);
-    }
-  };
+  await (0, import_terminus_node_bridge2.appendTextFile)(gitignorePath, addition);
 }
 
 // src/pty/shellDetect.ts
+var import_terminus_node_bridge3 = __toESM(require_dist());
 var PYTHON3_CANDIDATES = [
   "/usr/bin/python3",
   "/opt/homebrew/bin/python3",
@@ -385,27 +547,28 @@ async function resolvePython3() {
   if (loginShellPath)
     return loginShellPath;
   for (const candidate of PYTHON3_CANDIDATES) {
-    if (fileExistsSync(candidate))
+    if ((0, import_terminus_node_bridge3.fileExistsSync)(candidate))
       return candidate;
   }
   return "python3";
 }
 function resolveUserShell() {
-  return getEnvVar("SHELL") || "/bin/zsh";
+  return (0, import_terminus_node_bridge3.getEnvVar)("SHELL") || "/bin/zsh";
 }
 async function tryLoginShellWhich(bin) {
   var _a5;
   const loginShell = resolveUserShell();
   try {
-    const { stdout } = await execFileText(loginShell, ["-lic", `which ${bin}`], { timeout: 5e3 });
+    const { stdout } = await (0, import_terminus_node_bridge3.execFileText)(loginShell, ["-lic", `which ${bin}`], { timeout: 5e3 });
     const resolved = (_a5 = stdout.trim().split("\n").pop()) == null ? void 0 : _a5.trim();
-    return resolved && fileExistsSync(resolved) ? resolved : null;
+    return resolved && (0, import_terminus_node_bridge3.fileExistsSync)(resolved) ? resolved : null;
   } catch (e) {
     return null;
   }
 }
 
 // src/claude/headlessAssist.ts
+var import_terminus_node_bridge4 = __toESM(require_dist());
 var TIMEOUT_MS = 45e3;
 var CLAUDE_BIN_CANDIDATES = ["/usr/local/bin/claude", "/opt/homebrew/bin/claude"];
 async function resolveClaudeBin() {
@@ -413,7 +576,7 @@ async function resolveClaudeBin() {
   if (loginShellPath)
     return loginShellPath;
   for (const candidate of CLAUDE_BIN_CANDIDATES) {
-    if (fileExistsSync(candidate))
+    if ((0, import_terminus_node_bridge4.fileExistsSync)(candidate))
       return candidate;
   }
   return "claude";
@@ -425,7 +588,7 @@ async function runHeadlessQuery(claudeBin, cwd, prompt) {
   var _a5, _b;
   let stdout;
   try {
-    ({ stdout } = await execFileText(
+    ({ stdout } = await (0, import_terminus_node_bridge4.execFileText)(
       claudeBin,
       ["-p", prompt, "--allowedTools", "", "--output-format", "json"],
       { cwd, timeout: TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }
@@ -10800,6 +10963,9 @@ var M2 = class extends S2 {
   }
 };
 
+// src/views/TerminalView.ts
+var import_terminus_node_bridge8 = __toESM(require_dist());
+
 // src/node/emitter.ts
 var TypedEmitter = class {
   constructor() {
@@ -10827,6 +10993,7 @@ var TypedEmitter = class {
 };
 
 // src/pty/PtyProcess.ts
+var import_terminus_node_bridge5 = __toESM(require_dist());
 var PtyProcess = class extends TypedEmitter {
   constructor(opts) {
     super();
@@ -10835,7 +11002,7 @@ var PtyProcess = class extends TypedEmitter {
     this.controlBuf = "";
   }
   start() {
-    const child = spawnWithControlChannel(
+    const child = (0, import_terminus_node_bridge5.spawnWithControlChannel)(
       this.opts.pythonBin,
       [
         this.opts.helperPath,
@@ -10888,24 +11055,26 @@ var PtyProcess = class extends TypedEmitter {
 };
 
 // src/pty/shellIntegration.ts
+var import_terminus_node_bridge6 = __toESM(require_dist());
 function getShellIntegrationEnv(shellPath, pluginResourcesDir) {
-  const shellName = pathBasename(shellPath);
+  const shellName = (0, import_terminus_node_bridge6.pathBasename)(shellPath);
   if (shellName === "zsh") {
     return {
-      TERMINUS_CHILD_ZDOTDIR: pathJoin(pluginResourcesDir, "shell-integration", "zsh")
+      TERMINUS_CHILD_ZDOTDIR: (0, import_terminus_node_bridge6.pathJoin)(pluginResourcesDir, "shell-integration", "zsh")
     };
   }
   if (shellName === "bash") {
     return {
-      TERMINUS_CHILD_HOME: pathJoin(pluginResourcesDir, "shell-integration", "bash")
+      TERMINUS_CHILD_HOME: (0, import_terminus_node_bridge6.pathJoin)(pluginResourcesDir, "shell-integration", "bash")
     };
   }
   return {};
 }
 
 // src/server/diff.ts
+var import_terminus_node_bridge7 = __toESM(require_dist());
 async function readIfExists(filePath) {
-  const text = await readTextFileIfExists(filePath);
+  const text = await (0, import_terminus_node_bridge7.readTextFileIfExists)(filePath);
   return text === null ? { text: "", existed: false } : { text, existed: true };
 }
 async function buildDiff(payload) {
@@ -11246,7 +11415,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
     this.restoredScrollback = null;
     this.scrollbackApplied = false;
     this.resizeObserver = null;
-    this.token = randomHex(16);
+    this.token = (0, import_terminus_node_bridge8.randomHex)(16);
     this.terminalNumber = plugin.allocateTerminalNumber();
   }
   getViewType() {
@@ -11354,8 +11523,8 @@ var TerminalView = class extends import_obsidian3.ItemView {
     var _a5, _b, _c2, _d;
     const pythonBin = await this.plugin.getPython3Bin();
     const shell = this.plugin.getUserShell();
-    const resourcesDir = pathJoin(this.plugin.getPluginDir(), "resources");
-    const helperPath = pathJoin(resourcesDir, "pty_helper.py");
+    const resourcesDir = (0, import_terminus_node_bridge8.pathJoin)(this.plugin.getPluginDir(), "resources");
+    const helperPath = (0, import_terminus_node_bridge8.pathJoin)(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
     this.pty = new PtyProcess({
       pythonBin,
@@ -11365,7 +11534,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
       cols: (_b = (_a5 = this.term) == null ? void 0 : _a5.cols) != null ? _b : 80,
       rows: (_d = (_c2 = this.term) == null ? void 0 : _c2.rows) != null ? _d : 24,
       env: {
-        ...getAllEnvVars(),
+        ...(0, import_terminus_node_bridge8.getAllEnvVars)(),
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
@@ -11457,7 +11626,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
    *  (first oldText vs latest newText) so a multi-edit turn is checked as a
    *  whole, not edit-by-edit. */
   async checkBacklinkBreakage(absoluteFilePath) {
-    const relPath = pathRelative(this.plugin.getVaultBasePath(), absoluteFilePath);
+    const relPath = (0, import_terminus_node_bridge8.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
     const file = this.app.vault.getAbstractFileByPath(relPath);
     if (!(file instanceof import_obsidian3.TFile))
       return;
@@ -11471,6 +11640,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
 
 // src/views/PendingChangesView.ts
 var import_obsidian9 = require("obsidian");
+var import_terminus_node_bridge14 = __toESM(require_dist());
 
 // node_modules/diff/libesm/diff/base.js
 var Diff = class {
@@ -12133,6 +12303,7 @@ function renderDiffLine(container, line) {
 
 // src/editor/openWithDiff.ts
 var import_obsidian4 = require("obsidian");
+var import_terminus_node_bridge9 = __toESM(require_dist());
 
 // src/editor/inlineDiff.ts
 var import_state = require("@codemirror/state");
@@ -12247,7 +12418,7 @@ function buildDecorations(state, overlay) {
 
 // src/editor/openWithDiff.ts
 async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
-  const relPath = pathRelative(vaultBasePath, change.diff.filePath);
+  const relPath = (0, import_terminus_node_bridge9.pathRelative)(vaultBasePath, change.diff.filePath);
   if (relPath.startsWith("..")) {
     new import_obsidian4.Notice("Terminus: file is outside the vault, can't open it as a note.");
     return;
@@ -12274,7 +12445,7 @@ async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
   });
   const resolve = (accepted) => {
     store.resolveItem(change.id, accepted).catch((err) => {
-      new import_obsidian4.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian4.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge9.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   cm.dispatch({
@@ -12290,9 +12461,11 @@ async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
 
 // src/views/DiffSplitView.ts
 var import_obsidian6 = require("obsidian");
+var import_terminus_node_bridge11 = __toESM(require_dist());
 
 // src/diff/renderSplitDiff.ts
 var import_obsidian5 = require("obsidian");
+var import_terminus_node_bridge10 = __toESM(require_dist());
 
 // src/diff/hunks.ts
 function computeSplitParts(oldText, newText) {
@@ -12472,7 +12645,7 @@ function renderHunkControls(container, hunk, change, store) {
   bar.createEl("span", { cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
   const resolve = (accepted) => {
     store.resolveHunk(change.id, hunk.index, accepted).catch((err) => {
-      new import_obsidian5.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${pathBasename(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian5.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge10.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   bar.createEl("button", { text: "Reject", cls: "terminus-inline-diff-reject" }).addEventListener("click", () => resolve(false));
@@ -12527,7 +12700,7 @@ var DiffSplitView = class extends import_obsidian6.ItemView {
         return;
       }
       const header = container.createDiv({ cls: "terminus-split-diff-header" });
-      header.createEl("span", { cls: "terminus-split-diff-title", text: pathBasename(change.diff.filePath) });
+      header.createEl("span", { cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge11.pathBasename)(change.diff.filePath) });
       if (change.editCount > 1) {
         header.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
       }
@@ -12538,7 +12711,7 @@ var DiffSplitView = class extends import_obsidian6.ItemView {
     return DIFF_SPLIT_VIEW_TYPE;
   }
   getDisplayText() {
-    return this.changeId ? `Diff: ${pathBasename(this.changeId)}` : "Split Diff";
+    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge11.pathBasename)(this.changeId)}` : "Split Diff";
   }
   getIcon() {
     return "diff";
@@ -12570,6 +12743,7 @@ async function openDiffSplitView(plugin, changeId) {
 
 // src/modals/ActionLogModal.ts
 var import_obsidian7 = require("obsidian");
+var import_terminus_node_bridge12 = __toESM(require_dist());
 var ActionLogModal = class extends import_obsidian7.Modal {
   constructor(app, actionLog) {
     super(app);
@@ -12609,7 +12783,7 @@ var ActionLogModal = class extends import_obsidian7.Modal {
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted"
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: pathBasename(entry.filePath) });
+    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge12.pathBasename)(entry.filePath) });
     row.createEl("span", {
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` \xB7 ${entry.editCount} edits` : ""}`
@@ -12661,12 +12835,13 @@ var ConfirmModal = class extends import_obsidian8.Modal {
 };
 
 // src/git/gitDiff.ts
+var import_terminus_node_bridge13 = __toESM(require_dist());
 async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
-  const relPath = pathRelative(vaultBasePath, absoluteFilePath);
+  const relPath = (0, import_terminus_node_bridge13.pathRelative)(vaultBasePath, absoluteFilePath);
   if (relPath.startsWith(".."))
     return null;
   try {
-    const { stdout } = await execFileText("git", ["show", `HEAD:${relPath}`], {
+    const { stdout } = await (0, import_terminus_node_bridge13.execFileText)("git", ["show", `HEAD:${relPath}`], {
       cwd: vaultBasePath,
       maxBuffer: 10 * 1024 * 1024
     });
@@ -12835,14 +13010,14 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
     const chevron = summary.createEl("span", { cls: "terminus-pending-chevron", text: "\u25B8" });
     const info = summary.createDiv({ cls: "terminus-pending-info" });
     const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-    nameRow.createEl("span", { cls: "terminus-pending-filename", text: pathBasename(change.diff.filePath) });
+    nameRow.createEl("span", { cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge14.pathBasename)(change.diff.filePath) });
     nameRow.createEl("span", { cls: "terminus-diff-stat-add", text: `+${stats.added}` });
     nameRow.createEl("span", { cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
     if (change.editCount > 1) {
       nameRow.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
     }
-    const vaultName = pathBasename(this.plugin.getVaultBasePath());
-    const relativePath = pathRelative(this.plugin.getVaultBasePath(), change.diff.filePath);
+    const vaultName = (0, import_terminus_node_bridge14.pathBasename)(this.plugin.getVaultBasePath());
+    const relativePath = (0, import_terminus_node_bridge14.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
     info.createEl("div", { cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
     if (change.brokenBacklinks.length > 0) {
       const count = change.brokenBacklinks.length;
@@ -12858,7 +13033,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
     const resolve = (accepted) => {
       this.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err) => {
         new import_obsidian9.Notice(
-          `Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(change.diff.filePath)}: ${errorMessage2(err)}`
+          `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge14.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
         );
       });
     };
@@ -12902,7 +13077,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       const list = warning.createEl("ul");
       for (const link of change.brokenBacklinks) {
         list.createEl("li", {
-          text: `${pathBasename(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
+          text: `${(0, import_terminus_node_bridge14.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
         });
       }
     }
@@ -12931,7 +13106,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       if (previewRendered)
         return;
       previewRendered = true;
-      const relPath = pathRelative(this.plugin.getVaultBasePath(), change.diff.filePath);
+      const relPath = (0, import_terminus_node_bridge14.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
       void import_obsidian9.MarkdownRenderer.render(this.app, change.diff.newText, previewContainer, relPath, this);
     });
     gitBtn.addEventListener("click", () => {
@@ -12987,7 +13162,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: item.accepted ? "Kept" : "Reverted"
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: pathBasename(item.diff.filePath) });
+    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge14.pathBasename)(item.diff.filePath) });
     row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
       this.plugin.pendingChangesStore.undo(item.historyId).catch((err) => {
         new import_obsidian9.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
@@ -12997,6 +13172,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
 };
 
 // src/state/PendingChangesStore.ts
+var import_terminus_node_bridge15 = __toESM(require_dist());
 var MAX_HISTORY = 20;
 var PendingChangesStore = class extends TypedEmitter {
   constructor() {
@@ -13115,9 +13291,9 @@ var PendingChangesStore = class extends TypedEmitter {
     const newOldText = diff.oldText.slice(0, hunk.oldStart) + chosen + diff.oldText.slice(hunk.oldEnd);
     const newNewText = diff.newText.slice(0, hunk.newStart) + chosen + diff.newText.slice(hunk.newEnd);
     if (!diff.existedBefore && newOldText === "") {
-      await deleteFileIfExists(diff.filePath);
+      await (0, import_terminus_node_bridge15.deleteFileIfExists)(diff.filePath);
     } else {
-      await writeTextFile(diff.filePath, newOldText);
+      await (0, import_terminus_node_bridge15.writeTextFile)(diff.filePath, newOldText);
     }
     entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
     if (newOldText === newNewText) {
@@ -13161,17 +13337,18 @@ var PendingChangesStore = class extends TypedEmitter {
   }
   async applyOldState(diff) {
     if (!diff.existedBefore) {
-      await deleteFileIfExists(diff.filePath);
+      await (0, import_terminus_node_bridge15.deleteFileIfExists)(diff.filePath);
       return;
     }
-    await writeTextFile(diff.filePath, diff.revertText);
+    await (0, import_terminus_node_bridge15.writeTextFile)(diff.filePath, diff.revertText);
   }
   async applyNewState(diff) {
-    await writeTextFile(diff.filePath, diff.newText);
+    await (0, import_terminus_node_bridge15.writeTextFile)(diff.filePath, diff.newText);
   }
 };
 
 // src/state/ActionLog.ts
+var import_terminus_node_bridge16 = __toESM(require_dist());
 function isActionLogEntryArray(value) {
   return Array.isArray(value);
 }
@@ -13185,7 +13362,7 @@ var ActionLog = class {
   async load() {
     if (this.loaded)
       return;
-    const raw = await readTextFileIfExists(this.logFilePath);
+    const raw = await (0, import_terminus_node_bridge16.readTextFileIfExists)(this.logFilePath);
     if (raw && raw.trim()) {
       const parsed = JSON.parse(raw);
       this.entries = isActionLogEntryArray(parsed) ? parsed : [];
@@ -13211,13 +13388,14 @@ var ActionLog = class {
     return result;
   }
   async persist() {
-    await makeDirRecursive(pathDirname(this.logFilePath));
-    await writeTextFile(this.logFilePath, JSON.stringify(this.entries, null, 2));
+    await (0, import_terminus_node_bridge16.makeDirRecursive)((0, import_terminus_node_bridge16.pathDirname)(this.logFilePath));
+    await (0, import_terminus_node_bridge16.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
   }
 };
 
 // src/settings.ts
 var import_obsidian10 = require("obsidian");
+var import_terminus_node_bridge17 = __toESM(require_dist());
 var TERMINAL_PLACEMENT_LABELS = {
   ask: "Always ask",
   tab: "New tab",
@@ -13290,7 +13468,7 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
     );
     new import_obsidian10.Setting(containerEl).setName("Advanced").setHeading();
     new import_obsidian10.Setting(containerEl).setName("Shell binary override").setDesc(
-      `Leave blank to auto-detect (your $SHELL, currently resolves to "${getEnvVar("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
+      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge17.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
     ).addText(
       (text) => text.setPlaceholder("e.g. /bin/zsh").setValue(this.plugin.settings.shellBinOverride).onChange(async (value) => {
         this.plugin.settings.shellBinOverride = value.trim();
@@ -13323,7 +13501,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new TerminusSettingTab(this.app, this));
-    this.actionLog = new ActionLog(pathJoin(this.getPluginDir(), "action-log.json"));
+    this.actionLog = new ActionLog((0, import_terminus_node_bridge18.pathJoin)(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.pendingChangesStore.on("resolved", (item) => {
       const stats = computeDiffStats(item.diff);
@@ -13473,9 +13651,9 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     }
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian11.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${pathBasename(oldest.diff.filePath)}`);
+      new import_obsidian11.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge18.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge18.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -13504,7 +13682,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     return getHookBridgePath(this.app, this.manifest);
   }
   getPluginDir() {
-    return pathJoin(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return (0, import_terminus_node_bridge18.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
   async revealPendingChangesView() {
     var _a5, _b;

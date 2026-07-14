@@ -1,5 +1,5 @@
 import { TypedEmitter } from "../node/emitter";
-import { spawnWithControlChannel, type SpawnedProcess } from "../node/process";
+import { spawnWithControlChannel, type SpawnedProcess } from "terminus-node-bridge";
 
 export interface PtyProcessOptions {
   pythonBin: string;

@@ -1,5 +1,5 @@
 import { ItemView, ViewStateResult, WorkspaceLeaf } from "obsidian";
-import { pathBasename } from "../node/fs";
+import { pathBasename } from "terminus-node-bridge";
 import { renderSplitDiffBody } from "../diff/renderSplitDiff";
 import type TerminusPlugin from "../main";
 
