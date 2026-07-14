@@ -1,6 +1,5 @@
 import { App, FileSystemAdapter, PluginManifest } from "obsidian";
-import * as fs from "fs/promises";
-import * as path from "path";
+import { appendTextFile, makeDirRecursive, pathJoin, readTextFileIfExists, writeTextFile } from "../node/fs";
 
 interface HookCommandEntry {
   type: "command";
@@ -21,6 +20,10 @@ interface ClaudeSettingsFile {
   [key: string]: unknown;
 }
 
+function isClaudeSettingsFile(value: unknown): value is ClaudeSettingsFile {
+  return typeof value === "object" && value !== null;
+}
+
 const MATCHER = "Edit|Write|NotebookEdit";
 // Short: the hook no longer waits on a human decision (see ReviewServer),
 // just a local server round-trip to record the pre-edit snapshot, so this
@@ -38,7 +41,7 @@ export function getVaultBasePath(app: App): string {
 
 export function getHookBridgePath(app: App, manifest: PluginManifest): string {
   const basePath = getVaultBasePath(app);
-  return path.join(basePath, app.vault.configDir, "plugins", manifest.id, "resources", "hook-bridge.sh");
+  return pathJoin(basePath, app.vault.configDir, "plugins", manifest.id, "resources", "hook-bridge.sh");
 }
 
 /**
@@ -48,18 +51,17 @@ export function getHookBridgePath(app: App, manifest: PluginManifest): string {
  */
 export async function provisionClaudeSettings(app: App, manifest: PluginManifest): Promise<void> {
   const basePath = getVaultBasePath(app);
-  const claudeDir = path.join(basePath, ".claude");
-  const settingsPath = path.join(claudeDir, "settings.local.json");
+  const claudeDir = pathJoin(basePath, ".claude");
+  const settingsPath = pathJoin(claudeDir, "settings.local.json");
   const hookCommand = getHookBridgePath(app, manifest);
 
-  await fs.mkdir(claudeDir, { recursive: true });
+  await makeDirRecursive(claudeDir);
 
+  const raw = await readTextFileIfExists(settingsPath);
   let settings: ClaudeSettingsFile = {};
-  try {
-    const raw = await fs.readFile(settingsPath, "utf8");
-    settings = raw.trim() ? JSON.parse(raw) : {};
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  if (raw && raw.trim()) {
+    const parsed: unknown = JSON.parse(raw);
+    if (isClaudeSettingsFile(parsed)) settings = parsed;
   }
 
   settings.hooks ??= {};
@@ -83,25 +85,20 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
   }
 
   if (changed) {
-    await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+    await writeTextFile(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
 
   await ensureGitignoreEntry(basePath);
 }
 
 async function ensureGitignoreEntry(basePath: string): Promise<void> {
-  const gitignorePath = path.join(basePath, ".gitignore");
-  let existing = "";
-  try {
-    existing = await fs.readFile(gitignorePath, "utf8");
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-  }
+  const gitignorePath = pathJoin(basePath, ".gitignore");
+  const existing = (await readTextFileIfExists(gitignorePath)) ?? "";
 
   const lines = existing.split("\n");
   if (lines.some((l) => l.trim() === GITIGNORE_LINE)) return;
 
   const needsNewline = existing.length > 0 && !existing.endsWith("\n");
   const addition = `${needsNewline ? "\n" : ""}${GITIGNORE_LINE}\n`;
-  await fs.appendFile(gitignorePath, addition, "utf8");
+  await appendTextFile(gitignorePath, addition);
 }

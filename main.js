@@ -39,10 +39,104 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian11 = require("obsidian");
-var path11 = __toESM(require("path"));
+
+// src/node/fs.ts
+var import_fs = require("fs");
+var fsPromises = __toESM(require("fs/promises"));
+var nodePath = __toESM(require("path"));
+var import_crypto = require("crypto");
+function pathJoin(...segments) {
+  return nodePath.join(...segments);
+}
+function pathBasename(filePath, ext) {
+  return nodePath.basename(filePath, ext);
+}
+function pathDirname(filePath) {
+  return nodePath.dirname(filePath);
+}
+function pathRelative(from, to) {
+  return nodePath.relative(from, to);
+}
+function fileExistsSync(filePath) {
+  return (0, import_fs.existsSync)(filePath);
+}
+function isEnoent(err) {
+  return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+}
+async function readTextFileIfExists(filePath) {
+  try {
+    return await fsPromises.readFile(filePath, "utf8");
+  } catch (err) {
+    if (isEnoent(err))
+      return null;
+    throw err;
+  }
+}
+async function writeTextFile(filePath, content) {
+  await fsPromises.writeFile(filePath, content, "utf8");
+}
+async function appendTextFile(filePath, content) {
+  await fsPromises.appendFile(filePath, content, "utf8");
+}
+async function makeDirRecursive(dirPath) {
+  await fsPromises.mkdir(dirPath, { recursive: true });
+}
+async function deleteFileIfExists(filePath) {
+  try {
+    await fsPromises.unlink(filePath);
+  } catch (err) {
+    if (!isEnoent(err))
+      throw err;
+  }
+}
+function randomHex(byteLength) {
+  return (0, import_crypto.randomBytes)(byteLength).toString("hex");
+}
+
+// src/node/httpServer.ts
+var http = __toESM(require("http"));
+function createHttpServer(handler) {
+  const server = http.createServer((req, res) => {
+    const wrappedReq = {
+      method: req.method,
+      url: req.url,
+      authorizationHeader: req.headers.authorization,
+      onData: (listener) => req.on("data", listener),
+      onEnd: (listener) => req.on("end", listener),
+      onError: (listener) => req.on("error", listener),
+      destroy: () => req.destroy()
+    };
+    const wrappedRes = {
+      writeHead: (statusCode, headers) => {
+        res.writeHead(statusCode, headers);
+      },
+      end: (body) => {
+        res.end(body);
+      },
+      get headersSent() {
+        return res.headersSent;
+      }
+    };
+    handler(wrappedReq, wrappedRes);
+  });
+  return {
+    listen: (port, host, onListening) => {
+      server.listen(port, host, onListening);
+    },
+    onError: (listener) => {
+      server.once("error", listener);
+    },
+    close: (onClosed) => {
+      server.close(() => onClosed());
+    },
+    getBoundPort: () => {
+      const address = server.address();
+      return address && typeof address === "object" ? address.port : null;
+    }
+  };
+}
 
 // src/server/ReviewServer.ts
-var http = __toESM(require("http"));
 var MAX_BODY_BYTES = 5 * 1024 * 1024;
 var ReviewServer = class {
   constructor() {
@@ -51,29 +145,30 @@ var ReviewServer = class {
     this.port = 0;
   }
   async start() {
+    var _a5;
     if (this.server)
       return this.port;
-    this.server = http.createServer((req, res) => {
+    const server = createHttpServer((req, res) => {
       this.handleRequest(req, res).catch((err) => {
         if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "text/plain" });
         }
-        res.end(`Terminus: internal error: ${err.message}`);
+        res.end(`Terminus: internal error: ${errorMessage(err)}`);
       });
     });
+    this.server = server;
     await new Promise((resolve, reject) => {
-      this.server.once("error", reject);
-      this.server.listen(0, "127.0.0.1", () => resolve());
+      server.onError(reject);
+      server.listen(0, "127.0.0.1", () => resolve());
     });
-    const address = this.server.address();
-    if (address && typeof address === "object")
-      this.port = address.port;
+    this.port = (_a5 = server.getBoundPort()) != null ? _a5 : 0;
     return this.port;
   }
   async stop() {
     if (!this.server)
       return;
-    await new Promise((resolve) => this.server.close(() => resolve()));
+    const server = this.server;
+    await new Promise((resolve) => server.close(() => resolve()));
     this.server = null;
     this.panels.clear();
   }
@@ -93,7 +188,7 @@ var ReviewServer = class {
       res.end("not found");
       return;
     }
-    const auth = (_a5 = req.headers.authorization) != null ? _a5 : "";
+    const auth = (_a5 = req.authorizationHeader) != null ? _a5 : "";
     const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
     const panel = token ? this.panels.get(token) : void 0;
     if (!panel) {
@@ -106,7 +201,7 @@ var ReviewServer = class {
       body = await readBody(req, MAX_BODY_BYTES);
     } catch (err) {
       res.writeHead(413, { "Content-Type": "text/plain" });
-      res.end(`request body too large or unreadable: ${err.message}`);
+      res.end(`request body too large or unreadable: ${errorMessage(err)}`);
       return;
     }
     let payload;
@@ -122,11 +217,14 @@ var ReviewServer = class {
     res.end("");
   }
 };
+function errorMessage(err) {
+  return err instanceof Error ? err.message : String(err);
+}
 function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
-    req.on("data", (chunk) => {
+    req.onData((chunk) => {
       total += chunk.length;
       if (total > maxBytes) {
         reject(new Error("body exceeds max size"));
@@ -135,15 +233,16 @@ function readBody(req, maxBytes) {
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    req.onEnd(() => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.onError(reject);
   });
 }
 
 // src/hooks/provisionSettings.ts
 var import_obsidian = require("obsidian");
-var fs = __toESM(require("fs/promises"));
-var path = __toESM(require("path"));
+function isClaudeSettingsFile(value) {
+  return typeof value === "object" && value !== null;
+}
 var MATCHER = "Edit|Write|NotebookEdit";
 var DEFAULT_TIMEOUT_SECONDS = 15;
 var GITIGNORE_LINE = ".claude/settings.local.json";
@@ -156,22 +255,21 @@ function getVaultBasePath(app) {
 }
 function getHookBridgePath(app, manifest) {
   const basePath = getVaultBasePath(app);
-  return path.join(basePath, app.vault.configDir, "plugins", manifest.id, "resources", "hook-bridge.sh");
+  return pathJoin(basePath, app.vault.configDir, "plugins", manifest.id, "resources", "hook-bridge.sh");
 }
 async function provisionClaudeSettings(app, manifest) {
   var _a5, _b, _c2;
   const basePath = getVaultBasePath(app);
-  const claudeDir = path.join(basePath, ".claude");
-  const settingsPath = path.join(claudeDir, "settings.local.json");
+  const claudeDir = pathJoin(basePath, ".claude");
+  const settingsPath = pathJoin(claudeDir, "settings.local.json");
   const hookCommand = getHookBridgePath(app, manifest);
-  await fs.mkdir(claudeDir, { recursive: true });
+  await makeDirRecursive(claudeDir);
+  const raw = await readTextFileIfExists(settingsPath);
   let settings = {};
-  try {
-    const raw = await fs.readFile(settingsPath, "utf8");
-    settings = raw.trim() ? JSON.parse(raw) : {};
-  } catch (err) {
-    if (err.code !== "ENOENT")
-      throw err;
+  if (raw && raw.trim()) {
+    const parsed = JSON.parse(raw);
+    if (isClaudeSettingsFile(parsed))
+      settings = parsed;
   }
   (_a5 = settings.hooks) != null ? _a5 : settings.hooks = {};
   (_c2 = (_b = settings.hooks).PreToolUse) != null ? _c2 : _b.PreToolUse = [];
@@ -191,33 +289,92 @@ async function provisionClaudeSettings(app, manifest) {
     changed = true;
   }
   if (changed) {
-    await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+    await writeTextFile(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
   await ensureGitignoreEntry(basePath);
 }
 async function ensureGitignoreEntry(basePath) {
-  const gitignorePath = path.join(basePath, ".gitignore");
-  let existing = "";
-  try {
-    existing = await fs.readFile(gitignorePath, "utf8");
-  } catch (err) {
-    if (err.code !== "ENOENT")
-      throw err;
-  }
+  var _a5;
+  const gitignorePath = pathJoin(basePath, ".gitignore");
+  const existing = (_a5 = await readTextFileIfExists(gitignorePath)) != null ? _a5 : "";
   const lines = existing.split("\n");
   if (lines.some((l) => l.trim() === GITIGNORE_LINE))
     return;
   const needsNewline = existing.length > 0 && !existing.endsWith("\n");
   const addition = `${needsNewline ? "\n" : ""}${GITIGNORE_LINE}
 `;
-  await fs.appendFile(gitignorePath, addition, "utf8");
+  await appendTextFile(gitignorePath, addition);
+}
+
+// src/node/process.ts
+var import_child_process = require("child_process");
+function getEnvVar(name) {
+  return process.env[name];
+}
+function getAllEnvVars() {
+  return { ...process.env };
+}
+var ExecFileError = class extends Error {
+};
+function execFileText(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    (0, import_child_process.execFile)(command, args, { encoding: "utf8", ...options }, (error, stdout, stderr) => {
+      if (error) {
+        const errWithFields = error;
+        const execErr = new ExecFileError(error.message);
+        execErr.killed = errWithFields.killed;
+        execErr.signal = errWithFields.signal;
+        execErr.stderr = typeof stderr === "string" ? stderr : void 0;
+        execErr.code = errWithFields.code;
+        reject(execErr);
+        return;
+      }
+      resolve({
+        stdout: typeof stdout === "string" ? stdout : "",
+        stderr: typeof stderr === "string" ? stderr : ""
+      });
+    });
+  });
+}
+function spawnWithControlChannel(command, args, options) {
+  const child = (0, import_child_process.spawn)(command, args, {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: ["pipe", "pipe", "pipe", "pipe"]
+  });
+  const controlStream = child.stdio[3];
+  const hasControlStream = controlStream !== null && controlStream !== void 0 && "on" in controlStream && "write" in controlStream;
+  return {
+    onStdout: (listener) => {
+      child.stdout.on("data", listener);
+    },
+    onStderr: (listener) => {
+      child.stderr.on("data", listener);
+    },
+    writeStdin: (data) => {
+      child.stdin.write(data, "utf8");
+    },
+    onControlData: (listener) => {
+      if (hasControlStream)
+        controlStream.on("data", listener);
+    },
+    writeControl: (data) => {
+      if (hasControlStream)
+        controlStream.write(data);
+    },
+    onError: (listener) => {
+      child.on("error", listener);
+    },
+    onClose: (listener) => {
+      child.on("close", listener);
+    },
+    kill: (signal) => {
+      child.kill(signal);
+    }
+  };
 }
 
 // src/pty/shellDetect.ts
-var import_child_process = require("child_process");
-var import_fs = require("fs");
-var import_util = require("util");
-var execFileAsync = (0, import_util.promisify)(import_child_process.execFile);
 var PYTHON3_CANDIDATES = [
   "/usr/bin/python3",
   "/opt/homebrew/bin/python3",
@@ -228,33 +385,27 @@ async function resolvePython3() {
   if (loginShellPath)
     return loginShellPath;
   for (const candidate of PYTHON3_CANDIDATES) {
-    if ((0, import_fs.existsSync)(candidate))
+    if (fileExistsSync(candidate))
       return candidate;
   }
   return "python3";
 }
 function resolveUserShell() {
-  return process.env.SHELL || "/bin/zsh";
+  return getEnvVar("SHELL") || "/bin/zsh";
 }
 async function tryLoginShellWhich(bin) {
   var _a5;
   const loginShell = resolveUserShell();
   try {
-    const { stdout } = await execFileAsync(loginShell, ["-lic", `which ${bin}`], {
-      timeout: 5e3
-    });
+    const { stdout } = await execFileText(loginShell, ["-lic", `which ${bin}`], { timeout: 5e3 });
     const resolved = (_a5 = stdout.trim().split("\n").pop()) == null ? void 0 : _a5.trim();
-    return resolved && (0, import_fs.existsSync)(resolved) ? resolved : null;
+    return resolved && fileExistsSync(resolved) ? resolved : null;
   } catch (e) {
     return null;
   }
 }
 
 // src/claude/headlessAssist.ts
-var import_child_process2 = require("child_process");
-var import_fs2 = require("fs");
-var import_util2 = require("util");
-var execFileAsync2 = (0, import_util2.promisify)(import_child_process2.execFile);
 var TIMEOUT_MS = 45e3;
 var CLAUDE_BIN_CANDIDATES = ["/usr/local/bin/claude", "/opt/homebrew/bin/claude"];
 async function resolveClaudeBin() {
@@ -262,16 +413,19 @@ async function resolveClaudeBin() {
   if (loginShellPath)
     return loginShellPath;
   for (const candidate of CLAUDE_BIN_CANDIDATES) {
-    if ((0, import_fs2.existsSync)(candidate))
+    if (fileExistsSync(candidate))
       return candidate;
   }
   return "claude";
+}
+function isClaudeJsonResult(value) {
+  return typeof value === "object" && value !== null;
 }
 async function runHeadlessQuery(claudeBin, cwd, prompt) {
   var _a5, _b;
   let stdout;
   try {
-    ({ stdout } = await execFileAsync2(
+    ({ stdout } = await execFileText(
       claudeBin,
       ["-p", prompt, "--allowedTools", "", "--output-format", "json"],
       { cwd, timeout: TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }
@@ -286,7 +440,10 @@ async function runHeadlessQuery(claudeBin, cwd, prompt) {
   }
   let parsed;
   try {
-    parsed = JSON.parse(stdout);
+    const rawParsed = JSON.parse(stdout);
+    if (!isClaudeJsonResult(rawParsed))
+      throw new Error("not an object");
+    parsed = rawParsed;
   } catch (e) {
     throw new Error("claude returned unparseable output");
   }
@@ -4196,8 +4353,8 @@ var b;
 `, E2.VT = "\v", E2.FF = "\f", E2.CR = "\r", E2.SO = "", E2.SI = "", E2.DLE = "", E2.DC1 = "", E2.DC2 = "", E2.DC3 = "", E2.DC4 = "", E2.NAK = "", E2.SYN = "", E2.ETB = "", E2.CAN = "", E2.EM = "", E2.SUB = "", E2.ESC = "\x1B", E2.FS = "", E2.GS = "", E2.RS = "", E2.US = "", E2.SP = " ", E2.DEL = "\x7F"))(b || (b = {}));
 var Ai;
 ((g2) => (g2.PAD = "\x80", g2.HOP = "\x81", g2.BPH = "\x82", g2.NBH = "\x83", g2.IND = "\x84", g2.NEL = "\x85", g2.SSA = "\x86", g2.ESA = "\x87", g2.HTS = "\x88", g2.HTJ = "\x89", g2.VTS = "\x8A", g2.PLD = "\x8B", g2.PLU = "\x8C", g2.RI = "\x8D", g2.SS2 = "\x8E", g2.SS3 = "\x8F", g2.DCS = "\x90", g2.PU1 = "\x91", g2.PU2 = "\x92", g2.STS = "\x93", g2.CCH = "\x94", g2.MW = "\x95", g2.SPA = "\x96", g2.EPA = "\x97", g2.SOS = "\x98", g2.SGCI = "\x99", g2.SCI = "\x9A", g2.CSI = "\x9B", g2.ST = "\x9C", g2.OSC = "\x9D", g2.PM = "\x9E", g2.APC = "\x9F"))(Ai || (Ai = {}));
-var fs2;
-((t) => t.ST = `${b.ESC}\\`)(fs2 || (fs2 = {}));
+var fs;
+((t) => t.ST = `${b.ESC}\\`)(fs || (fs = {}));
 var $t = class {
   constructor(t, e, i, r, n, o2) {
     this._textarea = t;
@@ -9464,7 +9621,7 @@ var yn = class extends Sn {
         switch (i.type) {
           case 0:
             let o2 = U.toColorRGB(r === "ansi" ? this._themeService.colors.ansi[i.index] : this._themeService.colors[r]);
-            this.coreService.triggerDataEvent(`${b.ESC}]${n};${ml(o2)}${fs2.ST}`);
+            this.coreService.triggerDataEvent(`${b.ESC}]${n};${ml(o2)}${fs.ST}`);
             break;
           case 1:
             if (r === "ansi")
@@ -10643,14 +10800,34 @@ var M2 = class extends S2 {
   }
 };
 
-// src/views/TerminalView.ts
-var import_crypto = require("crypto");
-var path3 = __toESM(require("path"));
+// src/node/emitter.ts
+var TypedEmitter = class {
+  constructor() {
+    this.listeners = /* @__PURE__ */ new Map();
+  }
+  on(event, listener) {
+    let set = this.listeners.get(event);
+    if (!set) {
+      set = /* @__PURE__ */ new Set();
+      this.listeners.set(event, set);
+    }
+    set.add(listener);
+  }
+  off(event, listener) {
+    var _a5;
+    (_a5 = this.listeners.get(event)) == null ? void 0 : _a5.delete(listener);
+  }
+  emit(event, ...args) {
+    const set = this.listeners.get(event);
+    if (!set)
+      return;
+    for (const listener of set)
+      listener(...args);
+  }
+};
 
 // src/pty/PtyProcess.ts
-var import_child_process3 = require("child_process");
-var import_events = require("events");
-var PtyProcess = class extends import_events.EventEmitter {
+var PtyProcess = class extends TypedEmitter {
   constructor(opts) {
     super();
     this.opts = opts;
@@ -10658,7 +10835,7 @@ var PtyProcess = class extends import_events.EventEmitter {
     this.controlBuf = "";
   }
   start() {
-    const child = (0, import_child_process3.spawn)(
+    const child = spawnWithControlChannel(
       this.opts.pythonBin,
       [
         this.opts.helperPath,
@@ -10669,38 +10846,22 @@ var PtyProcess = class extends import_events.EventEmitter {
         "--shell",
         this.opts.shell
       ],
-      {
-        cwd: this.opts.cwd,
-        env: this.opts.env,
-        stdio: ["pipe", "pipe", "pipe", "pipe"]
-      }
+      { cwd: this.opts.cwd, env: this.opts.env }
     );
     this.child = child;
-    child.stdout.on("data", (chunk) => this.emit("data", chunk));
-    child.stderr.on("data", (chunk) => {
-      this.emit("stderr", chunk.toString("utf8"));
-    });
-    const controlStream = child.stdio[3];
-    if (controlStream && "on" in controlStream) {
-      controlStream.on("data", (chunk) => {
-        this.handleControlChunk(chunk);
-      });
-    }
-    child.on("error", (err) => this.emit("error", err));
-    child.on("close", (code) => this.emit("exit", { code }));
+    child.onStdout((chunk) => this.emit("data", chunk));
+    child.onStderr((chunk) => this.emit("stderr", chunk.toString("utf8")));
+    child.onControlData((chunk) => this.handleControlChunk(chunk));
+    child.onError((err) => this.emit("error", err));
+    child.onClose((code) => this.emit("exit", { code }));
   }
   write(data) {
     var _a5;
-    (_a5 = this.child) == null ? void 0 : _a5.stdin.write(data, "utf8");
+    (_a5 = this.child) == null ? void 0 : _a5.writeStdin(data);
   }
   resize(cols, rows) {
     var _a5;
-    const controlStream = (_a5 = this.child) == null ? void 0 : _a5.stdio[3];
-    if (controlStream && "writable" in controlStream) {
-      controlStream.write(
-        JSON.stringify({ type: "resize", cols, rows }) + "\n"
-      );
-    }
+    (_a5 = this.child) == null ? void 0 : _a5.writeControl(JSON.stringify({ type: "resize", cols, rows }) + "\n");
   }
   kill(signal = "SIGTERM") {
     var _a5;
@@ -10727,32 +10888,25 @@ var PtyProcess = class extends import_events.EventEmitter {
 };
 
 // src/pty/shellIntegration.ts
-var path2 = __toESM(require("path"));
 function getShellIntegrationEnv(shellPath, pluginResourcesDir) {
-  const shellName = path2.basename(shellPath);
+  const shellName = pathBasename(shellPath);
   if (shellName === "zsh") {
     return {
-      TERMINUS_CHILD_ZDOTDIR: path2.join(pluginResourcesDir, "shell-integration", "zsh")
+      TERMINUS_CHILD_ZDOTDIR: pathJoin(pluginResourcesDir, "shell-integration", "zsh")
     };
   }
   if (shellName === "bash") {
     return {
-      TERMINUS_CHILD_HOME: path2.join(pluginResourcesDir, "shell-integration", "bash")
+      TERMINUS_CHILD_HOME: pathJoin(pluginResourcesDir, "shell-integration", "bash")
     };
   }
   return {};
 }
 
 // src/server/diff.ts
-var fs3 = __toESM(require("fs/promises"));
 async function readIfExists(filePath) {
-  try {
-    return { text: await fs3.readFile(filePath, "utf8"), existed: true };
-  } catch (err) {
-    if (err.code === "ENOENT")
-      return { text: "", existed: false };
-    throw err;
-  }
+  const text = await readTextFileIfExists(filePath);
+  return text === null ? { text: "", existed: false } : { text, existed: true };
 }
 async function buildDiff(payload) {
   if (payload.tool_name === "Edit") {
@@ -10965,6 +11119,13 @@ var CommandTracker = class {
 
 // src/modals/CommandHelpModal.ts
 var import_obsidian2 = require("obsidian");
+
+// src/util/errors.ts
+function errorMessage2(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// src/modals/CommandHelpModal.ts
 var CommandHelpModal = class extends import_obsidian2.Modal {
   constructor(app, claudeBin, cwd, exitCode, transcript, onApplyFix) {
     super(app);
@@ -11003,7 +11164,7 @@ var CommandHelpModal = class extends import_obsidian2.Modal {
     } catch (err) {
       this.explainResultEl.empty();
       this.explainResultEl.createEl("div", {
-        text: `Couldn't get an explanation: ${err.message}`,
+        text: `Couldn't get an explanation: ${errorMessage2(err)}`,
         cls: "terminus-pending-empty"
       });
     } finally {
@@ -11021,7 +11182,7 @@ var CommandHelpModal = class extends import_obsidian2.Modal {
     } catch (err) {
       this.suggestResultEl.empty();
       this.suggestResultEl.createEl("div", {
-        text: `Couldn't get a suggestion: ${err.message}`,
+        text: `Couldn't get a suggestion: ${errorMessage2(err)}`,
         cls: "terminus-pending-empty"
       });
     } finally {
@@ -11085,7 +11246,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
     this.restoredScrollback = null;
     this.scrollbackApplied = false;
     this.resizeObserver = null;
-    this.token = (0, import_crypto.randomBytes)(16).toString("hex");
+    this.token = randomHex(16);
     this.terminalNumber = plugin.allocateTerminalNumber();
   }
   getViewType() {
@@ -11193,8 +11354,8 @@ var TerminalView = class extends import_obsidian3.ItemView {
     var _a5, _b, _c2, _d;
     const pythonBin = await this.plugin.getPython3Bin();
     const shell = this.plugin.getUserShell();
-    const resourcesDir = path3.join(this.plugin.getPluginDir(), "resources");
-    const helperPath = path3.join(resourcesDir, "pty_helper.py");
+    const resourcesDir = pathJoin(this.plugin.getPluginDir(), "resources");
+    const helperPath = pathJoin(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
     this.pty = new PtyProcess({
       pythonBin,
@@ -11204,7 +11365,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
       cols: (_b = (_a5 = this.term) == null ? void 0 : _a5.cols) != null ? _b : 80,
       rows: (_d = (_c2 = this.term) == null ? void 0 : _c2.rows) != null ? _d : 24,
       env: {
-        ...process.env,
+        ...getAllEnvVars(),
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
@@ -11216,7 +11377,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
       return (_a6 = this.term) == null ? void 0 : _a6.write(chunk.toString("utf8"));
     });
     this.pty.on("stderr", (text) => new import_obsidian3.Notice(`Terminus: ${text.trim()}`));
-    this.pty.on("error", (err) => new import_obsidian3.Notice(`Terminus: PTY error: ${err.message}`));
+    this.pty.on("error", (err) => new import_obsidian3.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
     this.pty.on("exit", ({ code }) => {
       var _a6;
       (_a6 = this.term) == null ? void 0 : _a6.write(`\r
@@ -11296,7 +11457,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
    *  (first oldText vs latest newText) so a multi-edit turn is checked as a
    *  whole, not edit-by-edit. */
   async checkBacklinkBreakage(absoluteFilePath) {
-    const relPath = path3.relative(this.plugin.getVaultBasePath(), absoluteFilePath);
+    const relPath = pathRelative(this.plugin.getVaultBasePath(), absoluteFilePath);
     const file = this.app.vault.getAbstractFileByPath(relPath);
     if (!(file instanceof import_obsidian3.TFile))
       return;
@@ -11310,7 +11471,6 @@ var TerminalView = class extends import_obsidian3.ItemView {
 
 // src/views/PendingChangesView.ts
 var import_obsidian9 = require("obsidian");
-var path9 = __toESM(require("path"));
 
 // node_modules/diff/libesm/diff/base.js
 var Diff = class {
@@ -11412,16 +11572,16 @@ var Diff = class {
       }
     }
   }
-  addToPath(path12, added, removed, oldPosInc, options) {
-    const last = path12.lastComponent;
+  addToPath(path, added, removed, oldPosInc, options) {
+    const last = path.lastComponent;
     if (last && !options.oneChangePerToken && last.added === added && last.removed === removed) {
       return {
-        oldPos: path12.oldPos + oldPosInc,
+        oldPos: path.oldPos + oldPosInc,
         lastComponent: { count: last.count + 1, added, removed, previousComponent: last.previousComponent }
       };
     } else {
       return {
-        oldPos: path12.oldPos + oldPosInc,
+        oldPos: path.oldPos + oldPosInc,
         lastComponent: { count: 1, added, removed, previousComponent: last }
       };
     }
@@ -11973,7 +12133,6 @@ function renderDiffLine(container, line) {
 
 // src/editor/openWithDiff.ts
 var import_obsidian4 = require("obsidian");
-var path4 = __toESM(require("path"));
 
 // src/editor/inlineDiff.ts
 var import_state = require("@codemirror/state");
@@ -12088,7 +12247,7 @@ function buildDecorations(state, overlay) {
 
 // src/editor/openWithDiff.ts
 async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
-  const relPath = path4.relative(vaultBasePath, change.diff.filePath);
+  const relPath = pathRelative(vaultBasePath, change.diff.filePath);
   if (relPath.startsWith("..")) {
     new import_obsidian4.Notice("Terminus: file is outside the vault, can't open it as a note.");
     return;
@@ -12115,7 +12274,7 @@ async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
   });
   const resolve = (accepted) => {
     store.resolveItem(change.id, accepted).catch((err) => {
-      new import_obsidian4.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${path4.basename(change.diff.filePath)}: ${err.message}`);
+      new import_obsidian4.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   cm.dispatch({
@@ -12131,11 +12290,9 @@ async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
 
 // src/views/DiffSplitView.ts
 var import_obsidian6 = require("obsidian");
-var path6 = __toESM(require("path"));
 
 // src/diff/renderSplitDiff.ts
 var import_obsidian5 = require("obsidian");
-var path5 = __toESM(require("path"));
 
 // src/diff/hunks.ts
 function computeSplitParts(oldText, newText) {
@@ -12315,7 +12472,7 @@ function renderHunkControls(container, hunk, change, store) {
   bar.createEl("span", { cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
   const resolve = (accepted) => {
     store.resolveHunk(change.id, hunk.index, accepted).catch((err) => {
-      new import_obsidian5.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${path5.basename(change.diff.filePath)}: ${err.message}`);
+      new import_obsidian5.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${pathBasename(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   bar.createEl("button", { text: "Reject", cls: "terminus-inline-diff-reject" }).addEventListener("click", () => resolve(false));
@@ -12370,7 +12527,7 @@ var DiffSplitView = class extends import_obsidian6.ItemView {
         return;
       }
       const header = container.createDiv({ cls: "terminus-split-diff-header" });
-      header.createEl("span", { cls: "terminus-split-diff-title", text: path6.basename(change.diff.filePath) });
+      header.createEl("span", { cls: "terminus-split-diff-title", text: pathBasename(change.diff.filePath) });
       if (change.editCount > 1) {
         header.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
       }
@@ -12381,7 +12538,7 @@ var DiffSplitView = class extends import_obsidian6.ItemView {
     return DIFF_SPLIT_VIEW_TYPE;
   }
   getDisplayText() {
-    return this.changeId ? `Diff: ${path6.basename(this.changeId)}` : "Split Diff";
+    return this.changeId ? `Diff: ${pathBasename(this.changeId)}` : "Split Diff";
   }
   getIcon() {
     return "diff";
@@ -12413,7 +12570,6 @@ async function openDiffSplitView(plugin, changeId) {
 
 // src/modals/ActionLogModal.ts
 var import_obsidian7 = require("obsidian");
-var path7 = __toESM(require("path"));
 var ActionLogModal = class extends import_obsidian7.Modal {
   constructor(app, actionLog) {
     super(app);
@@ -12453,7 +12609,7 @@ var ActionLogModal = class extends import_obsidian7.Modal {
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted"
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: path7.basename(entry.filePath) });
+    row.createEl("span", { cls: "terminus-history-filename", text: pathBasename(entry.filePath) });
     row.createEl("span", {
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` \xB7 ${entry.editCount} edits` : ""}`
@@ -12505,16 +12661,12 @@ var ConfirmModal = class extends import_obsidian8.Modal {
 };
 
 // src/git/gitDiff.ts
-var import_child_process4 = require("child_process");
-var import_util3 = require("util");
-var path8 = __toESM(require("path"));
-var execFileAsync3 = (0, import_util3.promisify)(import_child_process4.execFile);
 async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
-  const relPath = path8.relative(vaultBasePath, absoluteFilePath);
+  const relPath = pathRelative(vaultBasePath, absoluteFilePath);
   if (relPath.startsWith(".."))
     return null;
   try {
-    const { stdout } = await execFileAsync3("git", ["show", `HEAD:${relPath}`], {
+    const { stdout } = await execFileText("git", ["show", `HEAD:${relPath}`], {
       cwd: vaultBasePath,
       maxBuffer: 10 * 1024 * 1024
     });
@@ -12626,7 +12778,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       await action();
     } catch (err) {
       const target = scopeLabel ? `${scopeLabel}'s changes` : "all changes";
-      new import_obsidian9.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${err.message}`);
+      new import_obsidian9.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage2(err)}`);
     }
   }
   renderTerminalGroup(container, panelLabel, changes, statsById) {
@@ -12683,14 +12835,14 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
     const chevron = summary.createEl("span", { cls: "terminus-pending-chevron", text: "\u25B8" });
     const info = summary.createDiv({ cls: "terminus-pending-info" });
     const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-    nameRow.createEl("span", { cls: "terminus-pending-filename", text: path9.basename(change.diff.filePath) });
+    nameRow.createEl("span", { cls: "terminus-pending-filename", text: pathBasename(change.diff.filePath) });
     nameRow.createEl("span", { cls: "terminus-diff-stat-add", text: `+${stats.added}` });
     nameRow.createEl("span", { cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
     if (change.editCount > 1) {
       nameRow.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
     }
-    const vaultName = path9.basename(this.plugin.getVaultBasePath());
-    const relativePath = path9.relative(this.plugin.getVaultBasePath(), change.diff.filePath);
+    const vaultName = pathBasename(this.plugin.getVaultBasePath());
+    const relativePath = pathRelative(this.plugin.getVaultBasePath(), change.diff.filePath);
     info.createEl("div", { cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
     if (change.brokenBacklinks.length > 0) {
       const count = change.brokenBacklinks.length;
@@ -12706,7 +12858,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
     const resolve = (accepted) => {
       this.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err) => {
         new import_obsidian9.Notice(
-          `Terminus: failed to ${accepted ? "keep" : "revert"} ${path9.basename(change.diff.filePath)}: ${err.message}`
+          `Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(change.diff.filePath)}: ${errorMessage2(err)}`
         );
       });
     };
@@ -12750,7 +12902,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       const list = warning.createEl("ul");
       for (const link of change.brokenBacklinks) {
         list.createEl("li", {
-          text: `${path9.basename(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
+          text: `${pathBasename(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
         });
       }
     }
@@ -12779,7 +12931,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       if (previewRendered)
         return;
       previewRendered = true;
-      const relPath = path9.relative(this.plugin.getVaultBasePath(), change.diff.filePath);
+      const relPath = pathRelative(this.plugin.getVaultBasePath(), change.diff.filePath);
       void import_obsidian9.MarkdownRenderer.render(this.app, change.diff.newText, previewContainer, relPath, this);
     });
     gitBtn.addEventListener("click", () => {
@@ -12835,20 +12987,18 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: item.accepted ? "Kept" : "Reverted"
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: path9.basename(item.diff.filePath) });
+    row.createEl("span", { cls: "terminus-history-filename", text: pathBasename(item.diff.filePath) });
     row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
       this.plugin.pendingChangesStore.undo(item.historyId).catch((err) => {
-        new import_obsidian9.Notice(`Terminus: failed to undo: ${err.message}`);
+        new import_obsidian9.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
       });
     });
   }
 };
 
 // src/state/PendingChangesStore.ts
-var import_events2 = require("events");
-var fs4 = __toESM(require("fs/promises"));
 var MAX_HISTORY = 20;
-var PendingChangesStore = class extends import_events2.EventEmitter {
+var PendingChangesStore = class extends TypedEmitter {
   constructor() {
     super(...arguments);
     this.entries = /* @__PURE__ */ new Map();
@@ -12965,12 +13115,9 @@ var PendingChangesStore = class extends import_events2.EventEmitter {
     const newOldText = diff.oldText.slice(0, hunk.oldStart) + chosen + diff.oldText.slice(hunk.oldEnd);
     const newNewText = diff.newText.slice(0, hunk.newStart) + chosen + diff.newText.slice(hunk.newEnd);
     if (!diff.existedBefore && newOldText === "") {
-      await fs4.unlink(diff.filePath).catch((err) => {
-        if (err.code !== "ENOENT")
-          throw err;
-      });
+      await deleteFileIfExists(diff.filePath);
     } else {
-      await fs4.writeFile(diff.filePath, newOldText, "utf8");
+      await writeTextFile(diff.filePath, newOldText);
     }
     entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
     if (newOldText === newNewText) {
@@ -13014,22 +13161,20 @@ var PendingChangesStore = class extends import_events2.EventEmitter {
   }
   async applyOldState(diff) {
     if (!diff.existedBefore) {
-      await fs4.unlink(diff.filePath).catch((err) => {
-        if (err.code !== "ENOENT")
-          throw err;
-      });
+      await deleteFileIfExists(diff.filePath);
       return;
     }
-    await fs4.writeFile(diff.filePath, diff.revertText, "utf8");
+    await writeTextFile(diff.filePath, diff.revertText);
   }
   async applyNewState(diff) {
-    await fs4.writeFile(diff.filePath, diff.newText, "utf8");
+    await writeTextFile(diff.filePath, diff.newText);
   }
 };
 
 // src/state/ActionLog.ts
-var fs5 = __toESM(require("fs/promises"));
-var path10 = __toESM(require("path"));
+function isActionLogEntryArray(value) {
+  return Array.isArray(value);
+}
 var MAX_LOG_ENTRIES = 1e3;
 var ActionLog = class {
   constructor(logFilePath) {
@@ -13040,12 +13185,11 @@ var ActionLog = class {
   async load() {
     if (this.loaded)
       return;
-    try {
-      const raw = await fs5.readFile(this.logFilePath, "utf8");
-      this.entries = raw.trim() ? JSON.parse(raw) : [];
-    } catch (err) {
-      if (err.code !== "ENOENT")
-        throw err;
+    const raw = await readTextFileIfExists(this.logFilePath);
+    if (raw && raw.trim()) {
+      const parsed = JSON.parse(raw);
+      this.entries = isActionLogEntryArray(parsed) ? parsed : [];
+    } else {
       this.entries = [];
     }
     this.loaded = true;
@@ -13067,8 +13211,8 @@ var ActionLog = class {
     return result;
   }
   async persist() {
-    await fs5.mkdir(path10.dirname(this.logFilePath), { recursive: true });
-    await fs5.writeFile(this.logFilePath, JSON.stringify(this.entries, null, 2), "utf8");
+    await makeDirRecursive(pathDirname(this.logFilePath));
+    await writeTextFile(this.logFilePath, JSON.stringify(this.entries, null, 2));
   }
 };
 
@@ -13146,7 +13290,7 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
     );
     new import_obsidian10.Setting(containerEl).setName("Advanced").setHeading();
     new import_obsidian10.Setting(containerEl).setName("Shell binary override").setDesc(
-      `Leave blank to auto-detect (your $SHELL, currently resolves to "${process.env.SHELL || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
+      `Leave blank to auto-detect (your $SHELL, currently resolves to "${getEnvVar("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
     ).addText(
       (text) => text.setPlaceholder("e.g. /bin/zsh").setValue(this.plugin.settings.shellBinOverride).onChange(async (value) => {
         this.plugin.settings.shellBinOverride = value.trim();
@@ -13179,7 +13323,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new TerminusSettingTab(this.app, this));
-    this.actionLog = new ActionLog(path11.join(this.getPluginDir(), "action-log.json"));
+    this.actionLog = new ActionLog(pathJoin(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.pendingChangesStore.on("resolved", (item) => {
       const stats = computeDiffStats(item.diff);
@@ -13277,7 +13421,8 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     void this.reviewServer.stop();
   }
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const saved = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -13317,7 +13462,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     try {
       await this.pendingChangesStore.resolveAll(accepted);
     } catch (err) {
-      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${err.message}`);
+      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
     }
   }
   async resolveOldestPendingChange(accepted) {
@@ -13328,9 +13473,9 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     }
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian11.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${path11.basename(oldest.diff.filePath)}`);
+      new import_obsidian11.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${pathBasename(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${path11.basename(oldest.diff.filePath)}: ${err.message}`);
+      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -13359,7 +13504,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     return getHookBridgePath(this.app, this.manifest);
   }
   getPluginDir() {
-    return path11.join(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return pathJoin(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
   async revealPendingChangesView() {
     var _a5, _b;

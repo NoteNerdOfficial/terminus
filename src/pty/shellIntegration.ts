@@ -1,4 +1,4 @@
-import * as path from "path";
+import { pathBasename, pathJoin } from "../node/fs";
 
 /**
  * Computes env vars that tell pty_helper.py's build_child_env() to
@@ -23,17 +23,17 @@ import * as path from "path";
  * integration, but the terminal still works as a plain terminal.
  */
 export function getShellIntegrationEnv(shellPath: string, pluginResourcesDir: string): Record<string, string> {
-  const shellName = path.basename(shellPath);
+  const shellName = pathBasename(shellPath);
 
   if (shellName === "zsh") {
     return {
-      TERMINUS_CHILD_ZDOTDIR: path.join(pluginResourcesDir, "shell-integration", "zsh"),
+      TERMINUS_CHILD_ZDOTDIR: pathJoin(pluginResourcesDir, "shell-integration", "zsh"),
     };
   }
 
   if (shellName === "bash") {
     return {
-      TERMINUS_CHILD_HOME: path.join(pluginResourcesDir, "shell-integration", "bash"),
+      TERMINUS_CHILD_HOME: pathJoin(pluginResourcesDir, "shell-integration", "bash"),
     };
   }
 

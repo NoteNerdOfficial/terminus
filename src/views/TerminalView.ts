@@ -2,8 +2,8 @@ import { ItemView, Notice, TFile, ViewStateResult, WorkspaceLeaf } from "obsidia
 import { IDecoration, Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { randomBytes } from "crypto";
-import * as path from "path";
+import { pathJoin, pathRelative, randomHex } from "../node/fs";
+import { getAllEnvVars } from "../node/process";
 import { PtyProcess } from "../pty/PtyProcess";
 import { getShellIntegrationEnv } from "../pty/shellIntegration";
 import { buildDiff } from "../server/diff";
@@ -11,6 +11,7 @@ import { detectBacklinkBreakage } from "../backlinks/breakage";
 import { CommandTracker, TrackedCommand } from "../terminal/CommandTracker";
 import { CommandHelpModal } from "../modals/CommandHelpModal";
 import { PreToolUseHookPayload } from "../hooks/types";
+import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
 
 export const TERMINUS_VIEW_TYPE = "terminus-view";
@@ -54,7 +55,7 @@ export class TerminalView extends ItemView {
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
-    this.token = randomBytes(16).toString("hex");
+    this.token = randomHex(16);
     this.terminalNumber = plugin.allocateTerminalNumber();
   }
 
@@ -179,8 +180,8 @@ export class TerminalView extends ItemView {
   private async startPty(): Promise<void> {
     const pythonBin = await this.plugin.getPython3Bin();
     const shell = this.plugin.getUserShell();
-    const resourcesDir = path.join(this.plugin.getPluginDir(), "resources");
-    const helperPath = path.join(resourcesDir, "pty_helper.py");
+    const resourcesDir = pathJoin(this.plugin.getPluginDir(), "resources");
+    const helperPath = pathJoin(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
 
     this.pty = new PtyProcess({
@@ -191,7 +192,7 @@ export class TerminalView extends ItemView {
       cols: this.term?.cols ?? 80,
       rows: this.term?.rows ?? 24,
       env: {
-        ...process.env,
+        ...getAllEnvVars(),
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
@@ -201,7 +202,7 @@ export class TerminalView extends ItemView {
 
     this.pty.on("data", (chunk: Buffer) => this.term?.write(chunk.toString("utf8")));
     this.pty.on("stderr", (text: string) => new Notice(`Terminus: ${text.trim()}`));
-    this.pty.on("error", (err: Error) => new Notice(`Terminus: PTY error: ${err.message}`));
+    this.pty.on("error", (err) => new Notice(`Terminus: PTY error: ${errorMessage(err)}`));
     this.pty.on("exit", ({ code }: { code: number | null }) => {
       this.term?.write(`\r\n[process exited${code !== null ? ` with code ${code}` : ""}]\r\n`);
     });
@@ -309,7 +310,7 @@ export class TerminalView extends ItemView {
    *  (first oldText vs latest newText) so a multi-edit turn is checked as a
    *  whole, not edit-by-edit. */
   private async checkBacklinkBreakage(absoluteFilePath: string): Promise<void> {
-    const relPath = path.relative(this.plugin.getVaultBasePath(), absoluteFilePath);
+    const relPath = pathRelative(this.plugin.getVaultBasePath(), absoluteFilePath);
     const file = this.app.vault.getAbstractFileByPath(relPath);
     if (!(file instanceof TFile)) return;
 

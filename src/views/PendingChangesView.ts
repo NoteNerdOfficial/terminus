@@ -1,5 +1,5 @@
 import { ItemView, MarkdownRenderer, Notice, WorkspaceLeaf } from "obsidian";
-import * as path from "path";
+import { pathBasename, pathRelative } from "../node/fs";
 import { PendingChange, ResolvedChange } from "../state/PendingChangesStore";
 import { computeDiffStats, renderDiffBody } from "../diff/renderDiff";
 import { openFileWithInlineDiff } from "../editor/openWithDiff";
@@ -7,6 +7,7 @@ import { openDiffSplitView } from "./DiffSplitView";
 import { ActionLogModal } from "../modals/ActionLogModal";
 import { ConfirmModal } from "../modals/ConfirmModal";
 import { getGitHeadContent } from "../git/gitDiff";
+import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
 
 export const PENDING_CHANGES_VIEW_TYPE = "terminus-pending-changes";
@@ -137,7 +138,7 @@ export class PendingChangesView extends ItemView {
       await action();
     } catch (err) {
       const target = scopeLabel ? `${scopeLabel}'s changes` : "all changes";
-      new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${(err as Error).message}`);
+      new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage(err)}`);
     }
   }
 
@@ -218,7 +219,7 @@ export class PendingChangesView extends ItemView {
 
     const info = summary.createDiv({ cls: "terminus-pending-info" });
     const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-    nameRow.createEl("span", { cls: "terminus-pending-filename", text: path.basename(change.diff.filePath) });
+    nameRow.createEl("span", { cls: "terminus-pending-filename", text: pathBasename(change.diff.filePath) });
     nameRow.createEl("span", { cls: "terminus-diff-stat-add", text: `+${stats.added}` });
     nameRow.createEl("span", { cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
     if (change.editCount > 1) {
@@ -228,8 +229,8 @@ export class PendingChangesView extends ItemView {
     // folder name as a recognizable anchor ("Test1/notes/File 8.md")
     // instead of either the full "/Users/.../Test1/..." prefix or a bare
     // filename-relative-to-nowhere path.
-    const vaultName = path.basename(this.plugin.getVaultBasePath());
-    const relativePath = path.relative(this.plugin.getVaultBasePath(), change.diff.filePath);
+    const vaultName = pathBasename(this.plugin.getVaultBasePath());
+    const relativePath = pathRelative(this.plugin.getVaultBasePath(), change.diff.filePath);
     info.createEl("div", { cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
     if (change.brokenBacklinks.length > 0) {
       const count = change.brokenBacklinks.length;
@@ -244,9 +245,9 @@ export class PendingChangesView extends ItemView {
       fn();
     };
     const resolve = (accepted: boolean) => {
-      this.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err: Error) => {
+      this.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err: unknown) => {
         new Notice(
-          `Terminus: failed to ${accepted ? "keep" : "revert"} ${path.basename(change.diff.filePath)}: ${err.message}`
+          `Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(change.diff.filePath)}: ${errorMessage(err)}`
         );
       });
     };
@@ -303,7 +304,7 @@ export class PendingChangesView extends ItemView {
       const list = warning.createEl("ul");
       for (const link of change.brokenBacklinks) {
         list.createEl("li", {
-          text: `${path.basename(link.sourceFile)} → #${link.isBlock ? "^" : ""}${link.fragment}`,
+          text: `${pathBasename(link.sourceFile)} → #${link.isBlock ? "^" : ""}${link.fragment}`,
         });
       }
     }
@@ -339,7 +340,7 @@ export class PendingChangesView extends ItemView {
       activate(1);
       if (previewRendered) return;
       previewRendered = true;
-      const relPath = path.relative(this.plugin.getVaultBasePath(), change.diff.filePath);
+      const relPath = pathRelative(this.plugin.getVaultBasePath(), change.diff.filePath);
       void MarkdownRenderer.render(this.app, change.diff.newText, previewContainer, relPath, this);
     });
 
@@ -400,10 +401,10 @@ export class PendingChangesView extends ItemView {
       cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: item.accepted ? "Kept" : "Reverted",
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: path.basename(item.diff.filePath) });
+    row.createEl("span", { cls: "terminus-history-filename", text: pathBasename(item.diff.filePath) });
     row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
-      this.plugin.pendingChangesStore.undo(item.historyId).catch((err: Error) => {
-        new Notice(`Terminus: failed to undo: ${err.message}`);
+      this.plugin.pendingChangesStore.undo(item.historyId).catch((err: unknown) => {
+        new Notice(`Terminus: failed to undo: ${errorMessage(err)}`);
       });
     });
   }

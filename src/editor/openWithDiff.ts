@@ -1,8 +1,9 @@
 import { App, MarkdownView, Notice, TFile } from "obsidian";
 import { EditorView } from "@codemirror/view";
-import * as path from "path";
+import { pathBasename, pathRelative } from "../node/fs";
 import { setInlineDiff } from "./inlineDiff";
 import { PendingChange, PendingChangesStore } from "../state/PendingChangesStore";
+import { errorMessage } from "../util/errors";
 
 export async function openFileWithInlineDiff(
   app: App,
@@ -10,7 +11,7 @@ export async function openFileWithInlineDiff(
   store: PendingChangesStore,
   change: PendingChange
 ): Promise<void> {
-  const relPath = path.relative(vaultBasePath, change.diff.filePath);
+  const relPath = pathRelative(vaultBasePath, change.diff.filePath);
   if (relPath.startsWith("..")) {
     new Notice("Terminus: file is outside the vault, can't open it as a note.");
     return;
@@ -51,8 +52,8 @@ export async function openFileWithInlineDiff(
   });
 
   const resolve = (accepted: boolean) => {
-    store.resolveItem(change.id, accepted).catch((err: Error) => {
-      new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${path.basename(change.diff.filePath)}: ${err.message}`);
+    store.resolveItem(change.id, accepted).catch((err: unknown) => {
+      new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(change.diff.filePath)}: ${errorMessage(err)}`);
     });
   };
 

@@ -1,10 +1,11 @@
 import { Notice } from "obsidian";
-import * as path from "path";
+import { pathBasename } from "../node/fs";
 import { diffWordsWithSpace } from "diff";
 import { buildDiffLines, buildSegments, DiffLineSegment, splitLines } from "./buildDiffLines";
 import { renderMinimap } from "./renderDiff";
 import { computeSplitParts, HunkPart } from "./hunks";
 import { PendingChange, PendingChangesStore } from "../state/PendingChangesStore";
+import { errorMessage } from "../util/errors";
 
 interface CellLine {
   text: string;
@@ -149,8 +150,8 @@ function renderHunkControls(container: HTMLElement, hunk: HunkPart, change: Pend
   bar.createEl("span", { cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
 
   const resolve = (accepted: boolean) => {
-    store.resolveHunk(change.id, hunk.index, accepted).catch((err: Error) => {
-      new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${path.basename(change.diff.filePath)}: ${err.message}`);
+    store.resolveHunk(change.id, hunk.index, accepted).catch((err: unknown) => {
+      new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${pathBasename(change.diff.filePath)}: ${errorMessage(err)}`);
     });
   };
 

@@ -1,5 +1,4 @@
-import * as fs from "fs/promises";
-import * as path from "path";
+import { makeDirRecursive, pathDirname, readTextFileIfExists, writeTextFile } from "../node/fs";
 
 export interface ActionLogEntry {
   timestamp: number;
@@ -13,6 +12,10 @@ export interface ActionLogEntry {
 
 export interface ActionLogQuery {
   search?: string;
+}
+
+function isActionLogEntryArray(value: unknown): value is ActionLogEntry[] {
+  return Array.isArray(value);
 }
 
 // Deliberately lightweight: filename + stats + outcome, not full diff text.
@@ -31,11 +34,11 @@ export class ActionLog {
 
   async load(): Promise<void> {
     if (this.loaded) return;
-    try {
-      const raw = await fs.readFile(this.logFilePath, "utf8");
-      this.entries = raw.trim() ? JSON.parse(raw) : [];
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    const raw = await readTextFileIfExists(this.logFilePath);
+    if (raw && raw.trim()) {
+      const parsed: unknown = JSON.parse(raw);
+      this.entries = isActionLogEntryArray(parsed) ? parsed : [];
+    } else {
       this.entries = [];
     }
     this.loaded = true;
@@ -59,7 +62,7 @@ export class ActionLog {
   }
 
   private async persist(): Promise<void> {
-    await fs.mkdir(path.dirname(this.logFilePath), { recursive: true });
-    await fs.writeFile(this.logFilePath, JSON.stringify(this.entries, null, 2), "utf8");
+    await makeDirRecursive(pathDirname(this.logFilePath));
+    await writeTextFile(this.logFilePath, JSON.stringify(this.entries, null, 2));
   }
 }

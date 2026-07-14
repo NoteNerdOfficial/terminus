@@ -1,5 +1,5 @@
 import { ItemView, ViewStateResult, WorkspaceLeaf } from "obsidian";
-import * as path from "path";
+import { pathBasename } from "../node/fs";
 import { renderSplitDiffBody } from "../diff/renderSplitDiff";
 import type TerminusPlugin from "../main";
 
@@ -27,7 +27,7 @@ export class DiffSplitView extends ItemView {
   }
 
   getDisplayText(): string {
-    return this.changeId ? `Diff: ${path.basename(this.changeId)}` : "Split Diff";
+    return this.changeId ? `Diff: ${pathBasename(this.changeId)}` : "Split Diff";
   }
 
   getIcon(): string {
@@ -73,7 +73,7 @@ export class DiffSplitView extends ItemView {
     }
 
     const header = container.createDiv({ cls: "terminus-split-diff-header" });
-    header.createEl("span", { cls: "terminus-split-diff-title", text: path.basename(change.diff.filePath) });
+    header.createEl("span", { cls: "terminus-split-diff-title", text: pathBasename(change.diff.filePath) });
     if (change.editCount > 1) {
       header.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
     }

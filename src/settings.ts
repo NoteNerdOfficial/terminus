@@ -1,4 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
+import { getEnvVar } from "./node/process";
 import type TerminusPlugin from "./main";
 
 export type TerminalPlacement = "ask" | "tab" | "split-right" | "split-down" | "window";
@@ -124,7 +125,7 @@ export class TerminusSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Shell binary override")
       .setDesc(
-        `Leave blank to auto-detect (your $SHELL, currently resolves to "${process.env.SHELL || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
+        `Leave blank to auto-detect (your $SHELL, currently resolves to "${getEnvVar("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
       )
       .addText((text) =>
         text

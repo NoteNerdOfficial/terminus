@@ -1,5 +1,5 @@
-import { EventEmitter } from "events";
-import * as fs from "fs/promises";
+import { TypedEmitter } from "../node/emitter";
+import { deleteFileIfExists, writeTextFile } from "../node/fs";
 import { PreToolUseHookPayload } from "../hooks/types";
 import { DiffResult } from "../server/diff";
 import type { BrokenBacklink } from "../backlinks/breakage";
@@ -43,6 +43,12 @@ interface PendingEntry {
 
 const MAX_HISTORY = 20;
 
+type PendingChangesStoreEvents = {
+  change: [];
+  recorded: [PendingChange];
+  resolved: [ResolvedChange];
+};
+
 /**
  * Plugin-wide list of changes Claude has already written to disk, awaiting
  * human review. The write already happened by the time an entry appears
@@ -51,7 +57,7 @@ const MAX_HISTORY = 20;
  * content (or deletes it, if the change created a new file). Resolved
  * changes move to a bounded history so either decision can be undone.
  */
-export class PendingChangesStore extends EventEmitter {
+export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents> {
   private entries = new Map<string, PendingEntry>();
   private history: ResolvedChange[] = [];
   private historyIdCounter = 0;
@@ -189,11 +195,9 @@ export class PendingChangesStore extends EventEmitter {
     // shouldn't exist", same as the whole-item reject path below, not an
     // empty file left behind on disk.
     if (!diff.existedBefore && newOldText === "") {
-      await fs.unlink(diff.filePath).catch((err: NodeJS.ErrnoException) => {
-        if (err.code !== "ENOENT") throw err;
-      });
+      await deleteFileIfExists(diff.filePath);
     } else {
-      await fs.writeFile(diff.filePath, newOldText, "utf8");
+      await writeTextFile(diff.filePath, newOldText);
     }
 
     entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
@@ -247,15 +251,13 @@ export class PendingChangesStore extends EventEmitter {
 
   private async applyOldState(diff: DiffResult): Promise<void> {
     if (!diff.existedBefore) {
-      await fs.unlink(diff.filePath).catch((err: NodeJS.ErrnoException) => {
-        if (err.code !== "ENOENT") throw err;
-      });
+      await deleteFileIfExists(diff.filePath);
       return;
     }
-    await fs.writeFile(diff.filePath, diff.revertText, "utf8");
+    await writeTextFile(diff.filePath, diff.revertText);
   }
 
   private async applyNewState(diff: DiffResult): Promise<void> {
-    await fs.writeFile(diff.filePath, diff.newText, "utf8");
+    await writeTextFile(diff.filePath, diff.newText);
   }
 }

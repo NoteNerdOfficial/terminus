@@ -1,12 +1,12 @@
-import { ChildProcessWithoutNullStreams, spawn } from "child_process";
-import { EventEmitter } from "events";
+import { TypedEmitter } from "../node/emitter";
+import { spawnWithControlChannel, type SpawnedProcess } from "../node/process";
 
 export interface PtyProcessOptions {
   pythonBin: string;
   helperPath: string;
   shell: string;
   cwd: string;
-  env: NodeJS.ProcessEnv;
+  env: Record<string, string | undefined>;
   cols: number;
   rows: number;
 }
@@ -15,6 +15,15 @@ type ControlMessage =
   | { type: "ready" }
   | { type: "exited"; code: number | null };
 
+type PtyProcessEvents = {
+  data: [Buffer];
+  ready: [];
+  exit: [{ code: number | null }];
+  error: [Error];
+  stderr: [string];
+  helperExited: [number | null];
+};
+
 /**
  * Node-side half of the PTY protocol implemented by resources/pty_helper.py.
  * fd0/1 carry raw terminal bytes, fd2 is the helper's own diagnostics, fd3 is
@@ -22,8 +31,8 @@ type ControlMessage =
  *
  * Events: 'data' (Buffer), 'ready' (), 'exit' ({code}), 'error' (Error)
  */
-export class PtyProcess extends EventEmitter {
-  private child: ChildProcessWithoutNullStreams | null = null;
+export class PtyProcess extends TypedEmitter<PtyProcessEvents> {
+  private child: SpawnedProcess | null = null;
   private controlBuf = "";
 
   constructor(private opts: PtyProcessOptions) {
@@ -31,7 +40,7 @@ export class PtyProcess extends EventEmitter {
   }
 
   start(): void {
-    const child = spawn(
+    const child = spawnWithControlChannel(
       this.opts.pythonBin,
       [
         this.opts.helperPath,
@@ -42,45 +51,26 @@ export class PtyProcess extends EventEmitter {
         "--shell",
         this.opts.shell,
       ],
-      {
-        cwd: this.opts.cwd,
-        env: this.opts.env,
-        stdio: ["pipe", "pipe", "pipe", "pipe"],
-      }
-    ) as ChildProcessWithoutNullStreams;
+      { cwd: this.opts.cwd, env: this.opts.env }
+    );
     this.child = child;
 
-    child.stdout.on("data", (chunk: Buffer) => this.emit("data", chunk));
-
-    child.stderr.on("data", (chunk: Buffer) => {
-      this.emit("stderr", chunk.toString("utf8"));
-    });
-
-    const controlStream = child.stdio[3];
-    if (controlStream && "on" in controlStream) {
-      (controlStream as NodeJS.ReadableStream).on("data", (chunk: Buffer) => {
-        this.handleControlChunk(chunk);
-      });
-    }
-
-    child.on("error", (err) => this.emit("error", err));
-    child.on("close", (code) => this.emit("exit", { code }));
+    child.onStdout((chunk) => this.emit("data", chunk));
+    child.onStderr((chunk) => this.emit("stderr", chunk.toString("utf8")));
+    child.onControlData((chunk) => this.handleControlChunk(chunk));
+    child.onError((err) => this.emit("error", err));
+    child.onClose((code) => this.emit("exit", { code }));
   }
 
   write(data: string): void {
-    this.child?.stdin.write(data, "utf8");
+    this.child?.writeStdin(data);
   }
 
   resize(cols: number, rows: number): void {
-    const controlStream = this.child?.stdio[3];
-    if (controlStream && "writable" in controlStream) {
-      (controlStream as NodeJS.WritableStream).write(
-        JSON.stringify({ type: "resize", cols, rows }) + "\n"
-      );
-    }
+    this.child?.writeControl(JSON.stringify({ type: "resize", cols, rows }) + "\n");
   }
 
-  kill(signal: NodeJS.Signals = "SIGTERM"): void {
+  kill(signal = "SIGTERM"): void {
     this.child?.kill(signal);
   }
 

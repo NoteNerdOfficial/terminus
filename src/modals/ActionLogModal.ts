@@ -1,5 +1,5 @@
 import { App, Modal } from "obsidian";
-import * as path from "path";
+import { pathBasename } from "../node/fs";
 import { ActionLog, ActionLogEntry } from "../state/ActionLog";
 
 export class ActionLogModal extends Modal {
@@ -47,7 +47,7 @@ export class ActionLogModal extends Modal {
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted",
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: path.basename(entry.filePath) });
+    row.createEl("span", { cls: "terminus-history-filename", text: pathBasename(entry.filePath) });
     row.createEl("span", {
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` · ${entry.editCount} edits` : ""}`,

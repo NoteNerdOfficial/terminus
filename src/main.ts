@@ -1,5 +1,5 @@
 import { Menu, Notice, Plugin, WorkspaceLeaf } from "obsidian";
-import * as path from "path";
+import { pathBasename, pathJoin } from "./node/fs";
 import { ReviewServer } from "./server/ReviewServer";
 import { provisionClaudeSettings, getVaultBasePath, getHookBridgePath } from "./hooks/provisionSettings";
 import { resolvePython3, resolveUserShell } from "./pty/shellDetect";
@@ -13,6 +13,7 @@ import { ActionLogModal } from "./modals/ActionLogModal";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { computeDiffStats } from "./diff/renderDiff";
 import { inlineDiffDecorations, inlineDiffField } from "./editor/inlineDiff";
+import { errorMessage } from "./util/errors";
 import {
   DEFAULT_SETTINGS,
   MAX_FONT_SIZE,
@@ -41,7 +42,7 @@ export default class TerminusPlugin extends Plugin {
     await this.loadSettings();
     this.addSettingTab(new TerminusSettingTab(this.app, this));
 
-    this.actionLog = new ActionLog(path.join(this.getPluginDir(), "action-log.json"));
+    this.actionLog = new ActionLog(pathJoin(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.pendingChangesStore.on("resolved", (item: ResolvedChange) => {
       const stats = computeDiffStats(item.diff);
@@ -157,7 +158,8 @@ export default class TerminusPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const saved = (await this.loadData()) as Partial<TerminusSettings> | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
   }
 
   async saveSettings(): Promise<void> {
@@ -197,7 +199,7 @@ export default class TerminusPlugin extends Plugin {
     try {
       await this.pendingChangesStore.resolveAll(accepted);
     } catch (err) {
-      new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${(err as Error).message}`);
+      new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage(err)}`);
     }
   }
 
@@ -209,9 +211,9 @@ export default class TerminusPlugin extends Plugin {
     }
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${path.basename(oldest.diff.filePath)}`);
+      new Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${pathBasename(oldest.diff.filePath)}`);
     } catch (err) {
-      new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${path.basename(oldest.diff.filePath)}: ${(err as Error).message}`);
+      new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(oldest.diff.filePath)}: ${errorMessage(err)}`);
     }
   }
 
@@ -243,7 +245,7 @@ export default class TerminusPlugin extends Plugin {
   }
 
   getPluginDir(): string {
-    return path.join(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return pathJoin(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
 
   async revealPendingChangesView(): Promise<void> {

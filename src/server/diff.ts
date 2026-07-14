@@ -1,4 +1,4 @@
-import * as fs from "fs/promises";
+import { readTextFileIfExists } from "../node/fs";
 import { PreToolUseHookPayload } from "../hooks/types";
 
 export interface DiffResult {
@@ -15,12 +15,8 @@ export interface DiffResult {
 }
 
 async function readIfExists(filePath: string): Promise<{ text: string; existed: boolean }> {
-  try {
-    return { text: await fs.readFile(filePath, "utf8"), existed: true };
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { text: "", existed: false };
-    throw err;
-  }
+  const text = await readTextFileIfExists(filePath);
+  return text === null ? { text: "", existed: false } : { text, existed: true };
 }
 
 export async function buildDiff(payload: PreToolUseHookPayload): Promise<DiffResult> {

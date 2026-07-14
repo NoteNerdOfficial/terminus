@@ -1,8 +1,5 @@
-import { execFile } from "child_process";
-import { promisify } from "util";
-import * as path from "path";
-
-const execFileAsync = promisify(execFile);
+import { pathRelative } from "../node/fs";
+import { execFileText } from "../node/process";
 
 /**
  * Returns the file's content as of the vault's last git commit, or null if
@@ -12,11 +9,11 @@ const execFileAsync = promisify(execFile);
  * -- unlike diff.oldText/revertText, it has no bearing on accept/reject.
  */
 export async function getGitHeadContent(vaultBasePath: string, absoluteFilePath: string): Promise<string | null> {
-  const relPath = path.relative(vaultBasePath, absoluteFilePath);
+  const relPath = pathRelative(vaultBasePath, absoluteFilePath);
   if (relPath.startsWith("..")) return null;
 
   try {
-    const { stdout } = await execFileAsync("git", ["show", `HEAD:${relPath}`], {
+    const { stdout } = await execFileText("git", ["show", `HEAD:${relPath}`], {
       cwd: vaultBasePath,
       maxBuffer: 10 * 1024 * 1024,
     });

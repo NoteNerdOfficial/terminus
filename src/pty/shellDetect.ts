@@ -1,8 +1,5 @@
-import { execFile } from "child_process";
-import { existsSync } from "fs";
-import { promisify } from "util";
-
-const execFileAsync = promisify(execFile);
+import { fileExistsSync } from "../node/fs";
+import { execFileText, getEnvVar } from "../node/process";
 
 const PYTHON3_CANDIDATES = [
   "/usr/bin/python3",
@@ -22,24 +19,22 @@ export async function resolvePython3(): Promise<string> {
   if (loginShellPath) return loginShellPath;
 
   for (const candidate of PYTHON3_CANDIDATES) {
-    if (existsSync(candidate)) return candidate;
+    if (fileExistsSync(candidate)) return candidate;
   }
 
   return "python3"; // last resort: let spawn() try PATH resolution itself
 }
 
 export function resolveUserShell(): string {
-  return process.env.SHELL || "/bin/zsh";
+  return getEnvVar("SHELL") || "/bin/zsh";
 }
 
 export async function tryLoginShellWhich(bin: string): Promise<string | null> {
   const loginShell = resolveUserShell();
   try {
-    const { stdout } = await execFileAsync(loginShell, ["-lic", `which ${bin}`], {
-      timeout: 5000,
-    });
+    const { stdout } = await execFileText(loginShell, ["-lic", `which ${bin}`], { timeout: 5000 });
     const resolved = stdout.trim().split("\n").pop()?.trim();
-    return resolved && existsSync(resolved) ? resolved : null;
+    return resolved && fileExistsSync(resolved) ? resolved : null;
   } catch {
     return null;
   }

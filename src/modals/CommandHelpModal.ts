@@ -1,5 +1,6 @@
 import { App, Modal, Setting } from "obsidian";
 import { explainCommandOutput, FixSuggestion, FixSuggestionResult, suggestFixCommand } from "../claude/headlessAssist";
+import { errorMessage } from "../util/errors";
 
 export class CommandHelpModal extends Modal {
   private shownCommands: string[] = [];
@@ -62,7 +63,7 @@ export class CommandHelpModal extends Modal {
     } catch (err) {
       this.explainResultEl.empty();
       this.explainResultEl.createEl("div", {
-        text: `Couldn't get an explanation: ${(err as Error).message}`,
+        text: `Couldn't get an explanation: ${errorMessage(err)}`,
         cls: "terminus-pending-empty",
       });
     } finally {
@@ -81,7 +82,7 @@ export class CommandHelpModal extends Modal {
     } catch (err) {
       this.suggestResultEl.empty();
       this.suggestResultEl.createEl("div", {
-        text: `Couldn't get a suggestion: ${(err as Error).message}`,
+        text: `Couldn't get a suggestion: ${errorMessage(err)}`,
         cls: "terminus-pending-empty",
       });
     } finally {

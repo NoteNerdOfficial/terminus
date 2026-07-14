@@ -1,4 +1,4 @@
-import * as http from "http";
+import { createHttpServer, type SimpleHttpRequest, type SimpleHttpResponse, type SimpleHttpServer } from "../node/httpServer";
 import { PreToolUseHookPayload } from "../hooks/types";
 
 export interface RegisteredPanel {
@@ -19,32 +19,33 @@ const MAX_BODY_BYTES = 5 * 1024 * 1024; // generous cap for a Write tool's full 
  * closed panel can't affect another's requests.
  */
 export class ReviewServer {
-  private server: http.Server | null = null;
+  private server: SimpleHttpServer | null = null;
   private panels = new Map<string, RegisteredPanel>();
   private port = 0;
 
   async start(): Promise<number> {
     if (this.server) return this.port;
-    this.server = http.createServer((req, res) => {
-      this.handleRequest(req, res).catch((err) => {
+    const server = createHttpServer((req, res) => {
+      this.handleRequest(req, res).catch((err: unknown) => {
         if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "text/plain" });
         }
-        res.end(`Terminus: internal error: ${(err as Error).message}`);
+        res.end(`Terminus: internal error: ${errorMessage(err)}`);
       });
     });
+    this.server = server;
     await new Promise<void>((resolve, reject) => {
-      this.server!.once("error", reject);
-      this.server!.listen(0, "127.0.0.1", () => resolve());
+      server.onError(reject);
+      server.listen(0, "127.0.0.1", () => resolve());
     });
-    const address = this.server.address();
-    if (address && typeof address === "object") this.port = address.port;
+    this.port = server.getBoundPort() ?? 0;
     return this.port;
   }
 
   async stop(): Promise<void> {
     if (!this.server) return;
-    await new Promise<void>((resolve) => this.server!.close(() => resolve()));
+    const server = this.server;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     this.server = null;
     this.panels.clear();
   }
@@ -61,14 +62,14 @@ export class ReviewServer {
     this.panels.delete(token);
   }
 
-  private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleRequest(req: SimpleHttpRequest, res: SimpleHttpResponse): Promise<void> {
     if (req.method !== "POST" || req.url !== "/review") {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
     }
 
-    const auth = req.headers.authorization ?? "";
+    const auth = req.authorizationHeader ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : "";
     const panel = token ? this.panels.get(token) : undefined;
     if (!panel) {
@@ -80,15 +81,15 @@ export class ReviewServer {
     let body: string;
     try {
       body = await readBody(req, MAX_BODY_BYTES);
-    } catch (err) {
+    } catch (err: unknown) {
       res.writeHead(413, { "Content-Type": "text/plain" });
-      res.end(`request body too large or unreadable: ${(err as Error).message}`);
+      res.end(`request body too large or unreadable: ${errorMessage(err)}`);
       return;
     }
 
     let payload: PreToolUseHookPayload;
     try {
-      payload = JSON.parse(body);
+      payload = JSON.parse(body) as PreToolUseHookPayload;
     } catch {
       res.writeHead(400, { "Content-Type": "text/plain" });
       res.end("invalid JSON payload");
@@ -101,11 +102,15 @@ export class ReviewServer {
   }
 }
 
-function readBody(req: http.IncomingMessage, maxBytes: number): Promise<string> {
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function readBody(req: SimpleHttpRequest, maxBytes: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
-    req.on("data", (chunk: Buffer) => {
+    req.onData((chunk) => {
       total += chunk.length;
       if (total > maxBytes) {
         reject(new Error("body exceeds max size"));
@@ -114,7 +119,7 @@ function readBody(req: http.IncomingMessage, maxBytes: number): Promise<string> 
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    req.onEnd(() => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.onError(reject);
   });
 }
