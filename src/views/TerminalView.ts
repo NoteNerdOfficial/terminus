@@ -242,7 +242,7 @@ export class TerminalView extends ItemView {
       el.textContent = "⚠";
       if (!listenerBound) {
         listenerBound = true;
-        el.addEventListener("click", () => this.onFailureBadgeClick(cmd));
+        el.addEventListener("click", () => void this.onFailureBadgeClick(cmd));
       }
     });
   }

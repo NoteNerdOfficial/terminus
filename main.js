@@ -11246,7 +11246,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
       el2.textContent = "\u26A0";
       if (!listenerBound) {
         listenerBound = true;
-        el2.addEventListener("click", () => this.onFailureBadgeClick(cmd));
+        el2.addEventListener("click", () => void this.onFailureBadgeClick(cmd));
       }
     });
   }
@@ -13167,8 +13167,8 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
       if (!this.settings.autoRevealPendingChanges)
         return;
       if (this.revealPendingChangesTimer)
-        clearTimeout(this.revealPendingChangesTimer);
-      this.revealPendingChangesTimer = setTimeout(() => {
+        window.clearTimeout(this.revealPendingChangesTimer);
+      this.revealPendingChangesTimer = window.setTimeout(() => {
         this.revealPendingChangesTimer = null;
         void this.revealPendingChangesView();
       }, this.settings.autoRevealDelayMs);
@@ -13243,7 +13243,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
   }
   onunload() {
     if (this.revealPendingChangesTimer)
-      clearTimeout(this.revealPendingChangesTimer);
+      window.clearTimeout(this.revealPendingChangesTimer);
     void this.reviewServer.stop();
   }
   async loadSettings() {

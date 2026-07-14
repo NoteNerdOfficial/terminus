@@ -226,9 +226,17 @@
    specificity down to just the bare "button" tag so variant classes always
    win. */
 :where(.terminus-pending-view) button {
-  all: unset;
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  outline: inherit;
+  text-align: inherit;
   box-sizing: border-box;
   cursor: pointer;
+  font: inherit;
   font-family: inherit;
   /* Obsidian's own theme applies elevation to bare buttons (box-shadow
      and/or a gradient background-image for a beveled look). "all: unset"
@@ -883,9 +891,17 @@
    inline-diff-reject", so without :where() this reset was silently
    stripping the border/background right back off both buttons. */
 :where(.terminus-inline-diff-controls) button {
-  all: unset;
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  outline: inherit;
+  text-align: inherit;
   box-sizing: border-box;
   cursor: pointer;
+  font: inherit;
   font-family: inherit;
   border-radius: 6px;
   padding: 6px 10px;

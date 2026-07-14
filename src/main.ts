@@ -35,7 +35,7 @@ export default class TerminusPlugin extends Plugin {
   private python3Bin: string | null = null;
   private claudeBin: string | null = null;
   private nextTerminalNumber = 1;
-  private revealPendingChangesTimer: ReturnType<typeof setTimeout> | null = null;
+  private revealPendingChangesTimer: number | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -62,8 +62,8 @@ export default class TerminusPlugin extends Plugin {
     // stealing focus mid-turn.
     this.pendingChangesStore.on("recorded", () => {
       if (!this.settings.autoRevealPendingChanges) return;
-      if (this.revealPendingChangesTimer) clearTimeout(this.revealPendingChangesTimer);
-      this.revealPendingChangesTimer = setTimeout(() => {
+      if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
+      this.revealPendingChangesTimer = window.setTimeout(() => {
         this.revealPendingChangesTimer = null;
         void this.revealPendingChangesView();
       }, this.settings.autoRevealDelayMs);
@@ -152,7 +152,7 @@ export default class TerminusPlugin extends Plugin {
   }
 
   onunload(): void {
-    if (this.revealPendingChangesTimer) clearTimeout(this.revealPendingChangesTimer);
+    if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
     void this.reviewServer.stop();
   }
 
