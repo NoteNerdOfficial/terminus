@@ -13448,7 +13448,7 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
     new import_obsidian10.Setting(containerEl).setName("Terminal font size").setDesc(
       `Applies to all open terminal panels. Also adjustable via the "Increase/Decrease terminal font size" commands (${MIN_FONT_SIZE}-${MAX_FONT_SIZE}px).`
     ).addSlider(
-      (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
+      (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).onChange(async (value) => {
         await this.plugin.setFontSize(value);
       })
     );
@@ -13473,7 +13473,7 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
       new import_obsidian10.Setting(containerEl).setName("Reveal delay").setDesc(
         "How long to wait after the last edit in a burst before revealing the panel, so a multi-file turn doesn't pop it up repeatedly."
       ).addSlider(
-        (slider) => slider.setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100).setValue(this.plugin.settings.autoRevealDelayMs).setDynamicTooltip().onChange(async (value) => {
+        (slider) => slider.setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100).setValue(this.plugin.settings.autoRevealDelayMs).onChange(async (value) => {
           this.plugin.settings.autoRevealDelayMs = value;
           await this.plugin.saveSettings();
         })
