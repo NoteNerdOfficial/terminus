@@ -1,0 +1,12 @@
+.DS_Store
+node_modules/
+data.json
+action-log.json
+*.js.map
+
+# Defense-in-depth: resources/shell-integration/{zsh,bash}/ should only ever
+# contain the two checked-in rc scripts. Nothing should write here at
+# runtime any more (see pty_helper.py's build_child_env), but this is a
+# safety net against ever accidentally committing a stray history/cache file.
+resources/shell-integration/*/.bash_history
+resources/shell-integration/*/Library/
