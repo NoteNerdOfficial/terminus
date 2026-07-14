@@ -3,6 +3,7 @@ node_modules/
 data.json
 action-log.json
 *.js.map
+eslint.config.mjs
 
 # Defense-in-depth: resources/shell-integration/{zsh,bash}/ should only ever
 # contain the two checked-in rc scripts. Nothing should write here at
