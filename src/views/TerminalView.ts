@@ -50,6 +50,7 @@ export class TerminalView extends ItemView {
   // tied to the hook/review token (which is what actually keeps concurrent
   // terminals' PreToolUse traffic correctly isolated).
   private readonly terminalNumber: number;
+  private resizeObserver: ResizeObserver | null = null;
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -100,9 +101,21 @@ export class TerminalView extends ItemView {
 
     this.term.onData((data) => this.pty?.write(data));
     this.term.onResize(({ cols, rows }) => this.pty?.resize(cols, rows));
+
+    // Obsidian's own ItemView.onResize() only fires for layout changes it
+    // recognizes as a leaf resize (e.g. a full window resize) -- it's not
+    // reliable for every actual size change of this container (sidebar
+    // toggles, other panels opening/closing, etc.), which lets the PTY's
+    // idea of cols/rows silently drift from what's really on screen. A
+    // ResizeObserver watches the container element itself, so it catches
+    // every real size change regardless of cause.
+    this.resizeObserver = new ResizeObserver(() => this.fitAddon?.fit());
+    this.resizeObserver.observe(xtermContainer);
   }
 
   async onClose(): Promise<void> {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.plugin.reviewServer.unregister(this.token);
     this.pty?.kill();
     this.commandTracker?.dispose();

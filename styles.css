@@ -18,6 +18,19 @@
   padding: 4px;
 }
 
+/* xterm.css's own .xterm-char-measure-element (its hidden cell-size probe)
+   sets line-height: normal, which pulls in whatever leading the active
+   monospace font's metrics carry above its em-box. For most text that
+   leading is invisible, but block-drawing glyphs (box art, spinners) are
+   drawn edge-to-edge, so any inflated row height shows up as a visible gap
+   between rows -- e.g. between rows of a solid block-art logo. This rule
+   loads after xterm.css in the concatenated stylesheet (see
+   esbuild.config.mjs's buildStylesheet), so !important is needed to win the
+   later same-specificity rule, not to fight a theme. */
+.xterm-char-measure-element {
+  line-height: 1 !important;
+}
+
 .terminus-failure-badge {
   color: var(--text-error, #e05252);
   cursor: pointer;
