@@ -1,7 +1,7 @@
 {
   "id": "terminus",
   "name": "Terminus",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "minAppVersion": "1.7.2",
   "description": "A real terminal with shell integration and beginner-friendly command help, plus a review workflow for Claude Code file edits: word-level diffs, undo, backlink-breakage warnings, and more.",
   "author": "NoteNerd",
