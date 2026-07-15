@@ -1,5 +1,5 @@
 import { fileExistsSync, execFileText, getEnvVar, pathJoin, type ExecFileError } from "terminus-node-bridge";
-import { tryLoginShellWhich } from "../pty/shellDetect";
+import { tryLoginShellWhich, resolveSpawnEnv } from "../pty/shellDetect";
 
 const TIMEOUT_MS = 45_000;
 
@@ -47,10 +47,15 @@ function isClaudeJsonResult(value: unknown): value is ClaudeJsonResult {
 async function runHeadlessQuery(claudeBin: string, cwd: string, prompt: string): Promise<string> {
   let stdout: string;
   try {
+    // Obsidian's Electron process doesn't inherit the login shell's env
+    // (proxy vars a corporate network may require, etc.) -- without this,
+    // claude can silently hang trying to reach the API directly instead of
+    // failing fast, indistinguishable from a slow query until the timeout.
+    const env = await resolveSpawnEnv();
     ({ stdout } = await execFileText(
       claudeBin,
       ["-p", prompt, "--allowedTools", "", "--output-format", "json"],
-      { cwd, timeout: TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }
+      { cwd, timeout: TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, env }
     ));
   } catch (err) {
     // execFileText's own rejection .message is Node's "Command failed:

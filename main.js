@@ -160,14 +160,14 @@ var require_process = __commonJS({
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ExecFileError = void 0;
     exports.getEnvVar = getEnvVar4;
-    exports.getAllEnvVars = getAllEnvVars2;
+    exports.getAllEnvVars = getAllEnvVars3;
     exports.execFileText = execFileText4;
     exports.spawnWithControlChannel = spawnWithControlChannel2;
     var child_process_1 = require("child_process");
     function getEnvVar4(name) {
       return process.env[name];
     }
-    function getAllEnvVars2() {
+    function getAllEnvVars3() {
       return { ...process.env };
     }
     var ExecFileError = class extends Error {
@@ -841,6 +841,35 @@ async function tryLoginShellWhich(bin) {
     return null;
   }
 }
+var cachedLoginShellEnv = null;
+async function resolveLoginShellEnv() {
+  if (cachedLoginShellEnv)
+    return cachedLoginShellEnv;
+  cachedLoginShellEnv = (async () => {
+    const loginShell = resolveUserShell();
+    try {
+      const { stdout } = await (0, import_terminus_node_bridge4.execFileText)(loginShell, ["-lic", "env -0"], {
+        timeout: 5e3,
+        maxBuffer: 10 * 1024 * 1024
+      });
+      const env = {};
+      for (const entry of stdout.split("\0")) {
+        const idx = entry.indexOf("=");
+        if (idx <= 0)
+          continue;
+        env[entry.slice(0, idx)] = entry.slice(idx + 1);
+      }
+      return env;
+    } catch (e) {
+      return {};
+    }
+  })();
+  return cachedLoginShellEnv;
+}
+async function resolveSpawnEnv() {
+  const loginShellEnv = await resolveLoginShellEnv();
+  return { ...(0, import_terminus_node_bridge4.getAllEnvVars)(), ...loginShellEnv };
+}
 
 // src/claude/headlessAssist.ts
 var import_terminus_node_bridge5 = __toESM(require_dist());
@@ -869,10 +898,11 @@ async function runHeadlessQuery(claudeBin, cwd, prompt) {
   var _a5, _b;
   let stdout;
   try {
+    const env = await resolveSpawnEnv();
     ({ stdout } = await (0, import_terminus_node_bridge5.execFileText)(
       claudeBin,
       ["-p", prompt, "--allowedTools", "", "--output-format", "json"],
-      { cwd, timeout: TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }
+      { cwd, timeout: TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, env }
     ));
   } catch (err) {
     const execErr = err;

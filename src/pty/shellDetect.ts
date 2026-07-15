@@ -1,4 +1,4 @@
-import { fileExistsSync, execFileText, getEnvVar } from "terminus-node-bridge";
+import { fileExistsSync, execFileText, getEnvVar, getAllEnvVars } from "terminus-node-bridge";
 
 const PYTHON3_CANDIDATES = [
   "/usr/bin/python3",
@@ -42,4 +42,42 @@ export async function tryLoginShellWhich(bin: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+let cachedLoginShellEnv: Promise<Record<string, string>> | null = null;
+
+/** Corporate networks often require proxy env vars (HTTPS_PROXY etc.), set
+ *  by the login shell's own rc files -- Obsidian's Electron process doesn't
+ *  inherit those (same root problem as the PATH lookup above), so a spawned
+ *  `claude` can silently hang trying to reach Anthropic's API directly with
+ *  no proxy, rather than failing fast. Resolve the login shell's real env
+ *  once and merge it into the child's env at spawn time. Cached because
+ *  spawning a login shell has real startup cost and this only needs to
+ *  reflect the machine's config, not change per-query. */
+export async function resolveLoginShellEnv(): Promise<Record<string, string>> {
+  if (cachedLoginShellEnv) return cachedLoginShellEnv;
+  cachedLoginShellEnv = (async () => {
+    const loginShell = resolveUserShell();
+    try {
+      const { stdout } = await execFileText(loginShell, ["-lic", "env -0"], {
+        timeout: 5000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      const env: Record<string, string> = {};
+      for (const entry of stdout.split("\0")) {
+        const idx = entry.indexOf("=");
+        if (idx <= 0) continue;
+        env[entry.slice(0, idx)] = entry.slice(idx + 1);
+      }
+      return env;
+    } catch {
+      return {};
+    }
+  })();
+  return cachedLoginShellEnv;
+}
+
+export async function resolveSpawnEnv(): Promise<Record<string, string | undefined>> {
+  const loginShellEnv = await resolveLoginShellEnv();
+  return { ...getAllEnvVars(), ...loginShellEnv };
 }
