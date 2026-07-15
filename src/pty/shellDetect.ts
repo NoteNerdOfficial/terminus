@@ -32,8 +32,13 @@ export async function tryLoginShellWhich(bin: string): Promise<string | null> {
   const loginShell = resolveUserShell();
   try {
     const { stdout } = await execFileText(loginShell, ["-lic", `which ${bin}`], { timeout: 5000 });
-    const resolved = stdout.trim().split("\n").pop()?.trim();
-    return resolved && fileExistsSync(resolved) ? resolved : null;
+    // Login-shell startup/logout hooks (MOTD, corporate session-save
+    // scripts, etc.) can print extra lines before or after `which`'s own
+    // output, so the resolved path isn't reliably the last line -- scan
+    // every line for one that actually names and contains this binary.
+    const lines = stdout.split("\n").map((line) => line.trim());
+    const resolved = lines.find((line) => line.endsWith(`/${bin}`) && fileExistsSync(line));
+    return resolved ?? null;
   } catch {
     return null;
   }

@@ -831,12 +831,12 @@ function resolveUserShell() {
   return (0, import_terminus_node_bridge4.getEnvVar)("SHELL") || "/bin/zsh";
 }
 async function tryLoginShellWhich(bin) {
-  var _a5;
   const loginShell = resolveUserShell();
   try {
     const { stdout } = await (0, import_terminus_node_bridge4.execFileText)(loginShell, ["-lic", `which ${bin}`], { timeout: 5e3 });
-    const resolved = (_a5 = stdout.trim().split("\n").pop()) == null ? void 0 : _a5.trim();
-    return resolved && (0, import_terminus_node_bridge4.fileExistsSync)(resolved) ? resolved : null;
+    const lines = stdout.split("\n").map((line) => line.trim());
+    const resolved = lines.find((line) => line.endsWith(`/${bin}`) && (0, import_terminus_node_bridge4.fileExistsSync)(line));
+    return resolved != null ? resolved : null;
   } catch (e) {
     return null;
   }
