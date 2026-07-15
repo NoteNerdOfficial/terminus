@@ -175,7 +175,8 @@ var require_process = __commonJS({
     exports.ExecFileError = ExecFileError;
     function execFileText4(command, args, options = {}) {
       return new Promise((resolve, reject) => {
-        (0, child_process_1.execFile)(command, args, { encoding: "utf8", ...options }, (error, stdout, stderr) => {
+        var _a5;
+        const child = (0, child_process_1.execFile)(command, args, { encoding: "utf8", ...options }, (error, stdout, stderr) => {
           if (error) {
             const errWithFields = error;
             const execErr = new ExecFileError(error.message);
@@ -191,6 +192,7 @@ var require_process = __commonJS({
             stderr: typeof stderr === "string" ? stderr : ""
           });
         });
+        (_a5 = child.stdin) === null || _a5 === void 0 ? void 0 : _a5.end();
       });
     }
     function spawnWithControlChannel2(command, args, options) {
