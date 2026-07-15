@@ -1,9 +1,18 @@
-import { fileExistsSync, execFileText, type ExecFileError } from "terminus-node-bridge";
+import { fileExistsSync, execFileText, getEnvVar, pathJoin, type ExecFileError } from "terminus-node-bridge";
 import { tryLoginShellWhich } from "../pty/shellDetect";
 
 const TIMEOUT_MS = 45_000;
 
+// ~/.local/bin/claude is where Claude Code's own official standalone
+// installer (the curl | sh method) puts it for a user-level, non-sudo
+// install -- confirmed missing here by a real ENOENT report where `which
+// claude` in a real terminal resolved to exactly this path.
 const CLAUDE_BIN_CANDIDATES = ["/usr/local/bin/claude", "/opt/homebrew/bin/claude"];
+
+function localBinCandidate(): string | null {
+  const home = getEnvVar("HOME");
+  return home ? pathJoin(home, ".local/bin/claude") : null;
+}
 
 /** Same login-shell-`which` + fallback-paths pattern as resolvePython3 in
  *  pty/shellDetect.ts -- Electron apps launched from Finder/Dock often
@@ -12,7 +21,9 @@ export async function resolveClaudeBin(): Promise<string> {
   const loginShellPath = await tryLoginShellWhich("claude");
   if (loginShellPath) return loginShellPath;
 
-  for (const candidate of CLAUDE_BIN_CANDIDATES) {
+  const localBin = localBinCandidate();
+  const candidates = localBin ? [...CLAUDE_BIN_CANDIDATES, localBin] : CLAUDE_BIN_CANDIDATES;
+  for (const candidate of candidates) {
     if (fileExistsSync(candidate)) return candidate;
   }
 

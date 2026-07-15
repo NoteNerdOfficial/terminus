@@ -84,7 +84,7 @@ var require_fs = __commonJS({
       };
     }();
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.pathJoin = pathJoin6;
+    exports.pathJoin = pathJoin7;
     exports.pathBasename = pathBasename8;
     exports.pathDirname = pathDirname3;
     exports.pathRelative = pathRelative5;
@@ -100,7 +100,7 @@ var require_fs = __commonJS({
     var fsPromises = __importStar(require("fs/promises"));
     var nodePath = __importStar(require("path"));
     var crypto_1 = require("crypto");
-    function pathJoin6(...segments) {
+    function pathJoin7(...segments) {
       return nodePath.join(...segments);
     }
     function pathBasename8(filePath, ext) {
@@ -159,12 +159,12 @@ var require_process = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ExecFileError = void 0;
-    exports.getEnvVar = getEnvVar3;
+    exports.getEnvVar = getEnvVar4;
     exports.getAllEnvVars = getAllEnvVars2;
     exports.execFileText = execFileText4;
     exports.spawnWithControlChannel = spawnWithControlChannel2;
     var child_process_1 = require("child_process");
-    function getEnvVar3(name) {
+    function getEnvVar4(name) {
       return process.env[name];
     }
     function getAllEnvVars2() {
@@ -846,11 +846,17 @@ async function tryLoginShellWhich(bin) {
 var import_terminus_node_bridge5 = __toESM(require_dist());
 var TIMEOUT_MS = 45e3;
 var CLAUDE_BIN_CANDIDATES = ["/usr/local/bin/claude", "/opt/homebrew/bin/claude"];
+function localBinCandidate() {
+  const home = (0, import_terminus_node_bridge5.getEnvVar)("HOME");
+  return home ? (0, import_terminus_node_bridge5.pathJoin)(home, ".local/bin/claude") : null;
+}
 async function resolveClaudeBin() {
   const loginShellPath = await tryLoginShellWhich("claude");
   if (loginShellPath)
     return loginShellPath;
-  for (const candidate of CLAUDE_BIN_CANDIDATES) {
+  const localBin = localBinCandidate();
+  const candidates = localBin ? [...CLAUDE_BIN_CANDIDATES, localBin] : CLAUDE_BIN_CANDIDATES;
+  for (const candidate of candidates) {
     if ((0, import_terminus_node_bridge5.fileExistsSync)(candidate))
       return candidate;
   }
