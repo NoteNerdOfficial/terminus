@@ -2,6 +2,7 @@ import { Menu, Notice, Plugin, WorkspaceLeaf } from "obsidian";
 import { pathBasename, pathJoin } from "terminus-node-bridge";
 import { ReviewServer } from "./server/ReviewServer";
 import { provisionClaudeSettings, getVaultBasePath, getHookBridgePath } from "./hooks/provisionSettings";
+import { provisionResources } from "./hooks/provisionResources";
 import { resolvePython3, resolveUserShell } from "./pty/shellDetect";
 import { resolveClaudeBin } from "./claude/headlessAssist";
 import { TERMINUS_VIEW_TYPE, TerminalView } from "./views/TerminalView";
@@ -41,6 +42,12 @@ export default class TerminusPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.loadSettings();
     this.addSettingTab(new TerminusSettingTab(this.app, this));
+
+    // Obsidian's own installer never delivers resources/ (see
+    // provisionResources.ts's own doc comment) -- write it out ourselves,
+    // before anything that spawns a PTY or provisions the Claude hook could
+    // possibly run.
+    await provisionResources(this.getPluginDir());
 
     this.actionLog = new ActionLog(pathJoin(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();

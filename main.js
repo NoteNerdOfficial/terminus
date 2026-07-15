@@ -84,28 +84,29 @@ var require_fs = __commonJS({
       };
     }();
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.pathJoin = pathJoin5;
+    exports.pathJoin = pathJoin6;
     exports.pathBasename = pathBasename8;
-    exports.pathDirname = pathDirname2;
+    exports.pathDirname = pathDirname3;
     exports.pathRelative = pathRelative5;
     exports.fileExistsSync = fileExistsSync3;
     exports.readTextFileIfExists = readTextFileIfExists4;
-    exports.writeTextFile = writeTextFile4;
+    exports.writeTextFile = writeTextFile5;
     exports.appendTextFile = appendTextFile2;
-    exports.makeDirRecursive = makeDirRecursive3;
+    exports.makeDirRecursive = makeDirRecursive4;
     exports.deleteFileIfExists = deleteFileIfExists2;
     exports.randomHex = randomHex2;
+    exports.makeExecutable = makeExecutable2;
     var fs_1 = require("fs");
     var fsPromises = __importStar(require("fs/promises"));
     var nodePath = __importStar(require("path"));
     var crypto_1 = require("crypto");
-    function pathJoin5(...segments) {
+    function pathJoin6(...segments) {
       return nodePath.join(...segments);
     }
     function pathBasename8(filePath, ext) {
       return nodePath.basename(filePath, ext);
     }
-    function pathDirname2(filePath) {
+    function pathDirname3(filePath) {
       return nodePath.dirname(filePath);
     }
     function pathRelative5(from, to) {
@@ -126,13 +127,13 @@ var require_fs = __commonJS({
         throw err;
       }
     }
-    async function writeTextFile4(filePath, content) {
+    async function writeTextFile5(filePath, content) {
       await fsPromises.writeFile(filePath, content, "utf8");
     }
     async function appendTextFile2(filePath, content) {
       await fsPromises.appendFile(filePath, content, "utf8");
     }
-    async function makeDirRecursive3(dirPath) {
+    async function makeDirRecursive4(dirPath) {
       await fsPromises.mkdir(dirPath, { recursive: true });
     }
     async function deleteFileIfExists2(filePath) {
@@ -145,6 +146,9 @@ var require_fs = __commonJS({
     }
     function randomHex2(byteLength) {
       return (0, crypto_1.randomBytes)(byteLength).toString("hex");
+    }
+    async function makeExecutable2(filePath) {
+      await fsPromises.chmod(filePath, 493);
     }
   }
 });
@@ -382,7 +386,7 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian11 = require("obsidian");
-var import_terminus_node_bridge18 = __toESM(require_dist());
+var import_terminus_node_bridge19 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
 var import_terminus_node_bridge = __toESM(require_dist());
@@ -556,8 +560,258 @@ async function ensureGitignoreEntry(basePath) {
   await (0, import_terminus_node_bridge2.appendTextFile)(gitignorePath, addition);
 }
 
-// src/pty/shellDetect.ts
+// src/hooks/provisionResources.ts
 var import_terminus_node_bridge3 = __toESM(require_dist());
+
+// src/generated/resourceFiles.ts
+var RESOURCE_FILES = [
+  { relativePath: "pty_helper.py", content: `#!/usr/bin/env python3
+"""PTY proxy helper for the Terminus Obsidian plugin.
+
+Allocates a real pseudo-terminal, execs the given shell inside it, and
+proxies bytes between the PTY and this process's own stdio so a Node/Electron
+parent (which cannot allocate a PTY without a native addon) can drive a real
+interactive shell using nothing but child_process.spawn + pipes.
+
+Framing, fixed by contract with the Node-side PtyProcess class:
+  fd0 (stdin)  -- raw bytes typed by the user, written verbatim to the PTY.
+  fd1 (stdout) -- raw bytes read from the PTY, written verbatim for the parent
+                  to feed into xterm.js.
+  fd2 (stderr) -- this helper's own diagnostics only (e.g. exec failures).
+  fd3          -- newline-delimited JSON control channel, kept separate from
+                  fd0/fd1 so arbitrary binary terminal traffic can never be
+                  mistaken for a control message.
+                    Node -> helper : {"type": "resize", "cols": N, "rows": N}
+                    helper -> Node : {"type": "ready"}
+                    helper -> Node : {"type": "exited", "code": N|null}
+"""
+import argparse
+import fcntl
+import json
+import os
+import pty
+import select
+import struct
+import sys
+import termios
+
+
+def set_winsize(fd, rows, cols):
+    packed = struct.pack("HHHH", rows, cols, 0, 0)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, packed)
+
+
+def write_control(obj):
+    line = (json.dumps(obj) + "\\n").encode("utf-8")
+    os.write(3, line)
+
+
+def build_child_env():
+    """Constructs the exec'd shell's environment from a copy of this
+    process's own (untouched, correct) environment, applying the
+    ZDOTDIR/HOME shell-integration redirect ONLY to that copy.
+
+    This process's OWN env must never carry TERMINUS_CHILD_HOME as
+    its real HOME -- it's a long-lived Python process, and anything it (or
+    the Python runtime itself) does that resolves \`~\`/$HOME during its
+    lifetime would otherwise write into the fake shell-integration
+    directory instead of the user's real home. That's not hypothetical: an
+    earlier version of this override applied to the whole process and did
+    exactly that, leaking a real .bash_history and a Python bytecode cache
+    tree into the plugin's own resources folder during testing.
+    """
+    env = dict(os.environ)
+    child_zdotdir = env.pop("TERMINUS_CHILD_ZDOTDIR", None)
+    child_home = env.pop("TERMINUS_CHILD_HOME", None)
+    if child_zdotdir:
+        env["TERMINUS_ORIG_ZDOTDIR"] = env.get("ZDOTDIR", "")
+        env["ZDOTDIR"] = child_zdotdir
+    if child_home:
+        env["TERMINUS_ORIG_HOME"] = env.get("HOME", "")
+        env["HOME"] = child_home
+    return env
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cols", type=int, default=80)
+    parser.add_argument("--rows", type=int, default=24)
+    parser.add_argument("--shell", default=os.environ.get("SHELL", "/bin/zsh"))
+    args = parser.parse_args()
+
+    pid, master_fd = pty.fork()
+    if pid == 0:
+        # Child: become the interactive login shell. -l -i is load-bearing --
+        # it makes the shell re-source .zprofile/.bash_profile and rebuild its
+        # own PATH, independent of whatever minimal PATH the Electron parent
+        # (launched from Finder/Dock) inherited.
+        try:
+            os.execvpe(args.shell, [args.shell, "-l", "-i"], build_child_env())
+        except OSError as exc:
+            sys.stderr.write(f"Terminus: failed to exec {args.shell}: {exc}\\n")
+            os._exit(127)
+        return
+
+    # Parent: proxy loop.
+    set_winsize(master_fd, args.rows, args.cols)
+    write_control({"type": "ready"})
+
+    control_buf = b""
+    exit_code = None
+    try:
+        while True:
+            try:
+                readable, _, _ = select.select([0, master_fd, 3], [], [])
+            except InterruptedError:
+                continue
+
+            if master_fd in readable:
+                try:
+                    chunk = os.read(master_fd, 65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    break
+                os.write(1, chunk)
+
+            if 0 in readable:
+                try:
+                    chunk = os.read(0, 65536)
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    os.write(master_fd, chunk)
+
+            if 3 in readable:
+                try:
+                    chunk = os.read(3, 65536)
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    control_buf += chunk
+                    while b"\\n" in control_buf:
+                        line, control_buf = control_buf.split(b"\\n", 1)
+                        if not line.strip():
+                            continue
+                        try:
+                            msg = json.loads(line.decode("utf-8"))
+                        except ValueError:
+                            continue
+                        if msg.get("type") == "resize":
+                            set_winsize(master_fd, int(msg["rows"]), int(msg["cols"]))
+    finally:
+        try:
+            _, status = os.waitpid(pid, 0)
+            exit_code = os.waitstatus_to_exitcode(status)
+        except ChildProcessError:
+            exit_code = None
+        try:
+            write_control({"type": "exited", "code": exit_code})
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    main()
+`, executable: true },
+  { relativePath: "hook-bridge.sh", content: '#!/usr/bin/env bash\n# PreToolUse hook bridge for the Terminus Obsidian plugin.\n#\n# Claude Code invokes this script (via a project-scoped .claude/settings.local.json\n# hooks.PreToolUse entry) as a subprocess of whatever shell is running inside a\n# Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT and\n# TERMINUS_HOOK_TOKEN from that shell\'s environment.\n#\n# This does NOT gate the write on a human decision -- Claude is allowed to\n# complete its whole turn uninterrupted, and review happens afterwards in the\n# Pending Changes panel (Accept = keep, Reject = revert the file). This\n# script\'s only job is to notify the plugin\'s local server of the change\n# (which reads the pre-edit file content for later revert) before the write\n# happens, then always let the write proceed.\n#\n# Always exits 0: a crashed/unreachable review server should never block\n# Claude from working, it just means that edit won\'t show up for review.\nset -u\n\nINPUT="$(cat)"\n\nif [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then\n  exit 0\nfi\n\ncurl -s -m 10 -o /dev/null \\\n  -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/review" \\\n  -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  --data-binary "$INPUT" 2>/dev/null \\\n  || echo "Terminus: could not reach review server -- proceeding without recording this change for review." >&2\n\nexit 0\n', executable: true },
+  { relativePath: "shell-integration/zsh/.zshenv", content: `# Terminus shell integration (zsh).
+#
+# We hijack ZDOTDIR so zsh looks here for .zshenv, which is the ONLY rc file
+# zsh unconditionally reads (before it knows if it's a login/interactive
+# shell). This file immediately restores ZDOTDIR to the user's real value,
+# so zsh's subsequent lookups (.zprofile, .zshrc, .zlogin) go straight to
+# the user's actual files -- we never need fake versions of those.
+
+if [[ -n "\${TERMINUS_ORIG_ZDOTDIR:-}" ]]; then
+  export ZDOTDIR="$TERMINUS_ORIG_ZDOTDIR"
+else
+  unset ZDOTDIR
+fi
+unset TERMINUS_ORIG_ZDOTDIR
+
+# We hijacked the one .zshenv lookup zsh would have made -- it won't look
+# for it again, so source the user's real one manually now.
+if [[ -f "\${ZDOTDIR:-$HOME}/.zshenv" ]]; then
+  source "\${ZDOTDIR:-$HOME}/.zshenv"
+fi
+
+__rt_precmd() {
+  local exit_code=$?
+  printf '\\033]133;D;%d\\007' "$exit_code"
+}
+__rt_preexec() {
+  printf '\\033]133;C\\007'
+}
+
+if autoload -Uz add-zsh-hook 2>/dev/null; then
+  add-zsh-hook precmd __rt_precmd
+  add-zsh-hook preexec __rt_preexec
+fi
+`, executable: false },
+  { relativePath: "shell-integration/bash/.bash_profile", content: `# Terminus shell integration (bash).
+#
+# We hijack HOME so bash (as a login shell, per pty_helper.py's -l flag)
+# looks here for .bash_profile. This file immediately restores HOME to the
+# user's real value, then chain-loads whichever of .bash_profile/.bash_login
+# /.profile the user actually has, matching bash's own normal lookup order.
+
+export HOME="\${TERMINUS_ORIG_HOME:-$HOME}"
+unset TERMINUS_ORIG_HOME
+
+# bash computes HISTFILE's default (~/.bash_history) from $HOME at its own
+# startup, before this script ever runs -- using the fake HOME we're about
+# to abandon. Force it back explicitly, or bash's command history for this
+# session would otherwise still end up written into the plugin's resources
+# folder instead of the user's real home.
+export HISTFILE="$HOME/.bash_history"
+
+for __rt_f in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+  if [[ -f "$__rt_f" ]]; then
+    source "$__rt_f"
+    break
+  fi
+done
+unset __rt_f
+
+# bash has no native preexec hook, so this uses the well-known DEBUG-trap
+# pattern (as popularized by rcaloras/bash-preexec): a guard flag ensures
+# the trap -- which fires before EVERY simple command, including ones
+# nested inside a compound command -- only emits once per submitted
+# command line, reset by PROMPT_COMMAND right before the next prompt draws.
+__rt_preexec_armed=1
+
+__rt_preexec() {
+  [[ -n "\${COMP_LINE:-}" ]] && return   # don't fire during tab-completion
+  [[ "$BASH_COMMAND" == "$PROMPT_COMMAND" ]] && return
+  [[ "$__rt_preexec_armed" != 1 ]] && return
+  __rt_preexec_armed=0
+  printf '\\033]133;C\\007'
+}
+trap '__rt_preexec' DEBUG
+
+__rt_precmd() {
+  local exit_code=$?
+  printf '\\033]133;D;%d\\007' "$exit_code"
+  __rt_preexec_armed=1
+}
+PROMPT_COMMAND="__rt_precmd\${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+`, executable: false }
+];
+
+// src/hooks/provisionResources.ts
+async function provisionResources(pluginDir) {
+  for (const file of RESOURCE_FILES) {
+    const filePath = (0, import_terminus_node_bridge3.pathJoin)(pluginDir, "resources", file.relativePath);
+    await (0, import_terminus_node_bridge3.makeDirRecursive)((0, import_terminus_node_bridge3.pathDirname)(filePath));
+    await (0, import_terminus_node_bridge3.writeTextFile)(filePath, file.content);
+    if (file.executable)
+      await (0, import_terminus_node_bridge3.makeExecutable)(filePath);
+  }
+}
+
+// src/pty/shellDetect.ts
+var import_terminus_node_bridge4 = __toESM(require_dist());
 var PYTHON3_CANDIDATES = [
   "/usr/bin/python3",
   "/opt/homebrew/bin/python3",
@@ -568,28 +822,28 @@ async function resolvePython3() {
   if (loginShellPath)
     return loginShellPath;
   for (const candidate of PYTHON3_CANDIDATES) {
-    if ((0, import_terminus_node_bridge3.fileExistsSync)(candidate))
+    if ((0, import_terminus_node_bridge4.fileExistsSync)(candidate))
       return candidate;
   }
   return "python3";
 }
 function resolveUserShell() {
-  return (0, import_terminus_node_bridge3.getEnvVar)("SHELL") || "/bin/zsh";
+  return (0, import_terminus_node_bridge4.getEnvVar)("SHELL") || "/bin/zsh";
 }
 async function tryLoginShellWhich(bin) {
   var _a5;
   const loginShell = resolveUserShell();
   try {
-    const { stdout } = await (0, import_terminus_node_bridge3.execFileText)(loginShell, ["-lic", `which ${bin}`], { timeout: 5e3 });
+    const { stdout } = await (0, import_terminus_node_bridge4.execFileText)(loginShell, ["-lic", `which ${bin}`], { timeout: 5e3 });
     const resolved = (_a5 = stdout.trim().split("\n").pop()) == null ? void 0 : _a5.trim();
-    return resolved && (0, import_terminus_node_bridge3.fileExistsSync)(resolved) ? resolved : null;
+    return resolved && (0, import_terminus_node_bridge4.fileExistsSync)(resolved) ? resolved : null;
   } catch (e) {
     return null;
   }
 }
 
 // src/claude/headlessAssist.ts
-var import_terminus_node_bridge4 = __toESM(require_dist());
+var import_terminus_node_bridge5 = __toESM(require_dist());
 var TIMEOUT_MS = 45e3;
 var CLAUDE_BIN_CANDIDATES = ["/usr/local/bin/claude", "/opt/homebrew/bin/claude"];
 async function resolveClaudeBin() {
@@ -597,7 +851,7 @@ async function resolveClaudeBin() {
   if (loginShellPath)
     return loginShellPath;
   for (const candidate of CLAUDE_BIN_CANDIDATES) {
-    if ((0, import_terminus_node_bridge4.fileExistsSync)(candidate))
+    if ((0, import_terminus_node_bridge5.fileExistsSync)(candidate))
       return candidate;
   }
   return "claude";
@@ -609,7 +863,7 @@ async function runHeadlessQuery(claudeBin, cwd, prompt) {
   var _a5, _b;
   let stdout;
   try {
-    ({ stdout } = await (0, import_terminus_node_bridge4.execFileText)(
+    ({ stdout } = await (0, import_terminus_node_bridge5.execFileText)(
       claudeBin,
       ["-p", prompt, "--allowedTools", "", "--output-format", "json"],
       { cwd, timeout: TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }
@@ -10985,7 +11239,7 @@ var M2 = class extends S2 {
 };
 
 // src/views/TerminalView.ts
-var import_terminus_node_bridge8 = __toESM(require_dist());
+var import_terminus_node_bridge9 = __toESM(require_dist());
 
 // src/node/emitter.ts
 var TypedEmitter = class {
@@ -11014,7 +11268,7 @@ var TypedEmitter = class {
 };
 
 // src/pty/PtyProcess.ts
-var import_terminus_node_bridge5 = __toESM(require_dist());
+var import_terminus_node_bridge6 = __toESM(require_dist());
 var PtyProcess = class extends TypedEmitter {
   constructor(opts) {
     super();
@@ -11023,7 +11277,7 @@ var PtyProcess = class extends TypedEmitter {
     this.controlBuf = "";
   }
   start() {
-    const child = (0, import_terminus_node_bridge5.spawnWithControlChannel)(
+    const child = (0, import_terminus_node_bridge6.spawnWithControlChannel)(
       this.opts.pythonBin,
       [
         this.opts.helperPath,
@@ -11038,7 +11292,7 @@ var PtyProcess = class extends TypedEmitter {
     );
     this.child = child;
     child.onStdout((chunk) => this.emit("data", chunk));
-    child.onStderr((chunk) => this.emit("stderr", (0, import_terminus_node_bridge5.bufferToString)(chunk)));
+    child.onStderr((chunk) => this.emit("stderr", (0, import_terminus_node_bridge6.bufferToString)(chunk)));
     child.onControlData((chunk) => this.handleControlChunk(chunk));
     child.onError((err) => this.emit("error", err));
     child.onClose((code) => this.emit("exit", { code }));
@@ -11056,7 +11310,7 @@ var PtyProcess = class extends TypedEmitter {
     (_a5 = this.child) == null ? void 0 : _a5.kill(signal);
   }
   handleControlChunk(chunk) {
-    this.controlBuf += (0, import_terminus_node_bridge5.bufferToString)(chunk);
+    this.controlBuf += (0, import_terminus_node_bridge6.bufferToString)(chunk);
     let idx;
     while ((idx = this.controlBuf.indexOf("\n")) !== -1) {
       const line = this.controlBuf.slice(0, idx);
@@ -11076,26 +11330,26 @@ var PtyProcess = class extends TypedEmitter {
 };
 
 // src/pty/shellIntegration.ts
-var import_terminus_node_bridge6 = __toESM(require_dist());
+var import_terminus_node_bridge7 = __toESM(require_dist());
 function getShellIntegrationEnv(shellPath, pluginResourcesDir) {
-  const shellName = (0, import_terminus_node_bridge6.pathBasename)(shellPath);
+  const shellName = (0, import_terminus_node_bridge7.pathBasename)(shellPath);
   if (shellName === "zsh") {
     return {
-      TERMINUS_CHILD_ZDOTDIR: (0, import_terminus_node_bridge6.pathJoin)(pluginResourcesDir, "shell-integration", "zsh")
+      TERMINUS_CHILD_ZDOTDIR: (0, import_terminus_node_bridge7.pathJoin)(pluginResourcesDir, "shell-integration", "zsh")
     };
   }
   if (shellName === "bash") {
     return {
-      TERMINUS_CHILD_HOME: (0, import_terminus_node_bridge6.pathJoin)(pluginResourcesDir, "shell-integration", "bash")
+      TERMINUS_CHILD_HOME: (0, import_terminus_node_bridge7.pathJoin)(pluginResourcesDir, "shell-integration", "bash")
     };
   }
   return {};
 }
 
 // src/server/diff.ts
-var import_terminus_node_bridge7 = __toESM(require_dist());
+var import_terminus_node_bridge8 = __toESM(require_dist());
 async function readIfExists(filePath) {
-  const text = await (0, import_terminus_node_bridge7.readTextFileIfExists)(filePath);
+  const text = await (0, import_terminus_node_bridge8.readTextFileIfExists)(filePath);
   return text === null ? { text: "", existed: false } : { text, existed: true };
 }
 async function buildDiff(payload) {
@@ -11436,7 +11690,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
     this.restoredScrollback = null;
     this.scrollbackApplied = false;
     this.resizeObserver = null;
-    this.token = (0, import_terminus_node_bridge8.randomHex)(16);
+    this.token = (0, import_terminus_node_bridge9.randomHex)(16);
     this.terminalNumber = plugin.allocateTerminalNumber();
   }
   getViewType() {
@@ -11544,8 +11798,8 @@ var TerminalView = class extends import_obsidian3.ItemView {
     var _a5, _b, _c2, _d;
     const pythonBin = await this.plugin.getPython3Bin();
     const shell = this.plugin.getUserShell();
-    const resourcesDir = (0, import_terminus_node_bridge8.pathJoin)(this.plugin.getPluginDir(), "resources");
-    const helperPath = (0, import_terminus_node_bridge8.pathJoin)(resourcesDir, "pty_helper.py");
+    const resourcesDir = (0, import_terminus_node_bridge9.pathJoin)(this.plugin.getPluginDir(), "resources");
+    const helperPath = (0, import_terminus_node_bridge9.pathJoin)(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
     this.pty = new PtyProcess({
       pythonBin,
@@ -11555,7 +11809,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
       cols: (_b = (_a5 = this.term) == null ? void 0 : _a5.cols) != null ? _b : 80,
       rows: (_d = (_c2 = this.term) == null ? void 0 : _c2.rows) != null ? _d : 24,
       env: {
-        ...(0, import_terminus_node_bridge8.getAllEnvVars)(),
+        ...(0, import_terminus_node_bridge9.getAllEnvVars)(),
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
@@ -11564,7 +11818,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
     });
     this.pty.on("data", (chunk) => {
       var _a6;
-      return (_a6 = this.term) == null ? void 0 : _a6.write((0, import_terminus_node_bridge8.bufferToString)(chunk));
+      return (_a6 = this.term) == null ? void 0 : _a6.write((0, import_terminus_node_bridge9.bufferToString)(chunk));
     });
     this.pty.on("stderr", (text) => new import_obsidian3.Notice(`Terminus: ${text.trim()}`));
     this.pty.on("error", (err) => new import_obsidian3.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
@@ -11647,7 +11901,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
    *  (first oldText vs latest newText) so a multi-edit turn is checked as a
    *  whole, not edit-by-edit. */
   async checkBacklinkBreakage(absoluteFilePath) {
-    const relPath = (0, import_terminus_node_bridge8.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
+    const relPath = (0, import_terminus_node_bridge9.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
     const file = this.app.vault.getAbstractFileByPath(relPath);
     if (!(file instanceof import_obsidian3.TFile))
       return;
@@ -11661,7 +11915,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
 
 // src/views/PendingChangesView.ts
 var import_obsidian9 = require("obsidian");
-var import_terminus_node_bridge14 = __toESM(require_dist());
+var import_terminus_node_bridge15 = __toESM(require_dist());
 
 // node_modules/diff/libesm/diff/base.js
 var Diff = class {
@@ -12324,7 +12578,7 @@ function renderDiffLine(container, line) {
 
 // src/editor/openWithDiff.ts
 var import_obsidian4 = require("obsidian");
-var import_terminus_node_bridge9 = __toESM(require_dist());
+var import_terminus_node_bridge10 = __toESM(require_dist());
 
 // src/editor/inlineDiff.ts
 var import_state = require("@codemirror/state");
@@ -12439,7 +12693,7 @@ function buildDecorations(state, overlay) {
 
 // src/editor/openWithDiff.ts
 async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
-  const relPath = (0, import_terminus_node_bridge9.pathRelative)(vaultBasePath, change.diff.filePath);
+  const relPath = (0, import_terminus_node_bridge10.pathRelative)(vaultBasePath, change.diff.filePath);
   if (relPath.startsWith("..")) {
     new import_obsidian4.Notice("Terminus: file is outside the vault, can't open it as a note.");
     return;
@@ -12466,7 +12720,7 @@ async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
   });
   const resolve = (accepted) => {
     store.resolveItem(change.id, accepted).catch((err) => {
-      new import_obsidian4.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge9.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian4.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge10.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   cm.dispatch({
@@ -12482,11 +12736,11 @@ async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
 
 // src/views/DiffSplitView.ts
 var import_obsidian6 = require("obsidian");
-var import_terminus_node_bridge11 = __toESM(require_dist());
+var import_terminus_node_bridge12 = __toESM(require_dist());
 
 // src/diff/renderSplitDiff.ts
 var import_obsidian5 = require("obsidian");
-var import_terminus_node_bridge10 = __toESM(require_dist());
+var import_terminus_node_bridge11 = __toESM(require_dist());
 
 // src/diff/hunks.ts
 function computeSplitParts(oldText, newText) {
@@ -12666,7 +12920,7 @@ function renderHunkControls(container, hunk, change, store) {
   bar.createEl("span", { cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
   const resolve = (accepted) => {
     store.resolveHunk(change.id, hunk.index, accepted).catch((err) => {
-      new import_obsidian5.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge10.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian5.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge11.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   bar.createEl("button", { text: "Reject", cls: "terminus-inline-diff-reject" }).addEventListener("click", () => resolve(false));
@@ -12721,7 +12975,7 @@ var DiffSplitView = class extends import_obsidian6.ItemView {
         return;
       }
       const header = container.createDiv({ cls: "terminus-split-diff-header" });
-      header.createEl("span", { cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge11.pathBasename)(change.diff.filePath) });
+      header.createEl("span", { cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge12.pathBasename)(change.diff.filePath) });
       if (change.editCount > 1) {
         header.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
       }
@@ -12732,7 +12986,7 @@ var DiffSplitView = class extends import_obsidian6.ItemView {
     return DIFF_SPLIT_VIEW_TYPE;
   }
   getDisplayText() {
-    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge11.pathBasename)(this.changeId)}` : "Split Diff";
+    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge12.pathBasename)(this.changeId)}` : "Split Diff";
   }
   getIcon() {
     return "diff";
@@ -12764,7 +13018,7 @@ async function openDiffSplitView(plugin, changeId) {
 
 // src/modals/ActionLogModal.ts
 var import_obsidian7 = require("obsidian");
-var import_terminus_node_bridge12 = __toESM(require_dist());
+var import_terminus_node_bridge13 = __toESM(require_dist());
 var ActionLogModal = class extends import_obsidian7.Modal {
   constructor(app, actionLog) {
     super(app);
@@ -12804,7 +13058,7 @@ var ActionLogModal = class extends import_obsidian7.Modal {
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted"
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge12.pathBasename)(entry.filePath) });
+    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge13.pathBasename)(entry.filePath) });
     row.createEl("span", {
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` \xB7 ${entry.editCount} edits` : ""}`
@@ -12856,13 +13110,13 @@ var ConfirmModal = class extends import_obsidian8.Modal {
 };
 
 // src/git/gitDiff.ts
-var import_terminus_node_bridge13 = __toESM(require_dist());
+var import_terminus_node_bridge14 = __toESM(require_dist());
 async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
-  const relPath = (0, import_terminus_node_bridge13.pathRelative)(vaultBasePath, absoluteFilePath);
+  const relPath = (0, import_terminus_node_bridge14.pathRelative)(vaultBasePath, absoluteFilePath);
   if (relPath.startsWith(".."))
     return null;
   try {
-    const { stdout } = await (0, import_terminus_node_bridge13.execFileText)("git", ["show", `HEAD:${relPath}`], {
+    const { stdout } = await (0, import_terminus_node_bridge14.execFileText)("git", ["show", `HEAD:${relPath}`], {
       cwd: vaultBasePath,
       maxBuffer: 10 * 1024 * 1024
     });
@@ -13031,14 +13285,14 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
     const chevron = summary.createEl("span", { cls: "terminus-pending-chevron", text: "\u25B8" });
     const info = summary.createDiv({ cls: "terminus-pending-info" });
     const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-    nameRow.createEl("span", { cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge14.pathBasename)(change.diff.filePath) });
+    nameRow.createEl("span", { cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge15.pathBasename)(change.diff.filePath) });
     nameRow.createEl("span", { cls: "terminus-diff-stat-add", text: `+${stats.added}` });
     nameRow.createEl("span", { cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
     if (change.editCount > 1) {
       nameRow.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
     }
-    const vaultName = (0, import_terminus_node_bridge14.pathBasename)(this.plugin.getVaultBasePath());
-    const relativePath = (0, import_terminus_node_bridge14.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
+    const vaultName = (0, import_terminus_node_bridge15.pathBasename)(this.plugin.getVaultBasePath());
+    const relativePath = (0, import_terminus_node_bridge15.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
     info.createEl("div", { cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
     if (change.brokenBacklinks.length > 0) {
       const count = change.brokenBacklinks.length;
@@ -13054,7 +13308,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
     const resolve = (accepted) => {
       this.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err) => {
         new import_obsidian9.Notice(
-          `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge14.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
+          `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge15.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
         );
       });
     };
@@ -13098,7 +13352,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       const list = warning.createEl("ul");
       for (const link of change.brokenBacklinks) {
         list.createEl("li", {
-          text: `${(0, import_terminus_node_bridge14.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
+          text: `${(0, import_terminus_node_bridge15.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
         });
       }
     }
@@ -13127,7 +13381,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       if (previewRendered)
         return;
       previewRendered = true;
-      const relPath = (0, import_terminus_node_bridge14.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
+      const relPath = (0, import_terminus_node_bridge15.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
       void import_obsidian9.MarkdownRenderer.render(this.app, change.diff.newText, previewContainer, relPath, this);
     });
     gitBtn.addEventListener("click", () => {
@@ -13183,7 +13437,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: item.accepted ? "Kept" : "Reverted"
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge14.pathBasename)(item.diff.filePath) });
+    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge15.pathBasename)(item.diff.filePath) });
     row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
       this.plugin.pendingChangesStore.undo(item.historyId).catch((err) => {
         new import_obsidian9.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
@@ -13193,7 +13447,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
 };
 
 // src/state/PendingChangesStore.ts
-var import_terminus_node_bridge15 = __toESM(require_dist());
+var import_terminus_node_bridge16 = __toESM(require_dist());
 var MAX_HISTORY = 20;
 var PendingChangesStore = class extends TypedEmitter {
   constructor() {
@@ -13312,9 +13566,9 @@ var PendingChangesStore = class extends TypedEmitter {
     const newOldText = diff.oldText.slice(0, hunk.oldStart) + chosen + diff.oldText.slice(hunk.oldEnd);
     const newNewText = diff.newText.slice(0, hunk.newStart) + chosen + diff.newText.slice(hunk.newEnd);
     if (!diff.existedBefore && newOldText === "") {
-      await (0, import_terminus_node_bridge15.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge16.deleteFileIfExists)(diff.filePath);
     } else {
-      await (0, import_terminus_node_bridge15.writeTextFile)(diff.filePath, newOldText);
+      await (0, import_terminus_node_bridge16.writeTextFile)(diff.filePath, newOldText);
     }
     entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
     if (newOldText === newNewText) {
@@ -13358,18 +13612,18 @@ var PendingChangesStore = class extends TypedEmitter {
   }
   async applyOldState(diff) {
     if (!diff.existedBefore) {
-      await (0, import_terminus_node_bridge15.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge16.deleteFileIfExists)(diff.filePath);
       return;
     }
-    await (0, import_terminus_node_bridge15.writeTextFile)(diff.filePath, diff.revertText);
+    await (0, import_terminus_node_bridge16.writeTextFile)(diff.filePath, diff.revertText);
   }
   async applyNewState(diff) {
-    await (0, import_terminus_node_bridge15.writeTextFile)(diff.filePath, diff.newText);
+    await (0, import_terminus_node_bridge16.writeTextFile)(diff.filePath, diff.newText);
   }
 };
 
 // src/state/ActionLog.ts
-var import_terminus_node_bridge16 = __toESM(require_dist());
+var import_terminus_node_bridge17 = __toESM(require_dist());
 function isActionLogEntryArray(value) {
   return Array.isArray(value);
 }
@@ -13383,7 +13637,7 @@ var ActionLog = class {
   async load() {
     if (this.loaded)
       return;
-    const raw = await (0, import_terminus_node_bridge16.readTextFileIfExists)(this.logFilePath);
+    const raw = await (0, import_terminus_node_bridge17.readTextFileIfExists)(this.logFilePath);
     if (raw && raw.trim()) {
       const parsed = JSON.parse(raw);
       this.entries = isActionLogEntryArray(parsed) ? parsed : [];
@@ -13409,14 +13663,14 @@ var ActionLog = class {
     return result;
   }
   async persist() {
-    await (0, import_terminus_node_bridge16.makeDirRecursive)((0, import_terminus_node_bridge16.pathDirname)(this.logFilePath));
-    await (0, import_terminus_node_bridge16.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
+    await (0, import_terminus_node_bridge17.makeDirRecursive)((0, import_terminus_node_bridge17.pathDirname)(this.logFilePath));
+    await (0, import_terminus_node_bridge17.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
   }
 };
 
 // src/settings.ts
 var import_obsidian10 = require("obsidian");
-var import_terminus_node_bridge17 = __toESM(require_dist());
+var import_terminus_node_bridge18 = __toESM(require_dist());
 var TERMINAL_PLACEMENT_LABELS = {
   ask: "Always ask",
   tab: "New tab",
@@ -13489,7 +13743,7 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
     );
     new import_obsidian10.Setting(containerEl).setName("Advanced").setHeading();
     new import_obsidian10.Setting(containerEl).setName("Shell binary override").setDesc(
-      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge17.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
+      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge18.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
     ).addText(
       (text) => text.setPlaceholder("e.g. /bin/zsh").setValue(this.plugin.settings.shellBinOverride).onChange(async (value) => {
         this.plugin.settings.shellBinOverride = value.trim();
@@ -13522,7 +13776,8 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new TerminusSettingTab(this.app, this));
-    this.actionLog = new ActionLog((0, import_terminus_node_bridge18.pathJoin)(this.getPluginDir(), "action-log.json"));
+    await provisionResources(this.getPluginDir());
+    this.actionLog = new ActionLog((0, import_terminus_node_bridge19.pathJoin)(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.pendingChangesStore.on("resolved", (item) => {
       const stats = computeDiffStats(item.diff);
@@ -13672,9 +13927,9 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     }
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian11.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge18.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian11.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge19.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge18.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge19.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -13703,7 +13958,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     return getHookBridgePath(this.app, this.manifest);
   }
   getPluginDir() {
-    return (0, import_terminus_node_bridge18.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return (0, import_terminus_node_bridge19.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
   async revealPendingChangesView() {
     var _a5, _b;
