@@ -157,6 +157,17 @@ export class PendingChangesView extends ItemView {
     }
 
     const group = container.createDiv({ cls: "terminus-group" });
+    // Snapshot from whichever change in the group recorded it first -- same
+    // "cosmetic, point-in-time" caveat as panelLabel itself: if the
+    // terminal's color changes mid-session, already-pending entries keep
+    // whatever color they were recorded with. Rendered as an edge strip
+    // (matching the terminal tab's own color indicator) spanning the whole
+    // group card, not just its header row.
+    const panelColor = changes[0]?.panelColor;
+    if (panelColor) {
+      group.addClass("terminus-group-colored");
+      group.style.setProperty("--terminus-group-color", panelColor);
+    }
     const groupHeader = group.createDiv({ cls: "terminus-group-header" });
     const chevron = groupHeader.createEl("span", { cls: "terminus-group-chevron", text: "▾" });
 

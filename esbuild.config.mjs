@@ -1,7 +1,7 @@
 import esbuild from "esbuild";
 import process from "process";
 import { builtinModules } from "node:module";
-import { existsSync, chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, chmodSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { generateResourceFilesModule } from "./scripts/generateResourceFiles.mjs";
 
 const banner = `/*
@@ -17,11 +17,27 @@ const prod = process.argv[2] === "production";
 // download -- only ever fetches main.js/manifest.json/styles.css, never
 // this folder. Embedding each file's content into main.js and having
 // main.ts write them out itself on load (see hooks/provisionResources.ts)
-// is what actually makes them present on a real install; this local
-// chmod is just for this repo's own dev-symlinked-as-live-plugin setup.
+// is what actually makes them present on a real install; this local chmod
+// is just for this repo's own dev vault setup (see syncToLocalVaultPlugin
+// below).
 function ensureResourcesExecutable() {
   for (const f of ["resources/hook-bridge.sh", "resources/pty_helper.py"]) {
     if (existsSync(f)) chmodSync(f, 0o755);
+  }
+}
+
+// This repo doubles as its own Obsidian vault for dev testing (see
+// .gitignore's .obsidian/ entry) -- .obsidian/plugins/terminus/ is a real,
+// separate copy of main.js/manifest.json/styles.css that Obsidian actually
+// loads, NOT a symlink back to the repo root, so a build here doesn't reach
+// it on its own. Keeps that copy in sync on every build so "build, then
+// reload the plugin in Obsidian" is enough to test a change. A no-op on any
+// other checkout, where the folder won't exist.
+function syncToLocalVaultPlugin() {
+  const pluginDir = ".obsidian/plugins/terminus";
+  if (!existsSync(pluginDir)) return;
+  for (const f of ["main.js", "manifest.json", "styles.css"]) {
+    copyFileSync(f, `${pluginDir}/${f}`);
   }
 }
 
@@ -75,6 +91,7 @@ const context = await esbuild.context({
         build.onEnd(() => {
           ensureResourcesExecutable();
           buildStylesheet();
+          syncToLocalVaultPlugin();
         });
       },
     },

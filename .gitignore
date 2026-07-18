@@ -12,3 +12,10 @@ src/generated/
 # safety net against ever accidentally committing a stray history/cache file.
 resources/shell-integration/*/.bash_history
 resources/shell-integration/*/Library/
+.claude/settings.local.json
+
+# Obsidian vault working files (using Obsidian as an IDE for this repo)
+.obsidian/
+
+# Personal reference notes, not part of the shipped plugin or its docs
+docs/

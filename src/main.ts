@@ -1,4 +1,4 @@
-import { Menu, Notice, Plugin, WorkspaceLeaf } from "obsidian";
+import { Menu, Notice, Plugin, WorkspaceLeaf, setIcon } from "obsidian";
 import { pathBasename, pathJoin } from "terminus-node-bridge";
 import { ReviewServer } from "./server/ReviewServer";
 import { provisionClaudeSettings, getVaultBasePath, getHookBridgePath } from "./hooks/provisionSettings";
@@ -10,8 +10,10 @@ import { PENDING_CHANGES_VIEW_TYPE, PendingChangesView } from "./views/PendingCh
 import { DIFF_SPLIT_VIEW_TYPE, DiffSplitView } from "./views/DiffSplitView";
 import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore";
 import { ActionLog } from "./state/ActionLog";
+import { ClosedTerminalBuffer, ClosedTerminalEntry } from "./state/ClosedTerminalBuffer";
 import { ActionLogModal } from "./modals/ActionLogModal";
 import { ConfirmModal } from "./modals/ConfirmModal";
+import { RescueClosedTerminalModal } from "./modals/RescueClosedTerminalModal";
 import { computeDiffStats } from "./diff/renderDiff";
 import { inlineDiffDecorations, inlineDiffField } from "./editor/inlineDiff";
 import { errorMessage } from "./util/errors";
@@ -23,11 +25,13 @@ import {
   TerminusSettings,
   TerminalPlacement,
   TERMINAL_PLACEMENT_LABELS,
+  CursorStyle,
 } from "./settings";
 
 export default class TerminusPlugin extends Plugin {
   readonly reviewServer = new ReviewServer();
   readonly pendingChangesStore = new PendingChangesStore();
+  readonly closedTerminals = new ClosedTerminalBuffer();
   // Constructed in onload(), not as a field initializer: the log file path
   // depends on the vault base path, which needs `this.app` to be ready --
   // safer to compute once Obsidian has fully set that up, not during
@@ -38,6 +42,7 @@ export default class TerminusPlugin extends Plugin {
   private claudeBin: string | null = null;
   private nextTerminalNumber = 1;
   private revealPendingChangesTimer: number | null = null;
+  private ribbonIconEl: HTMLElement | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -94,7 +99,7 @@ export default class TerminusPlugin extends Plugin {
     this.registerView(PENDING_CHANGES_VIEW_TYPE, (leaf) => new PendingChangesView(leaf, this));
     this.registerView(DIFF_SPLIT_VIEW_TYPE, (leaf) => new DiffSplitView(leaf, this));
 
-    this.addRibbonIcon("square-terminal", "Open Terminus", (evt) => {
+    this.ribbonIconEl = this.addRibbonIcon(this.settings.ribbonIcon, "Open Terminus", (evt) => {
       void this.openTerminal(evt);
     });
 
@@ -153,6 +158,19 @@ export default class TerminusPlugin extends Plugin {
       callback: () => new ActionLogModal(this.app, this.actionLog).open(),
     });
 
+    this.addCommand({
+      id: "rescue-closed-terminal",
+      name: "Rescue closed terminal",
+      checkCallback: (checking) => {
+        const entries = this.closedTerminals.list();
+        if (checking) return entries.length > 0;
+        if (entries.length > 0) {
+          new RescueClosedTerminalModal(this.app, entries, (entry) => void this.rescueClosedTerminal(entry)).open();
+        }
+        return true;
+      },
+    });
+
     // Open the panel once on startup too, so it's already present (not just
     // revealed reactively once Claude's first change lands) if the user
     // goes looking for it.
@@ -178,8 +196,49 @@ export default class TerminusPlugin extends Plugin {
     if (clamped === this.settings.fontSize) return;
     this.settings.fontSize = clamped;
     await this.saveSettings();
+    this.forEachTerminalView((view) => view.applyFontSize(clamped));
+  }
+
+  async setFontFamilyOverride(fontFamily: string): Promise<void> {
+    this.settings.fontFamilyOverride = fontFamily;
+    await this.saveSettings();
+    this.forEachTerminalView((view) => view.applyFontFamily());
+  }
+
+  async setCursorStyle(style: CursorStyle): Promise<void> {
+    this.settings.cursorStyle = style;
+    await this.saveSettings();
+    this.forEachTerminalView((view) => view.applyCursorStyle());
+  }
+
+  async setCursorBlink(blink: boolean): Promise<void> {
+    this.settings.cursorBlink = blink;
+    await this.saveSettings();
+    this.forEachTerminalView((view) => view.applyCursorBlink());
+  }
+
+  async setAutoThemeTerminal(enabled: boolean): Promise<void> {
+    this.settings.autoThemeTerminal = enabled;
+    await this.saveSettings();
+    this.forEachTerminalView((view) => view.applyTheme());
+  }
+
+  /** Falls back silently to Obsidian's default icon if the given name isn't
+   *  a real Lucide icon -- `setIcon()` just renders nothing extra rather
+   *  than throwing, so there's nothing to catch/validate here. */
+  async setRibbonIcon(iconName: string): Promise<void> {
+    this.settings.ribbonIcon = iconName;
+    await this.saveSettings();
+    if (this.ribbonIconEl) setIcon(this.ribbonIconEl, iconName);
+    // Already-open terminal tabs keep whatever icon they opened with --
+    // Obsidian doesn't expose a way to force a leaf's tab header to re-call
+    // getIcon(), and this is cosmetic enough not to be worth reaching for a
+    // private API over. New terminals pick up the change immediately.
+  }
+
+  private forEachTerminalView(fn: (view: TerminalView) => void): void {
     for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
-      if (leaf.view instanceof TerminalView) leaf.view.applyFontSize(clamped);
+      if (leaf.view instanceof TerminalView) fn(leaf.view);
     }
   }
 
@@ -319,5 +378,21 @@ export default class TerminusPlugin extends Plugin {
 
   allocateTerminalNumber(): number {
     return this.nextTerminalNumber++;
+  }
+
+  private async rescueClosedTerminal(entry: ClosedTerminalEntry): Promise<void> {
+    this.closedTerminals.remove(entry);
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.setViewState({
+      type: TERMINUS_VIEW_TYPE,
+      active: true,
+      state: {
+        scrollback: entry.scrollback,
+        cwd: entry.cwd ?? undefined,
+        customName: entry.customName ?? undefined,
+        color: entry.color ?? undefined,
+      },
+    });
+    await this.app.workspace.revealLeaf(leaf);
   }
 }

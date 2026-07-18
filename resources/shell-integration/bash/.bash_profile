@@ -42,6 +42,10 @@ trap '__rt_preexec' DEBUG
 __rt_precmd() {
   local exit_code=$?
   printf '\033]133;D;%d\007' "$exit_code"
+  # Custom cwd-tracking channel (OSC 7, plain path -- no file:// wrapping or
+  # hostname, since Terminus is the only consumer and parsing that back out
+  # would be pure overhead for no benefit here).
+  printf '\033]7;%s\007' "$PWD"
   __rt_preexec_armed=1
 }
 PROMPT_COMMAND="__rt_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"

@@ -1,4 +1,5 @@
 import { IMarker, Terminal } from "@xterm/xterm";
+import { registerOscHandlerSafe } from "./oscHandler";
 
 export interface TrackedCommand {
   id: number;
@@ -23,28 +24,6 @@ const MAX_TRACKED_COMMANDS = 50;
  * command's prompt/typed text instead of its own.
  */
 const MARKER_ROW_OFFSET = -1;
-
-/** @xterm/xterm@6.0.0's public Terminal class does NOT actually expose
- *  registerOscHandler at runtime, despite it being declared in the
- *  package's own .d.ts (verified empirically, not assumed -- calling it
- *  throws "not a function"). It does exist on the internal
- *  _core._inputHandler, which is where the public method would delegate to
- *  if it were wired up; this is an undocumented but functional workaround.
- *  Falls back to a no-op if that internal shape ever changes, rather than
- *  crashing -- shell-integration features just won't activate, same as an
- *  unsupported shell. */
-function registerOscHandlerSafe(term: Terminal, ident: number, callback: (data: string) => boolean): { dispose(): void } {
-  const inputHandler = (term as unknown as { _core?: { _inputHandler?: { registerOscHandler?: unknown } } })._core
-    ?._inputHandler;
-  if (inputHandler && typeof inputHandler.registerOscHandler === "function") {
-    return (inputHandler.registerOscHandler as (i: number, cb: (data: string) => boolean) => { dispose(): void })(
-      ident,
-      callback
-    );
-  }
-  console.warn("Terminus: xterm registerOscHandler unavailable -- shell-integration features disabled.");
-  return { dispose() {} };
-}
 
 /**
  * Tracks command boundaries and exit codes using the OSC 133 markers

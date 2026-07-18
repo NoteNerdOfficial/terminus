@@ -84,11 +84,11 @@ var require_fs = __commonJS({
       };
     }();
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.pathJoin = pathJoin7;
+    exports.pathJoin = pathJoin8;
     exports.pathBasename = pathBasename8;
     exports.pathDirname = pathDirname3;
     exports.pathRelative = pathRelative5;
-    exports.fileExistsSync = fileExistsSync3;
+    exports.fileExistsSync = fileExistsSync4;
     exports.readTextFileIfExists = readTextFileIfExists4;
     exports.writeTextFile = writeTextFile5;
     exports.appendTextFile = appendTextFile2;
@@ -100,7 +100,7 @@ var require_fs = __commonJS({
     var fsPromises = __importStar(require("fs/promises"));
     var nodePath = __importStar(require("path"));
     var crypto_1 = require("crypto");
-    function pathJoin7(...segments) {
+    function pathJoin8(...segments) {
       return nodePath.join(...segments);
     }
     function pathBasename8(filePath, ext) {
@@ -112,7 +112,7 @@ var require_fs = __commonJS({
     function pathRelative5(from, to) {
       return nodePath.relative(from, to);
     }
-    function fileExistsSync3(filePath) {
+    function fileExistsSync4(filePath) {
       return (0, fs_1.existsSync)(filePath);
     }
     function isEnoent(err) {
@@ -387,8 +387,8 @@ __export(main_exports, {
   default: () => TerminusPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian11 = require("obsidian");
-var import_terminus_node_bridge19 = __toESM(require_dist());
+var import_obsidian14 = require("obsidian");
+var import_terminus_node_bridge20 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
 var import_terminus_node_bridge = __toESM(require_dist());
@@ -741,6 +741,10 @@ fi
 __rt_precmd() {
   local exit_code=$?
   printf '\\033]133;D;%d\\007' "$exit_code"
+  # Custom cwd-tracking channel (OSC 7, plain path -- no file:// wrapping or
+  # hostname, since Terminus is the only consumer and parsing that back out
+  # would be pure overhead for no benefit here).
+  printf '\\033]7;%s\\007' "$PWD"
 }
 __rt_preexec() {
   printf '\\033]133;C\\007'
@@ -795,6 +799,10 @@ trap '__rt_preexec' DEBUG
 __rt_precmd() {
   local exit_code=$?
   printf '\\033]133;D;%d\\007' "$exit_code"
+  # Custom cwd-tracking channel (OSC 7, plain path -- no file:// wrapping or
+  # hostname, since Terminus is the only consumer and parsing that back out
+  # would be pure overhead for no benefit here).
+  printf '\\033]7;%s\\007' "$PWD"
   __rt_preexec_armed=1
 }
 PROMPT_COMMAND="__rt_precmd\${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
@@ -973,7 +981,7 @@ ${transcript}`;
 }
 
 // src/views/TerminalView.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 
 // node_modules/@xterm/xterm/lib/xterm.mjs
 var zs = Object.defineProperty;
@@ -11277,7 +11285,7 @@ var M2 = class extends S2 {
 };
 
 // src/views/TerminalView.ts
-var import_terminus_node_bridge9 = __toESM(require_dist());
+var import_terminus_node_bridge10 = __toESM(require_dist());
 
 // src/node/emitter.ts
 var TypedEmitter = class {
@@ -11470,9 +11478,7 @@ function detectBacklinkBreakage(app, targetFile, oldText, newText) {
   return broken;
 }
 
-// src/terminal/CommandTracker.ts
-var MAX_TRACKED_COMMANDS = 50;
-var MARKER_ROW_OFFSET = -1;
+// src/terminal/oscHandler.ts
 function registerOscHandlerSafe(term, ident, callback) {
   var _a5;
   const inputHandler = (_a5 = term._core) == null ? void 0 : _a5._inputHandler;
@@ -11482,10 +11488,14 @@ function registerOscHandlerSafe(term, ident, callback) {
       callback
     );
   }
-  console.warn("Terminus: xterm registerOscHandler unavailable -- shell-integration features disabled.");
+  console.warn(`Terminus: xterm registerOscHandler unavailable -- OSC ${ident} handling disabled.`);
   return { dispose() {
   } };
 }
+
+// src/terminal/CommandTracker.ts
+var MAX_TRACKED_COMMANDS = 50;
+var MARKER_ROW_OFFSET = -1;
 var CommandTracker = class {
   constructor(term, onCommandFinished) {
     this.term = term;
@@ -11599,8 +11609,263 @@ var CommandTracker = class {
   }
 };
 
-// src/modals/CommandHelpModal.ts
+// src/terminal/CwdTracker.ts
+var CwdTracker = class {
+  constructor(term, onChange) {
+    this.cwd = null;
+    this.oscHandler = registerOscHandlerSafe(term, 7, (data) => {
+      this.cwd = data;
+      onChange == null ? void 0 : onChange(data);
+      return true;
+    });
+  }
+  getCwd() {
+    return this.cwd;
+  }
+  dispose() {
+    this.oscHandler.dispose();
+  }
+};
+
+// src/terminal/WikiLinkAutocomplete.ts
 var import_obsidian2 = require("obsidian");
+var import_terminus_node_bridge9 = __toESM(require_dist());
+var MAX_SUGGESTIONS = 8;
+var WikiLinkAutocomplete = class {
+  constructor(opts) {
+    this.opts = opts;
+    // True once a lone "[" has been swallowed but not yet forwarded, waiting
+    // to see if the very next keystroke is also "[".
+    this.pendingBracket = false;
+    this.active = false;
+    this.query = "";
+    this.selectedIndex = 0;
+    this.matches = [];
+    this.popoverEl = null;
+  }
+  /** Called from term.onData in place of a direct pty.write -- consumes
+   *  the data itself (writing to the pty only via opts.onInsert/
+   *  onPassthrough) rather than returning a pass/fail flag, since every
+   *  path already knows exactly what (if anything) should reach the pty. */
+  handleData(data) {
+    if (this.active) {
+      this.handleActiveKey(data);
+      return;
+    }
+    if (data.length !== 1) {
+      this.flushPendingBracket();
+      this.opts.onPassthrough(data);
+      return;
+    }
+    if (this.pendingBracket) {
+      this.pendingBracket = false;
+      if (data === "[") {
+        this.open();
+        return;
+      }
+      this.opts.onPassthrough("[");
+    }
+    if (data === "[") {
+      this.pendingBracket = true;
+      return;
+    }
+    this.opts.onPassthrough(data);
+  }
+  dispose() {
+    this.closePopover();
+  }
+  flushPendingBracket() {
+    if (!this.pendingBracket)
+      return;
+    this.pendingBracket = false;
+    this.opts.onPassthrough("[");
+  }
+  open() {
+    this.active = true;
+    this.query = "";
+    this.selectedIndex = 0;
+    this.updateMatches();
+    this.renderPopover();
+  }
+  handleActiveKey(data) {
+    if (data === "\r") {
+      this.confirmSelection();
+      return;
+    }
+    if (data === "\x1B") {
+      this.cancel();
+      return;
+    }
+    if (data === "\x1B[A") {
+      this.moveSelection(-1);
+      return;
+    }
+    if (data === "\x1B[B") {
+      this.moveSelection(1);
+      return;
+    }
+    if (data === "\x7F" || data === "\b") {
+      if (this.query.length === 0) {
+        this.cancel();
+        return;
+      }
+      this.query = this.query.slice(0, -1);
+      this.updateMatches();
+      this.renderPopover();
+      return;
+    }
+    if (data.length === 1 && data >= " ") {
+      this.query += data;
+      this.updateMatches();
+      this.renderPopover();
+    }
+  }
+  updateMatches() {
+    const files = this.opts.app.vault.getMarkdownFiles();
+    if (!this.query) {
+      this.matches = files.slice(0, MAX_SUGGESTIONS);
+      return;
+    }
+    const search = (0, import_obsidian2.prepareFuzzySearch)(this.query);
+    this.matches = files.map((file) => ({ file, result: search(file.basename) })).filter((m2) => m2.result !== null).sort((a, b3) => b3.result.score - a.result.score).slice(0, MAX_SUGGESTIONS).map((m2) => m2.file);
+    this.selectedIndex = Math.min(this.selectedIndex, Math.max(this.matches.length - 1, 0));
+  }
+  moveSelection(delta) {
+    if (this.matches.length === 0)
+      return;
+    this.selectedIndex = (this.selectedIndex + delta + this.matches.length) % this.matches.length;
+    this.renderPopover();
+  }
+  confirmSelection() {
+    const file = this.matches[this.selectedIndex];
+    this.closePopover();
+    this.active = false;
+    if (!file)
+      return;
+    this.opts.onInsert(this.resolveInsertText(file));
+  }
+  cancel() {
+    this.closePopover();
+    this.active = false;
+    this.opts.onPassthrough(`[[${this.query}`);
+    this.query = "";
+  }
+  resolveInsertText(file) {
+    const format = this.opts.getInsertFormat();
+    if (format === "vault-relative")
+      return file.path;
+    if (format === "absolute")
+      return (0, import_terminus_node_bridge9.pathJoin)(this.opts.getVaultBasePath(), file.path);
+    return `[[${this.opts.app.metadataCache.fileToLinktext(file, "", true)}]]`;
+  }
+  renderPopover() {
+    this.closePopover();
+    const rect = this.opts.xtermContainer.getBoundingClientRect();
+    const cellWidth = rect.width / Math.max(this.opts.term.cols, 1);
+    const cellHeight = rect.height / Math.max(this.opts.term.rows, 1);
+    const cursorX = this.opts.term.buffer.active.cursorX;
+    const cursorY = this.opts.term.buffer.active.cursorY;
+    const popover = this.opts.xtermContainer.ownerDocument.createElement("div");
+    popover.addClass("terminus-wikilink-popover");
+    popover.style.left = `${rect.left + cursorX * cellWidth}px`;
+    popover.style.top = `${rect.top + (cursorY + 1) * cellHeight}px`;
+    if (this.matches.length === 0) {
+      popover.createDiv({ cls: "terminus-wikilink-item terminus-wikilink-empty", text: "No matching notes" });
+    } else {
+      this.matches.forEach((file, index) => {
+        const item = popover.createDiv({ cls: "terminus-wikilink-item", text: file.basename });
+        if (index === this.selectedIndex)
+          item.addClass("is-selected");
+      });
+    }
+    this.opts.xtermContainer.ownerDocument.body.appendChild(popover);
+    this.popoverEl = popover;
+  }
+  closePopover() {
+    var _a5;
+    (_a5 = this.popoverEl) == null ? void 0 : _a5.remove();
+    this.popoverEl = null;
+  }
+};
+
+// src/terminal/colorPalette.ts
+var TERMINAL_COLOR_PALETTE = [
+  { name: "Red", value: "var(--color-red, #e93147)" },
+  { name: "Orange", value: "var(--color-orange, #e8871e)" },
+  { name: "Yellow", value: "var(--color-yellow, #d4b106)" },
+  { name: "Green", value: "var(--color-green, #08b94e)" },
+  { name: "Cyan", value: "var(--color-cyan, #00bfbc)" },
+  { name: "Blue", value: "var(--color-blue, #086ddd)" },
+  { name: "Purple", value: "var(--color-purple, #7852ee)" },
+  { name: "Pink", value: "var(--color-pink, #d53984)" }
+];
+
+// src/terminal/TerminalColorPicker.ts
+function openTerminalColorPicker(anchorEl, currentColor, onSelect) {
+  const doc = anchorEl.ownerDocument;
+  const rect = anchorEl.getBoundingClientRect();
+  const popover = doc.createElement("div");
+  popover.addClass("terminus-color-picker-popover");
+  popover.style.left = `${rect.left}px`;
+  popover.style.top = `${rect.bottom + 4}px`;
+  const addSwatch = (label, color) => {
+    const swatch = popover.createDiv({ cls: "terminus-color-swatch" });
+    swatch.setAttr("title", label);
+    if (color) {
+      swatch.style.backgroundColor = color;
+    } else {
+      swatch.addClass("terminus-color-swatch-none");
+    }
+    if (color === currentColor)
+      swatch.addClass("is-selected");
+    swatch.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      close();
+      onSelect(color);
+    });
+  };
+  addSwatch("None", null);
+  for (const option of TERMINAL_COLOR_PALETTE)
+    addSwatch(option.name, option.value);
+  doc.body.appendChild(popover);
+  const dismiss = (evt) => {
+    if (evt instanceof KeyboardEvent && evt.key !== "Escape")
+      return;
+    if (evt instanceof MouseEvent && popover.contains(evt.target))
+      return;
+    close();
+  };
+  function close() {
+    popover.remove();
+    doc.removeEventListener("mousedown", dismiss);
+    doc.removeEventListener("keydown", dismiss);
+  }
+  window.setTimeout(() => {
+    doc.addEventListener("mousedown", dismiss);
+    doc.addEventListener("keydown", dismiss);
+  }, 0);
+}
+
+// src/terminal/tabHeaderColor.ts
+function refreshTabHeader(leaf, color) {
+  var _a5;
+  const internal = leaf;
+  (_a5 = internal.updateHeader) == null ? void 0 : _a5.call(internal);
+  const tabHeaderEl = internal.tabHeaderEl;
+  if (!tabHeaderEl)
+    return;
+  let bar = tabHeaderEl.querySelector(":scope > .terminus-tab-color-bar");
+  if (!bar)
+    bar = tabHeaderEl.createDiv({ cls: "terminus-tab-color-bar" });
+  bar.style.backgroundColor = color != null ? color : "transparent";
+}
+function refreshPaneTitle(view, displayText) {
+  const titleEl = view.titleEl;
+  titleEl == null ? void 0 : titleEl.setText(displayText);
+}
+
+// src/modals/CommandHelpModal.ts
+var import_obsidian3 = require("obsidian");
 
 // src/util/errors.ts
 function errorMessage2(err) {
@@ -11608,7 +11873,7 @@ function errorMessage2(err) {
 }
 
 // src/modals/CommandHelpModal.ts
-var CommandHelpModal = class extends import_obsidian2.Modal {
+var CommandHelpModal = class extends import_obsidian3.Modal {
   constructor(app, claudeBin, cwd, exitCode, transcript, onApplyFix) {
     super(app);
     this.claudeBin = claudeBin;
@@ -11625,7 +11890,7 @@ var CommandHelpModal = class extends import_obsidian2.Modal {
     contentEl.createEl("pre", { cls: "terminus-diff-body", text: this.transcript });
     this.explainResultEl = contentEl.createDiv({ cls: "terminus-command-help-result" });
     const actions = contentEl.createDiv({ cls: "terminus-command-help-actions" });
-    new import_obsidian2.Setting(actions).addButton(
+    new import_obsidian3.Setting(actions).addButton(
       (btn) => btn.setButtonText("Explain this").onClick(() => this.runExplain(btn.buttonEl))
     ).addButton(
       (btn) => btn.setButtonText("Suggest a fix").setCta().onClick(() => this.runSuggestFix(btn.buttonEl))
@@ -11691,7 +11956,7 @@ var CommandHelpModal = class extends import_obsidian2.Modal {
     box.createEl("code", { cls: "terminus-fix-suggestion-command", text: suggestion.command });
     box.createEl("div", { cls: "terminus-fix-suggestion-description", text: suggestion.description });
     const footer = this.suggestResultEl.createDiv({ cls: "terminus-fix-suggestion-footer" });
-    new import_obsidian2.Setting(footer).addButton(
+    new import_obsidian3.Setting(footer).addButton(
       (btn) => (
         // Cancels just this suggestion, not the whole modal -- the
         // transcript, Explain's result, and both action buttons all stay
@@ -11707,6 +11972,57 @@ var CommandHelpModal = class extends import_obsidian2.Modal {
   }
 };
 
+// src/modals/RenameTerminalModal.ts
+var import_obsidian4 = require("obsidian");
+var RenameTerminalModal = class extends import_obsidian4.Modal {
+  constructor(app, currentName) {
+    super(app);
+    this.currentName = currentName;
+    this.resolvePromise = null;
+    this.inputEl = null;
+  }
+  static prompt(app, currentName) {
+    return new Promise((resolve) => {
+      const modal = new RenameTerminalModal(app, currentName);
+      modal.resolvePromise = resolve;
+      modal.open();
+    });
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: "Rename terminal" });
+    this.inputEl = contentEl.createEl("input", { type: "text", value: this.currentName });
+    this.inputEl.addClass("terminus-rename-modal-input");
+    this.inputEl.select();
+    this.inputEl.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter") {
+        evt.preventDefault();
+        this.submit();
+      }
+    });
+    const buttonRow = contentEl.createDiv({ cls: "terminus-confirm-modal-actions" });
+    buttonRow.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.resolve(null));
+    buttonRow.createEl("button", { text: "Rename", cls: "mod-cta" }).addEventListener("click", () => this.submit());
+  }
+  onClose() {
+    this.contentEl.empty();
+    this.resolve(null);
+  }
+  submit() {
+    var _a5, _b;
+    const value = (_b = (_a5 = this.inputEl) == null ? void 0 : _a5.value.trim()) != null ? _b : "";
+    this.resolve(value || null);
+  }
+  resolve(value) {
+    if (!this.resolvePromise)
+      return;
+    const resolvePromise = this.resolvePromise;
+    this.resolvePromise = null;
+    resolvePromise(value);
+    this.close();
+  }
+};
+
 // src/views/TerminalView.ts
 var TERMINUS_VIEW_TYPE = "terminus-view";
 var SCROLLBACK_PERSIST_LINES = 1e3;
@@ -11715,7 +12031,34 @@ function resolveMonospaceFontStack() {
   const fallback = "Menlo, Monaco, Consolas, monospace";
   return resolved ? `${resolved}, ${fallback}` : fallback;
 }
-var TerminalView = class extends import_obsidian3.ItemView {
+function shellQuoteIfNeeded(path) {
+  if (!/[\s'"$`\\!*?[\](){}<>|;&~]/.test(path))
+    return path;
+  return `'${path.replace(/'/g, `'\\''`)}'`;
+}
+function getOsFilePath(file) {
+  if (!import_obsidian5.Platform.isDesktopApp)
+    return void 0;
+  try {
+    const { webUtils } = require("electron");
+    const path = webUtils == null ? void 0 : webUtils.getPathForFile(file);
+    if (path)
+      return path;
+  } catch (e) {
+  }
+  return file.path;
+}
+function resolveXtermTheme() {
+  const style = getComputedStyle(activeDocument.body);
+  const v3 = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+  return {
+    background: v3("--background-primary", "#1e1e1e"),
+    foreground: v3("--text-normal", "#dcdcdc"),
+    cursor: v3("--text-accent", v3("--interactive-accent", "#dcdcdc")),
+    selectionBackground: v3("--text-selection", "#3a3d41")
+  };
+}
+var TerminalView = class extends import_obsidian5.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -11724,21 +12067,32 @@ var TerminalView = class extends import_obsidian3.ItemView {
     this.serializeAddon = null;
     this.pty = null;
     this.commandTracker = null;
+    this.cwdTracker = null;
+    this.wikiLinkAutocomplete = null;
     this.failureBadges = /* @__PURE__ */ new Map();
     this.restoredScrollback = null;
     this.scrollbackApplied = false;
+    // The cwd a restored terminal should start its fresh shell in -- read
+    // once in setState (before onOpen/startPty run), consumed by startPty().
+    this.restoredCwd = null;
     this.resizeObserver = null;
-    this.token = (0, import_terminus_node_bridge9.randomHex)(16);
+    // Display identity -- purely cosmetic, no effect on the review/hook
+    // plumbing (still keyed by `token` above). `color` is a literal CSS color
+    // string (see terminal/colorPalette.ts), not an indirect id.
+    this.customName = null;
+    this.color = null;
+    this.token = (0, import_terminus_node_bridge10.randomHex)(16);
     this.terminalNumber = plugin.allocateTerminalNumber();
   }
   getViewType() {
     return TERMINUS_VIEW_TYPE;
   }
   getDisplayText() {
-    return `Terminus ${this.terminalNumber}`;
+    var _a5;
+    return (_a5 = this.customName) != null ? _a5 : `Terminus ${this.terminalNumber}`;
   }
   getIcon() {
-    return "square-terminal";
+    return this.plugin.settings.ribbonIcon;
   }
   async onOpen() {
     const container = this.contentEl;
@@ -11746,9 +12100,12 @@ var TerminalView = class extends import_obsidian3.ItemView {
     container.addClass("terminus-view");
     const xtermContainer = container.createDiv({ cls: "terminus-xterm-container" });
     this.term = new Dl({
-      cursorBlink: true,
+      cursorBlink: this.plugin.settings.cursorBlink,
+      cursorStyle: this.plugin.settings.cursorStyle,
       fontSize: this.plugin.settings.fontSize,
-      fontFamily: resolveMonospaceFontStack(),
+      fontFamily: this.plugin.settings.fontFamilyOverride.trim() || resolveMonospaceFontStack(),
+      scrollback: this.plugin.settings.scrollbackLines,
+      theme: this.plugin.settings.autoThemeTerminal ? resolveXtermTheme() : void 0,
       allowProposedApi: true
     });
     this.fitAddon = new o();
@@ -11758,46 +12115,133 @@ var TerminalView = class extends import_obsidian3.ItemView {
     this.term.open(xtermContainer);
     this.fitAddon.fit();
     this.applyRestoredScrollbackIfPending();
+    this.registerEvent(this.app.workspace.on("css-change", () => this.applyTheme()));
     this.commandTracker = new CommandTracker(this.term, (cmd) => this.handleCommandFinished(cmd));
+    this.cwdTracker = new CwdTracker(this.term, () => this.app.workspace.requestSaveLayout());
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload)
     });
     await this.startPty();
+    this.wikiLinkAutocomplete = new WikiLinkAutocomplete({
+      app: this.app,
+      term: this.term,
+      xtermContainer,
+      getVaultBasePath: () => this.plugin.getVaultBasePath(),
+      getInsertFormat: () => this.plugin.settings.wikiLinkInsertFormat,
+      onInsert: (text) => {
+        var _a5;
+        return (_a5 = this.pty) == null ? void 0 : _a5.write(text);
+      },
+      onPassthrough: (text) => {
+        var _a5;
+        return (_a5 = this.pty) == null ? void 0 : _a5.write(text);
+      }
+    });
     this.term.onData((data) => {
       var _a5;
-      return (_a5 = this.pty) == null ? void 0 : _a5.write(data);
+      return (_a5 = this.wikiLinkAutocomplete) == null ? void 0 : _a5.handleData(data);
     });
     this.term.onResize(({ cols, rows }) => {
       var _a5;
       return (_a5 = this.pty) == null ? void 0 : _a5.resize(cols, rows);
+    });
+    this.term.attachCustomKeyEventHandler((event) => {
+      var _a5;
+      if (event.type === "keydown" && event.key === "Enter" && event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        (_a5 = this.pty) == null ? void 0 : _a5.write("\n");
+        return false;
+      }
+      return true;
     });
     this.resizeObserver = new ResizeObserver(() => {
       var _a5;
       return (_a5 = this.fitAddon) == null ? void 0 : _a5.fit();
     });
     this.resizeObserver.observe(xtermContainer);
+    xtermContainer.addEventListener("dragover", (evt) => evt.preventDefault());
+    xtermContainer.addEventListener("drop", (evt) => this.handleDrop(evt));
+    this.addAction("pencil", "Rename terminal", () => void this.promptRename());
+    this.addAction(
+      "palette",
+      "Set terminal color",
+      (evt) => openTerminalColorPicker(evt.currentTarget, this.color, (color) => this.setColor(color))
+    );
+    this.refreshIdentity();
+  }
+  async promptRename() {
+    const name = await RenameTerminalModal.prompt(this.app, this.getDisplayText());
+    this.customName = name;
+    this.refreshIdentity();
+  }
+  setColor(color) {
+    this.color = color;
+    this.refreshIdentity();
+  }
+  refreshIdentity() {
+    refreshTabHeader(this.leaf, this.color);
+    refreshPaneTitle(this, this.getDisplayText());
+  }
+  /** Inserts a dropped file's absolute path into the terminal's input line
+   *  (typed, not executed -- same "propose, don't run" principle as the
+   *  suggested-fix flow). Handles both an OS-level drag (Finder/Explorer,
+   *  giving real files resolved via getOsFilePath()) and Obsidian's own
+   *  internal vault-file drag (which carries a vault-relative path as
+   *  plain text, not a real File). */
+  handleDrop(evt) {
+    var _a5, _b;
+    evt.preventDefault();
+    const dataTransfer = evt.dataTransfer;
+    if (!dataTransfer)
+      return;
+    const osFile = dataTransfer.files[0];
+    const osFilePath = osFile && getOsFilePath(osFile);
+    if (osFilePath) {
+      (_a5 = this.pty) == null ? void 0 : _a5.write(shellQuoteIfNeeded(osFilePath));
+      return;
+    }
+    const text = dataTransfer.getData("text/plain").trim();
+    if (!text)
+      return;
+    const abstractFile = this.app.vault.getAbstractFileByPath(text);
+    const absolutePath = abstractFile ? (0, import_terminus_node_bridge10.pathJoin)(this.plugin.getVaultBasePath(), text) : text;
+    (_b = this.pty) == null ? void 0 : _b.write(shellQuoteIfNeeded(absolutePath));
   }
   async onClose() {
-    var _a5, _b, _c2, _d;
+    var _a5, _b, _c2, _d, _e3, _f, _g, _h, _i2, _j;
     (_a5 = this.resizeObserver) == null ? void 0 : _a5.disconnect();
     this.resizeObserver = null;
     this.plugin.reviewServer.unregister(this.token);
     (_b = this.pty) == null ? void 0 : _b.kill();
     (_c2 = this.commandTracker) == null ? void 0 : _c2.dispose();
+    this.plugin.closedTerminals.push({
+      displayText: this.getDisplayText(),
+      scrollback: (_e3 = (_d = this.serializeAddon) == null ? void 0 : _d.serialize({ scrollback: SCROLLBACK_PERSIST_LINES })) != null ? _e3 : "",
+      cwd: (_g = (_f = this.cwdTracker) == null ? void 0 : _f.getCwd()) != null ? _g : this.restoredCwd,
+      customName: this.customName,
+      color: this.color,
+      closedAt: Date.now()
+    });
+    (_h = this.cwdTracker) == null ? void 0 : _h.dispose();
+    (_i2 = this.wikiLinkAutocomplete) == null ? void 0 : _i2.dispose();
     for (const decoration of this.failureBadges.values())
       decoration.dispose();
     this.failureBadges.clear();
-    (_d = this.term) == null ? void 0 : _d.dispose();
+    (_j = this.term) == null ? void 0 : _j.dispose();
   }
   getState() {
-    var _a5, _b;
+    var _a5, _b, _c2, _d, _e3, _f, _g;
     return {
       ...super.getState(),
-      scrollback: (_b = (_a5 = this.serializeAddon) == null ? void 0 : _a5.serialize({ scrollback: SCROLLBACK_PERSIST_LINES })) != null ? _b : ""
+      scrollback: (_b = (_a5 = this.serializeAddon) == null ? void 0 : _a5.serialize({ scrollback: SCROLLBACK_PERSIST_LINES })) != null ? _b : "",
+      cwd: (_e3 = (_d = (_c2 = this.cwdTracker) == null ? void 0 : _c2.getCwd()) != null ? _d : this.restoredCwd) != null ? _e3 : void 0,
+      customName: (_f = this.customName) != null ? _f : void 0,
+      color: (_g = this.color) != null ? _g : void 0
     };
   }
   async setState(state, result) {
-    const scrollback = state == null ? void 0 : state.scrollback;
+    const typedState = state;
+    const scrollback = typedState == null ? void 0 : typedState.scrollback;
     if (typeof scrollback === "string" && scrollback.length > 0) {
       if (this.term) {
         this.writeRestoredScrollback(scrollback);
@@ -11805,6 +12249,16 @@ var TerminalView = class extends import_obsidian3.ItemView {
         this.restoredScrollback = scrollback;
       }
     }
+    if (typeof (typedState == null ? void 0 : typedState.cwd) === "string" && typedState.cwd.length > 0) {
+      this.restoredCwd = typedState.cwd;
+    }
+    if (typeof (typedState == null ? void 0 : typedState.customName) === "string" && typedState.customName.length > 0) {
+      this.customName = typedState.customName;
+    }
+    if (typeof (typedState == null ? void 0 : typedState.color) === "string" && typedState.color.length > 0) {
+      this.color = typedState.color;
+    }
+    this.refreshIdentity();
     await super.setState(state, result);
   }
   applyRestoredScrollbackIfPending() {
@@ -11828,6 +12282,29 @@ var TerminalView = class extends import_obsidian3.ItemView {
     (_a5 = this.fitAddon) == null ? void 0 : _a5.fit();
     (_b = this.pty) == null ? void 0 : _b.resize(this.term.cols, this.term.rows);
   }
+  applyFontFamily() {
+    var _a5, _b;
+    if (!this.term)
+      return;
+    this.term.options.fontFamily = this.plugin.settings.fontFamilyOverride.trim() || resolveMonospaceFontStack();
+    (_a5 = this.fitAddon) == null ? void 0 : _a5.fit();
+    (_b = this.pty) == null ? void 0 : _b.resize(this.term.cols, this.term.rows);
+  }
+  applyCursorStyle() {
+    if (!this.term)
+      return;
+    this.term.options.cursorStyle = this.plugin.settings.cursorStyle;
+  }
+  applyCursorBlink() {
+    if (!this.term)
+      return;
+    this.term.options.cursorBlink = this.plugin.settings.cursorBlink;
+  }
+  applyTheme() {
+    if (!this.term)
+      return;
+    this.term.options.theme = this.plugin.settings.autoThemeTerminal ? resolveXtermTheme() : void 0;
+  }
   onResize() {
     var _a5;
     (_a5 = this.fitAddon) == null ? void 0 : _a5.fit();
@@ -11836,18 +12313,19 @@ var TerminalView = class extends import_obsidian3.ItemView {
     var _a5, _b, _c2, _d;
     const pythonBin = await this.plugin.getPython3Bin();
     const shell = this.plugin.getUserShell();
-    const resourcesDir = (0, import_terminus_node_bridge9.pathJoin)(this.plugin.getPluginDir(), "resources");
-    const helperPath = (0, import_terminus_node_bridge9.pathJoin)(resourcesDir, "pty_helper.py");
+    const resourcesDir = (0, import_terminus_node_bridge10.pathJoin)(this.plugin.getPluginDir(), "resources");
+    const helperPath = (0, import_terminus_node_bridge10.pathJoin)(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
+    const restoredCwdStillExists = this.restoredCwd && (0, import_terminus_node_bridge10.fileExistsSync)(this.restoredCwd);
     this.pty = new PtyProcess({
       pythonBin,
       helperPath,
       shell,
-      cwd: this.plugin.getVaultBasePath(),
+      cwd: restoredCwdStillExists ? this.restoredCwd : this.plugin.getVaultBasePath(),
       cols: (_b = (_a5 = this.term) == null ? void 0 : _a5.cols) != null ? _b : 80,
       rows: (_d = (_c2 = this.term) == null ? void 0 : _c2.rows) != null ? _d : 24,
       env: {
-        ...(0, import_terminus_node_bridge9.getAllEnvVars)(),
+        ...(0, import_terminus_node_bridge10.getAllEnvVars)(),
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
@@ -11856,15 +12334,21 @@ var TerminalView = class extends import_obsidian3.ItemView {
     });
     this.pty.on("data", (chunk) => {
       var _a6;
-      return (_a6 = this.term) == null ? void 0 : _a6.write((0, import_terminus_node_bridge9.bufferToString)(chunk));
+      return (_a6 = this.term) == null ? void 0 : _a6.write((0, import_terminus_node_bridge10.bufferToString)(chunk));
     });
-    this.pty.on("stderr", (text) => new import_obsidian3.Notice(`Terminus: ${text.trim()}`));
-    this.pty.on("error", (err) => new import_obsidian3.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
+    this.pty.on("stderr", (text) => new import_obsidian5.Notice(`Terminus: ${text.trim()}`));
+    this.pty.on("error", (err) => new import_obsidian5.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
     this.pty.on("exit", ({ code }) => {
       var _a6;
       (_a6 = this.term) == null ? void 0 : _a6.write(`\r
 [process exited${code !== null ? ` with code ${code}` : ""}]\r
 `);
+    });
+    this.pty.on("ready", () => {
+      var _a6;
+      const command = this.plugin.settings.startupCommand.trim();
+      if (command)
+        (_a6 = this.pty) == null ? void 0 : _a6.write(`${command}\r`);
     });
     this.pty.start();
   }
@@ -11916,7 +12400,7 @@ var TerminalView = class extends import_obsidian3.ItemView {
     new CommandHelpModal(this.app, claudeBin, this.plugin.getVaultBasePath(), (_c2 = cmd.exitCode) != null ? _c2 : 0, transcript, (command) => {
       var _a6;
       (_a6 = this.pty) == null ? void 0 : _a6.write(command);
-      new import_obsidian3.Notice(`Terminus: suggested command added to ${this.getDisplayText()} \u2014 press Enter to run it`);
+      new import_obsidian5.Notice(`Terminus: suggested command added to ${this.getDisplayText()} \u2014 press Enter to run it`);
     }).open();
   }
   /**
@@ -11930,7 +12414,8 @@ var TerminalView = class extends import_obsidian3.ItemView {
     this.plugin.pendingChangesStore.recordChange({
       payload,
       diff,
-      panelLabel: this.getDisplayText()
+      panelLabel: this.getDisplayText(),
+      panelColor: this.color
     });
     void this.checkBacklinkBreakage(diff.filePath);
   }
@@ -11939,9 +12424,9 @@ var TerminalView = class extends import_obsidian3.ItemView {
    *  (first oldText vs latest newText) so a multi-edit turn is checked as a
    *  whole, not edit-by-edit. */
   async checkBacklinkBreakage(absoluteFilePath) {
-    const relPath = (0, import_terminus_node_bridge9.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
+    const relPath = (0, import_terminus_node_bridge10.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
     const file = this.app.vault.getAbstractFileByPath(relPath);
-    if (!(file instanceof import_obsidian3.TFile))
+    if (!(file instanceof import_obsidian5.TFile))
       return;
     const merged = this.plugin.pendingChangesStore.get(absoluteFilePath);
     if (!merged)
@@ -11952,8 +12437,8 @@ var TerminalView = class extends import_obsidian3.ItemView {
 };
 
 // src/views/PendingChangesView.ts
-var import_obsidian9 = require("obsidian");
-var import_terminus_node_bridge15 = __toESM(require_dist());
+var import_obsidian11 = require("obsidian");
+var import_terminus_node_bridge16 = __toESM(require_dist());
 
 // node_modules/diff/libesm/diff/base.js
 var Diff = class {
@@ -12615,8 +13100,8 @@ function renderDiffLine(container, line) {
 }
 
 // src/editor/openWithDiff.ts
-var import_obsidian4 = require("obsidian");
-var import_terminus_node_bridge10 = __toESM(require_dist());
+var import_obsidian6 = require("obsidian");
+var import_terminus_node_bridge11 = __toESM(require_dist());
 
 // src/editor/inlineDiff.ts
 var import_state = require("@codemirror/state");
@@ -12731,26 +13216,26 @@ function buildDecorations(state, overlay) {
 
 // src/editor/openWithDiff.ts
 async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
-  const relPath = (0, import_terminus_node_bridge10.pathRelative)(vaultBasePath, change.diff.filePath);
+  const relPath = (0, import_terminus_node_bridge11.pathRelative)(vaultBasePath, change.diff.filePath);
   if (relPath.startsWith("..")) {
-    new import_obsidian4.Notice("Terminus: file is outside the vault, can't open it as a note.");
+    new import_obsidian6.Notice("Terminus: file is outside the vault, can't open it as a note.");
     return;
   }
   const file = app.vault.getAbstractFileByPath(relPath);
-  if (!(file instanceof import_obsidian4.TFile)) {
-    new import_obsidian4.Notice("Terminus: this file isn't visible to Obsidian's vault (e.g. a hidden dot-file/folder) -- use Split Diff to review it instead.");
+  if (!(file instanceof import_obsidian6.TFile)) {
+    new import_obsidian6.Notice("Terminus: this file isn't visible to Obsidian's vault (e.g. a hidden dot-file/folder) -- use Split Diff to review it instead.");
     return;
   }
   const leaf = app.workspace.getLeaf(true);
   await leaf.openFile(file);
   const view = leaf.view;
-  if (!(view instanceof import_obsidian4.MarkdownView)) {
-    new import_obsidian4.Notice("Terminus: this file's type isn't registered as an editable view in Obsidian, so it can't show an inline diff -- use Split Diff to review it instead.");
+  if (!(view instanceof import_obsidian6.MarkdownView)) {
+    new import_obsidian6.Notice("Terminus: this file's type isn't registered as an editable view in Obsidian, so it can't show an inline diff -- use Split Diff to review it instead.");
     return;
   }
   const cm = view.editor.cm;
   if (!cm) {
-    new import_obsidian4.Notice("Terminus: couldn't attach inline diff to this editor.");
+    new import_obsidian6.Notice("Terminus: couldn't attach inline diff to this editor.");
     return;
   }
   store.registerInlineOverlay(change.id, () => {
@@ -12758,7 +13243,7 @@ async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
   });
   const resolve = (accepted) => {
     store.resolveItem(change.id, accepted).catch((err) => {
-      new import_obsidian4.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge10.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian6.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge11.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   cm.dispatch({
@@ -12773,12 +13258,12 @@ async function openFileWithInlineDiff(app, vaultBasePath, store, change) {
 }
 
 // src/views/DiffSplitView.ts
-var import_obsidian6 = require("obsidian");
-var import_terminus_node_bridge12 = __toESM(require_dist());
+var import_obsidian8 = require("obsidian");
+var import_terminus_node_bridge13 = __toESM(require_dist());
 
 // src/diff/renderSplitDiff.ts
-var import_obsidian5 = require("obsidian");
-var import_terminus_node_bridge11 = __toESM(require_dist());
+var import_obsidian7 = require("obsidian");
+var import_terminus_node_bridge12 = __toESM(require_dist());
 
 // src/diff/hunks.ts
 function computeSplitParts(oldText, newText) {
@@ -12958,7 +13443,7 @@ function renderHunkControls(container, hunk, change, store) {
   bar.createEl("span", { cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
   const resolve = (accepted) => {
     store.resolveHunk(change.id, hunk.index, accepted).catch((err) => {
-      new import_obsidian5.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge11.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian7.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge12.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   bar.createEl("button", { text: "Reject", cls: "terminus-inline-diff-reject" }).addEventListener("click", () => resolve(false));
@@ -12992,7 +13477,7 @@ function renderSplitCell(row, side, kind, lineNumber, cellLine) {
 
 // src/views/DiffSplitView.ts
 var DIFF_SPLIT_VIEW_TYPE = "terminus-diff-split";
-var DiffSplitView = class extends import_obsidian6.ItemView {
+var DiffSplitView = class extends import_obsidian8.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -13013,7 +13498,7 @@ var DiffSplitView = class extends import_obsidian6.ItemView {
         return;
       }
       const header = container.createDiv({ cls: "terminus-split-diff-header" });
-      header.createEl("span", { cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge12.pathBasename)(change.diff.filePath) });
+      header.createEl("span", { cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge13.pathBasename)(change.diff.filePath) });
       if (change.editCount > 1) {
         header.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
       }
@@ -13024,7 +13509,7 @@ var DiffSplitView = class extends import_obsidian6.ItemView {
     return DIFF_SPLIT_VIEW_TYPE;
   }
   getDisplayText() {
-    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge12.pathBasename)(this.changeId)}` : "Split Diff";
+    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge13.pathBasename)(this.changeId)}` : "Split Diff";
   }
   getIcon() {
     return "diff";
@@ -13055,9 +13540,9 @@ async function openDiffSplitView(plugin, changeId) {
 }
 
 // src/modals/ActionLogModal.ts
-var import_obsidian7 = require("obsidian");
-var import_terminus_node_bridge13 = __toESM(require_dist());
-var ActionLogModal = class extends import_obsidian7.Modal {
+var import_obsidian9 = require("obsidian");
+var import_terminus_node_bridge14 = __toESM(require_dist());
+var ActionLogModal = class extends import_obsidian9.Modal {
   constructor(app, actionLog) {
     super(app);
     this.actionLog = actionLog;
@@ -13096,7 +13581,7 @@ var ActionLogModal = class extends import_obsidian7.Modal {
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted"
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge13.pathBasename)(entry.filePath) });
+    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge14.pathBasename)(entry.filePath) });
     row.createEl("span", {
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` \xB7 ${entry.editCount} edits` : ""}`
@@ -13106,8 +13591,8 @@ var ActionLogModal = class extends import_obsidian7.Modal {
 };
 
 // src/modals/ConfirmModal.ts
-var import_obsidian8 = require("obsidian");
-var ConfirmModal = class extends import_obsidian8.Modal {
+var import_obsidian10 = require("obsidian");
+var ConfirmModal = class extends import_obsidian10.Modal {
   constructor(app, title, message, confirmText) {
     super(app);
     this.title = title;
@@ -13148,13 +13633,13 @@ var ConfirmModal = class extends import_obsidian8.Modal {
 };
 
 // src/git/gitDiff.ts
-var import_terminus_node_bridge14 = __toESM(require_dist());
+var import_terminus_node_bridge15 = __toESM(require_dist());
 async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
-  const relPath = (0, import_terminus_node_bridge14.pathRelative)(vaultBasePath, absoluteFilePath);
+  const relPath = (0, import_terminus_node_bridge15.pathRelative)(vaultBasePath, absoluteFilePath);
   if (relPath.startsWith(".."))
     return null;
   try {
-    const { stdout } = await (0, import_terminus_node_bridge14.execFileText)("git", ["show", `HEAD:${relPath}`], {
+    const { stdout } = await (0, import_terminus_node_bridge15.execFileText)("git", ["show", `HEAD:${relPath}`], {
       cwd: vaultBasePath,
       maxBuffer: 10 * 1024 * 1024
     });
@@ -13166,7 +13651,7 @@ async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
 
 // src/views/PendingChangesView.ts
 var PENDING_CHANGES_VIEW_TYPE = "terminus-pending-changes";
-var PendingChangesView = class extends import_obsidian9.ItemView {
+var PendingChangesView = class extends import_obsidian11.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -13266,11 +13751,11 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       await action();
     } catch (err) {
       const target = scopeLabel ? `${scopeLabel}'s changes` : "all changes";
-      new import_obsidian9.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage2(err)}`);
+      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage2(err)}`);
     }
   }
   renderTerminalGroup(container, panelLabel, changes, statsById) {
-    var _a5, _b;
+    var _a5, _b, _c2;
     let groupAdded = 0;
     let groupRemoved = 0;
     for (const change of changes) {
@@ -13279,6 +13764,11 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       groupRemoved += stats.removed;
     }
     const group = container.createDiv({ cls: "terminus-group" });
+    const panelColor = (_b = changes[0]) == null ? void 0 : _b.panelColor;
+    if (panelColor) {
+      group.addClass("terminus-group-colored");
+      group.style.setProperty("--terminus-group-color", panelColor);
+    }
     const groupHeader = group.createDiv({ cls: "terminus-group-header" });
     const chevron = groupHeader.createEl("span", { cls: "terminus-group-chevron", text: "\u25BE" });
     const groupText = groupHeader.createDiv({ cls: "terminus-group-text" });
@@ -13308,7 +13798,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
     );
     const list = group.createDiv({ cls: "terminus-pending-list" });
     for (const change of changes) {
-      this.renderRow(list, change, (_b = statsById.get(change.id)) != null ? _b : { added: 0, removed: 0 });
+      this.renderRow(list, change, (_c2 = statsById.get(change.id)) != null ? _c2 : { added: 0, removed: 0 });
     }
     let groupExpanded = true;
     groupHeader.addEventListener("click", () => {
@@ -13323,14 +13813,14 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
     const chevron = summary.createEl("span", { cls: "terminus-pending-chevron", text: "\u25B8" });
     const info = summary.createDiv({ cls: "terminus-pending-info" });
     const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-    nameRow.createEl("span", { cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge15.pathBasename)(change.diff.filePath) });
+    nameRow.createEl("span", { cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge16.pathBasename)(change.diff.filePath) });
     nameRow.createEl("span", { cls: "terminus-diff-stat-add", text: `+${stats.added}` });
     nameRow.createEl("span", { cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
     if (change.editCount > 1) {
       nameRow.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
     }
-    const vaultName = (0, import_terminus_node_bridge15.pathBasename)(this.plugin.getVaultBasePath());
-    const relativePath = (0, import_terminus_node_bridge15.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
+    const vaultName = (0, import_terminus_node_bridge16.pathBasename)(this.plugin.getVaultBasePath());
+    const relativePath = (0, import_terminus_node_bridge16.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
     info.createEl("div", { cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
     if (change.brokenBacklinks.length > 0) {
       const count = change.brokenBacklinks.length;
@@ -13345,8 +13835,8 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
     };
     const resolve = (accepted) => {
       this.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err) => {
-        new import_obsidian9.Notice(
-          `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge15.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
+        new import_obsidian11.Notice(
+          `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge16.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
         );
       });
     };
@@ -13390,7 +13880,7 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       const list = warning.createEl("ul");
       for (const link of change.brokenBacklinks) {
         list.createEl("li", {
-          text: `${(0, import_terminus_node_bridge15.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
+          text: `${(0, import_terminus_node_bridge16.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
         });
       }
     }
@@ -13419,8 +13909,8 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       if (previewRendered)
         return;
       previewRendered = true;
-      const relPath = (0, import_terminus_node_bridge15.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
-      void import_obsidian9.MarkdownRenderer.render(this.app, change.diff.newText, previewContainer, relPath, this);
+      const relPath = (0, import_terminus_node_bridge16.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
+      void import_obsidian11.MarkdownRenderer.render(this.app, change.diff.newText, previewContainer, relPath, this);
     });
     gitBtn.addEventListener("click", () => {
       activate(2);
@@ -13475,17 +13965,17 @@ var PendingChangesView = class extends import_obsidian9.ItemView {
       cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: item.accepted ? "Kept" : "Reverted"
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge15.pathBasename)(item.diff.filePath) });
+    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge16.pathBasename)(item.diff.filePath) });
     row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
       this.plugin.pendingChangesStore.undo(item.historyId).catch((err) => {
-        new import_obsidian9.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
+        new import_obsidian11.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
       });
     });
   }
 };
 
 // src/state/PendingChangesStore.ts
-var import_terminus_node_bridge16 = __toESM(require_dist());
+var import_terminus_node_bridge17 = __toESM(require_dist());
 var MAX_HISTORY = 20;
 var PendingChangesStore = class extends TypedEmitter {
   constructor() {
@@ -13514,6 +14004,7 @@ var PendingChangesStore = class extends TypedEmitter {
       payload: input.payload,
       diff: input.diff,
       panelLabel: input.panelLabel,
+      panelColor: input.panelColor,
       createdAt: Date.now(),
       editCount: 1,
       brokenBacklinks: []
@@ -13604,9 +14095,9 @@ var PendingChangesStore = class extends TypedEmitter {
     const newOldText = diff.oldText.slice(0, hunk.oldStart) + chosen + diff.oldText.slice(hunk.oldEnd);
     const newNewText = diff.newText.slice(0, hunk.newStart) + chosen + diff.newText.slice(hunk.newEnd);
     if (!diff.existedBefore && newOldText === "") {
-      await (0, import_terminus_node_bridge16.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge17.deleteFileIfExists)(diff.filePath);
     } else {
-      await (0, import_terminus_node_bridge16.writeTextFile)(diff.filePath, newOldText);
+      await (0, import_terminus_node_bridge17.writeTextFile)(diff.filePath, newOldText);
     }
     entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
     if (newOldText === newNewText) {
@@ -13650,18 +14141,18 @@ var PendingChangesStore = class extends TypedEmitter {
   }
   async applyOldState(diff) {
     if (!diff.existedBefore) {
-      await (0, import_terminus_node_bridge16.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge17.deleteFileIfExists)(diff.filePath);
       return;
     }
-    await (0, import_terminus_node_bridge16.writeTextFile)(diff.filePath, diff.revertText);
+    await (0, import_terminus_node_bridge17.writeTextFile)(diff.filePath, diff.revertText);
   }
   async applyNewState(diff) {
-    await (0, import_terminus_node_bridge16.writeTextFile)(diff.filePath, diff.newText);
+    await (0, import_terminus_node_bridge17.writeTextFile)(diff.filePath, diff.newText);
   }
 };
 
 // src/state/ActionLog.ts
-var import_terminus_node_bridge17 = __toESM(require_dist());
+var import_terminus_node_bridge18 = __toESM(require_dist());
 function isActionLogEntryArray(value) {
   return Array.isArray(value);
 }
@@ -13675,7 +14166,7 @@ var ActionLog = class {
   async load() {
     if (this.loaded)
       return;
-    const raw = await (0, import_terminus_node_bridge17.readTextFileIfExists)(this.logFilePath);
+    const raw = await (0, import_terminus_node_bridge18.readTextFileIfExists)(this.logFilePath);
     if (raw && raw.trim()) {
       const parsed = JSON.parse(raw);
       this.entries = isActionLogEntryArray(parsed) ? parsed : [];
@@ -13701,20 +14192,85 @@ var ActionLog = class {
     return result;
   }
   async persist() {
-    await (0, import_terminus_node_bridge17.makeDirRecursive)((0, import_terminus_node_bridge17.pathDirname)(this.logFilePath));
-    await (0, import_terminus_node_bridge17.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
+    await (0, import_terminus_node_bridge18.makeDirRecursive)((0, import_terminus_node_bridge18.pathDirname)(this.logFilePath));
+    await (0, import_terminus_node_bridge18.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
+  }
+};
+
+// src/state/ClosedTerminalBuffer.ts
+var MAX_CLOSED_TERMINALS = 10;
+var ClosedTerminalBuffer = class {
+  constructor() {
+    this.entries = [];
+  }
+  push(entry) {
+    this.entries.unshift(entry);
+    if (this.entries.length > MAX_CLOSED_TERMINALS)
+      this.entries.pop();
+  }
+  list() {
+    return [...this.entries];
+  }
+  /** Once rescued, an entry is a live terminal again, not a closed one --
+   *  removed by reference rather than a snapshot index, since the entry
+   *  object a caller holds (e.g. from a modal opened earlier) is always
+   *  identity-comparable against whatever's currently in the buffer. */
+  remove(entry) {
+    const index = this.entries.indexOf(entry);
+    if (index !== -1)
+      this.entries.splice(index, 1);
+  }
+};
+
+// src/modals/RescueClosedTerminalModal.ts
+var import_obsidian12 = require("obsidian");
+function formatRelativeTime(timestampMs) {
+  const seconds = Math.max(0, Math.round((Date.now() - timestampMs) / 1e3));
+  if (seconds < 60)
+    return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60)
+    return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h ago`;
+}
+var RescueClosedTerminalModal = class extends import_obsidian12.FuzzySuggestModal {
+  constructor(app, entries, onChoose) {
+    super(app);
+    this.entries = entries;
+    this.onChoose = onChoose;
+    this.setPlaceholder("Choose a closed terminal to rescue...");
+  }
+  getItems() {
+    return this.entries;
+  }
+  getItemText(entry) {
+    return `${entry.displayText} \u2014 closed ${formatRelativeTime(entry.closedAt)}`;
+  }
+  onChooseItem(entry) {
+    this.onChoose(entry);
   }
 };
 
 // src/settings.ts
-var import_obsidian10 = require("obsidian");
-var import_terminus_node_bridge18 = __toESM(require_dist());
+var import_obsidian13 = require("obsidian");
+var import_terminus_node_bridge19 = __toESM(require_dist());
 var TERMINAL_PLACEMENT_LABELS = {
   ask: "Always ask",
   tab: "New tab",
   "split-right": "Split right",
   "split-down": "Split down",
   window: "New window"
+};
+var CURSOR_STYLE_LABELS = {
+  block: "Block",
+  bar: "Bar",
+  underline: "Underline"
+};
+var WIKI_LINK_INSERT_FORMAT_LABELS = {
+  wikilink: "Wiki-link ([[Note]])",
+  "vault-relative": "Vault-relative path",
+  absolute: "Absolute path"
 };
 var DEFAULT_SETTINGS = {
   fontSize: 13,
@@ -13723,13 +14279,23 @@ var DEFAULT_SETTINGS = {
   autoRevealDelayMs: 800,
   confirmBulkActions: false,
   shellBinOverride: "",
-  python3BinOverride: ""
+  python3BinOverride: "",
+  fontFamilyOverride: "",
+  cursorStyle: "block",
+  cursorBlink: true,
+  scrollbackLines: 1e3,
+  autoThemeTerminal: true,
+  startupCommand: "",
+  ribbonIcon: "square-terminal",
+  wikiLinkInsertFormat: "wikilink"
 };
 var MIN_FONT_SIZE = 8;
 var MAX_FONT_SIZE = 32;
 var MIN_AUTO_REVEAL_DELAY_MS = 0;
 var MAX_AUTO_REVEAL_DELAY_MS = 5e3;
-var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
+var MIN_SCROLLBACK_LINES = 200;
+var MAX_SCROLLBACK_LINES = 5e4;
+var TerminusSettingTab = class extends import_obsidian13.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -13737,14 +14303,7 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian10.Setting(containerEl).setName("Terminal font size").setDesc(
-      `Applies to all open terminal panels. Also adjustable via the "Increase/Decrease terminal font size" commands (${MIN_FONT_SIZE}-${MAX_FONT_SIZE}px).`
-    ).addSlider(
-      (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).onChange(async (value) => {
-        await this.plugin.setFontSize(value);
-      })
-    );
-    new import_obsidian10.Setting(containerEl).setName("New terminal placement").setDesc(
+    new import_obsidian13.Setting(containerEl).setName("New terminal placement").setDesc(
       'Where the ribbon icon and "Open Terminus" command open a new terminal. "Always ask" shows a quick menu at the click; any other choice opens directly there every time.'
     ).addDropdown(
       (dropdown) => dropdown.addOptions(TERMINAL_PLACEMENT_LABELS).setValue(this.plugin.settings.terminalPlacement).onChange(async (value) => {
@@ -13752,7 +14311,58 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Automatically reveal Pending Changes panel").setDesc(
+    new import_obsidian13.Setting(containerEl).setName("Terminal appearance").setHeading();
+    new import_obsidian13.Setting(containerEl).setName("Terminal font size").setDesc(
+      `Applies to all open terminal panels. Also adjustable via the "Increase/Decrease terminal font size" commands (${MIN_FONT_SIZE}-${MAX_FONT_SIZE}px).`
+    ).addSlider(
+      (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).onChange(async (value) => {
+        await this.plugin.setFontSize(value);
+      })
+    );
+    new import_obsidian13.Setting(containerEl).setName("Font family").setDesc("Leave blank to match Obsidian's own monospace font setting. Applies to all open terminal panels.").addText(
+      (text) => text.setPlaceholder("e.g. Fira Code").setValue(this.plugin.settings.fontFamilyOverride).onChange(async (value) => {
+        await this.plugin.setFontFamilyOverride(value.trim());
+      })
+    );
+    new import_obsidian13.Setting(containerEl).setName("Cursor style").addDropdown(
+      (dropdown) => dropdown.addOptions(CURSOR_STYLE_LABELS).setValue(this.plugin.settings.cursorStyle).onChange(async (value) => {
+        await this.plugin.setCursorStyle(value);
+      })
+    );
+    new import_obsidian13.Setting(containerEl).setName("Cursor blink").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.cursorBlink).onChange(async (value) => {
+        await this.plugin.setCursorBlink(value);
+      })
+    );
+    new import_obsidian13.Setting(containerEl).setName("Scrollback").setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`).addSlider(
+      (slider) => slider.setLimits(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, 100).setValue(this.plugin.settings.scrollbackLines).onChange(async (value) => {
+        this.plugin.settings.scrollbackLines = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian13.Setting(containerEl).setName("Auto theme").setDesc("Terminal colors follow Obsidian's light/dark toggle. Turn off to use xterm.js's own default palette instead.").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.autoThemeTerminal).onChange(async (value) => {
+        await this.plugin.setAutoThemeTerminal(value);
+      })
+    );
+    new import_obsidian13.Setting(containerEl).setName("Startup command").setDesc('Runs automatically in every new terminal once the shell is ready (e.g. "claude"). Leave blank for none.').addText(
+      (text) => text.setPlaceholder("e.g. claude").setValue(this.plugin.settings.startupCommand).onChange(async (value) => {
+        this.plugin.settings.startupCommand = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian13.Setting(containerEl).setName("Wiki-link autocomplete format").setDesc('Format inserted when picking a note after typing "[[" in a terminal.').addDropdown(
+      (dropdown) => dropdown.addOptions(WIKI_LINK_INSERT_FORMAT_LABELS).setValue(this.plugin.settings.wikiLinkInsertFormat).onChange(async (value) => {
+        this.plugin.settings.wikiLinkInsertFormat = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian13.Setting(containerEl).setName("Ribbon icon").setDesc(`Any Lucide icon name (e.g. "square-terminal", "terminal"). Invalid names fall back to Obsidian's default icon silently.`).addText(
+      (text) => text.setPlaceholder("square-terminal").setValue(this.plugin.settings.ribbonIcon).onChange(async (value) => {
+        await this.plugin.setRibbonIcon(value.trim() || DEFAULT_SETTINGS.ribbonIcon);
+      })
+    );
+    new import_obsidian13.Setting(containerEl).setName("Automatically reveal Pending Changes panel").setDesc(
       "Bring the panel to front once Claude finishes a burst of edits, so a review is never sitting there unnoticed."
     ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoRevealPendingChanges).onChange(async (value) => {
@@ -13762,7 +14372,7 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
       })
     );
     if (this.plugin.settings.autoRevealPendingChanges) {
-      new import_obsidian10.Setting(containerEl).setName("Reveal delay").setDesc(
+      new import_obsidian13.Setting(containerEl).setName("Reveal delay").setDesc(
         "How long to wait after the last edit in a burst before revealing the panel, so a multi-file turn doesn't pop it up repeatedly."
       ).addSlider(
         (slider) => slider.setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100).setValue(this.plugin.settings.autoRevealDelayMs).onChange(async (value) => {
@@ -13771,7 +14381,7 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
         })
       );
     }
-    new import_obsidian10.Setting(containerEl).setName("Confirm before bulk actions").setDesc(
+    new import_obsidian13.Setting(containerEl).setName("Confirm before bulk actions").setDesc(
       'Ask for confirmation before "Reject all" / "Keep all" (global or per-terminal). Off by default -- every bulk action is already reversible via the "Recently resolved" list.'
     ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.confirmBulkActions).onChange(async (value) => {
@@ -13779,16 +14389,16 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Advanced").setHeading();
-    new import_obsidian10.Setting(containerEl).setName("Shell binary override").setDesc(
-      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge18.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
+    new import_obsidian13.Setting(containerEl).setName("Advanced").setHeading();
+    new import_obsidian13.Setting(containerEl).setName("Shell binary override").setDesc(
+      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge19.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
     ).addText(
       (text) => text.setPlaceholder("e.g. /bin/zsh").setValue(this.plugin.settings.shellBinOverride).onChange(async (value) => {
         this.plugin.settings.shellBinOverride = value.trim();
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Python 3 binary override").setDesc(
+    new import_obsidian13.Setting(containerEl).setName("Python 3 binary override").setDesc(
       "Leave blank to auto-detect. Only needed if the plugin can't find python3 on its own (used to allocate the terminal's pseudo-terminal)."
     ).addText(
       (text) => text.setPlaceholder("e.g. /usr/local/bin/python3").setValue(this.plugin.settings.python3BinOverride).onChange(async (value) => {
@@ -13800,22 +14410,24 @@ var TerminusSettingTab = class extends import_obsidian10.PluginSettingTab {
 };
 
 // src/main.ts
-var TerminusPlugin = class extends import_obsidian11.Plugin {
+var TerminusPlugin = class extends import_obsidian14.Plugin {
   constructor() {
     super(...arguments);
     this.reviewServer = new ReviewServer();
     this.pendingChangesStore = new PendingChangesStore();
+    this.closedTerminals = new ClosedTerminalBuffer();
     this.settings = DEFAULT_SETTINGS;
     this.python3Bin = null;
     this.claudeBin = null;
     this.nextTerminalNumber = 1;
     this.revealPendingChangesTimer = null;
+    this.ribbonIconEl = null;
   }
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new TerminusSettingTab(this.app, this));
     await provisionResources(this.getPluginDir());
-    this.actionLog = new ActionLog((0, import_terminus_node_bridge19.pathJoin)(this.getPluginDir(), "action-log.json"));
+    this.actionLog = new ActionLog((0, import_terminus_node_bridge20.pathJoin)(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.pendingChangesStore.on("resolved", (item) => {
       const stats = computeDiffStats(item.diff);
@@ -13844,7 +14456,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
       await provisionClaudeSettings(this.app, this.manifest);
     } catch (err) {
       console.error("Terminus: failed to provision .claude/settings.local.json", err);
-      new import_obsidian11.Notice(
+      new import_obsidian14.Notice(
         "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
       );
     }
@@ -13852,7 +14464,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     this.registerView(TERMINUS_VIEW_TYPE, (leaf) => new TerminalView(leaf, this));
     this.registerView(PENDING_CHANGES_VIEW_TYPE, (leaf) => new PendingChangesView(leaf, this));
     this.registerView(DIFF_SPLIT_VIEW_TYPE, (leaf) => new DiffSplitView(leaf, this));
-    this.addRibbonIcon("square-terminal", "Open Terminus", (evt) => {
+    this.ribbonIconEl = this.addRibbonIcon(this.settings.ribbonIcon, "Open Terminus", (evt) => {
       void this.openTerminal(evt);
     });
     this.addCommand({
@@ -13905,6 +14517,19 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
       name: "Open Action Log",
       callback: () => new ActionLogModal(this.app, this.actionLog).open()
     });
+    this.addCommand({
+      id: "rescue-closed-terminal",
+      name: "Rescue closed terminal",
+      checkCallback: (checking) => {
+        const entries = this.closedTerminals.list();
+        if (checking)
+          return entries.length > 0;
+        if (entries.length > 0) {
+          new RescueClosedTerminalModal(this.app, entries, (entry) => void this.rescueClosedTerminal(entry)).open();
+        }
+        return true;
+      }
+    });
     this.app.workspace.onLayoutReady(() => void this.revealPendingChangesView());
   }
   onunload() {
@@ -13925,9 +14550,41 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
       return;
     this.settings.fontSize = clamped;
     await this.saveSettings();
+    this.forEachTerminalView((view) => view.applyFontSize(clamped));
+  }
+  async setFontFamilyOverride(fontFamily) {
+    this.settings.fontFamilyOverride = fontFamily;
+    await this.saveSettings();
+    this.forEachTerminalView((view) => view.applyFontFamily());
+  }
+  async setCursorStyle(style) {
+    this.settings.cursorStyle = style;
+    await this.saveSettings();
+    this.forEachTerminalView((view) => view.applyCursorStyle());
+  }
+  async setCursorBlink(blink) {
+    this.settings.cursorBlink = blink;
+    await this.saveSettings();
+    this.forEachTerminalView((view) => view.applyCursorBlink());
+  }
+  async setAutoThemeTerminal(enabled) {
+    this.settings.autoThemeTerminal = enabled;
+    await this.saveSettings();
+    this.forEachTerminalView((view) => view.applyTheme());
+  }
+  /** Falls back silently to Obsidian's default icon if the given name isn't
+   *  a real Lucide icon -- `setIcon()` just renders nothing extra rather
+   *  than throwing, so there's nothing to catch/validate here. */
+  async setRibbonIcon(iconName) {
+    this.settings.ribbonIcon = iconName;
+    await this.saveSettings();
+    if (this.ribbonIconEl)
+      (0, import_obsidian14.setIcon)(this.ribbonIconEl, iconName);
+  }
+  forEachTerminalView(fn2) {
     for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
       if (leaf.view instanceof TerminalView)
-        leaf.view.applyFontSize(clamped);
+        fn2(leaf.view);
     }
   }
   /** Same confirm-before-bulk-actions gate as the panel's own Reject/Keep
@@ -13937,7 +14594,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
   async runBulkPendingChangesCommand(accepted) {
     const count = this.pendingChangesStore.list().length;
     if (count === 0) {
-      new import_obsidian11.Notice("Terminus: no pending changes");
+      new import_obsidian14.Notice("Terminus: no pending changes");
       return;
     }
     if (this.settings.confirmBulkActions) {
@@ -13954,20 +14611,20 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     try {
       await this.pendingChangesStore.resolveAll(accepted);
     } catch (err) {
-      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
+      new import_obsidian14.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
     }
   }
   async resolveOldestPendingChange(accepted) {
     const oldest = this.pendingChangesStore.list()[0];
     if (!oldest) {
-      new import_obsidian11.Notice("Terminus: no pending changes");
+      new import_obsidian14.Notice("Terminus: no pending changes");
       return;
     }
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian11.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge19.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian14.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge20.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian11.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge19.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian14.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge20.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -13996,7 +14653,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     return getHookBridgePath(this.app, this.manifest);
   }
   getPluginDir() {
-    return (0, import_terminus_node_bridge19.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return (0, import_terminus_node_bridge20.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
   async revealPendingChangesView() {
     var _a5, _b;
@@ -14021,7 +14678,7 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
     await this.openTerminalAt(placement === "ask" ? "tab" : placement);
   }
   showTerminalPlacementMenu(evt) {
-    const menu = new import_obsidian11.Menu();
+    const menu = new import_obsidian14.Menu();
     const placements = ["tab", "split-right", "split-down", "window"];
     for (const placement of placements) {
       menu.addItem(
@@ -14059,6 +14716,22 @@ var TerminusPlugin = class extends import_obsidian11.Plugin {
   }
   allocateTerminalNumber() {
     return this.nextTerminalNumber++;
+  }
+  async rescueClosedTerminal(entry) {
+    var _a5, _b, _c2;
+    this.closedTerminals.remove(entry);
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.setViewState({
+      type: TERMINUS_VIEW_TYPE,
+      active: true,
+      state: {
+        scrollback: entry.scrollback,
+        cwd: (_a5 = entry.cwd) != null ? _a5 : void 0,
+        customName: (_b = entry.customName) != null ? _b : void 0,
+        color: (_c2 = entry.color) != null ? _c2 : void 0
+      }
+    });
+    await this.app.workspace.revealLeaf(leaf);
   }
 };
 /*! Bundled license information:

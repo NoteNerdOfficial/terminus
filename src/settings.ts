@@ -12,6 +12,22 @@ export const TERMINAL_PLACEMENT_LABELS: Record<TerminalPlacement, string> = {
   window: "New window",
 };
 
+export type CursorStyle = "block" | "bar" | "underline";
+
+export const CURSOR_STYLE_LABELS: Record<CursorStyle, string> = {
+  block: "Block",
+  bar: "Bar",
+  underline: "Underline",
+};
+
+export type WikiLinkInsertFormat = "wikilink" | "vault-relative" | "absolute";
+
+export const WIKI_LINK_INSERT_FORMAT_LABELS: Record<WikiLinkInsertFormat, string> = {
+  wikilink: "Wiki-link ([[Note]])",
+  "vault-relative": "Vault-relative path",
+  absolute: "Absolute path",
+};
+
 export interface TerminusSettings {
   fontSize: number;
   terminalPlacement: TerminalPlacement;
@@ -20,6 +36,14 @@ export interface TerminusSettings {
   confirmBulkActions: boolean;
   shellBinOverride: string;
   python3BinOverride: string;
+  fontFamilyOverride: string;
+  cursorStyle: CursorStyle;
+  cursorBlink: boolean;
+  scrollbackLines: number;
+  autoThemeTerminal: boolean;
+  startupCommand: string;
+  ribbonIcon: string;
+  wikiLinkInsertFormat: WikiLinkInsertFormat;
 }
 
 export const DEFAULT_SETTINGS: TerminusSettings = {
@@ -30,6 +54,14 @@ export const DEFAULT_SETTINGS: TerminusSettings = {
   confirmBulkActions: false,
   shellBinOverride: "",
   python3BinOverride: "",
+  fontFamilyOverride: "",
+  cursorStyle: "block",
+  cursorBlink: true,
+  scrollbackLines: 1000,
+  autoThemeTerminal: true,
+  startupCommand: "",
+  ribbonIcon: "square-terminal",
+  wikiLinkInsertFormat: "wikilink",
 };
 
 export const MIN_FONT_SIZE = 8;
@@ -37,6 +69,9 @@ export const MAX_FONT_SIZE = 32;
 
 export const MIN_AUTO_REVEAL_DELAY_MS = 0;
 export const MAX_AUTO_REVEAL_DELAY_MS = 5000;
+
+export const MIN_SCROLLBACK_LINES = 200;
+export const MAX_SCROLLBACK_LINES = 50000;
 
 export class TerminusSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: TerminusPlugin) {
@@ -46,6 +81,23 @@ export class TerminusSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+
+    new Setting(containerEl)
+      .setName("New terminal placement")
+      .setDesc(
+        'Where the ribbon icon and "Open Terminus" command open a new terminal. "Always ask" shows a quick menu at the click; any other choice opens directly there every time.'
+      )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(TERMINAL_PLACEMENT_LABELS)
+          .setValue(this.plugin.settings.terminalPlacement)
+          .onChange(async (value) => {
+            this.plugin.settings.terminalPlacement = value as TerminalPlacement;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl).setName("Terminal appearance").setHeading();
 
     new Setting(containerEl)
       .setName("Terminal font size")
@@ -62,17 +114,93 @@ export class TerminusSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("New terminal placement")
-      .setDesc(
-        'Where the ribbon icon and "Open Terminus" command open a new terminal. "Always ask" shows a quick menu at the click; any other choice opens directly there every time.'
-      )
+      .setName("Font family")
+      .setDesc('Leave blank to match Obsidian\'s own monospace font setting. Applies to all open terminal panels.')
+      .addText((text) =>
+        text
+          .setPlaceholder("e.g. Fira Code")
+          .setValue(this.plugin.settings.fontFamilyOverride)
+          .onChange(async (value) => {
+            await this.plugin.setFontFamilyOverride(value.trim());
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Cursor style")
       .addDropdown((dropdown) =>
         dropdown
-          .addOptions(TERMINAL_PLACEMENT_LABELS)
-          .setValue(this.plugin.settings.terminalPlacement)
+          .addOptions(CURSOR_STYLE_LABELS)
+          .setValue(this.plugin.settings.cursorStyle)
           .onChange(async (value) => {
-            this.plugin.settings.terminalPlacement = value as TerminalPlacement;
+            await this.plugin.setCursorStyle(value as CursorStyle);
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Cursor blink")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.cursorBlink).onChange(async (value) => {
+          await this.plugin.setCursorBlink(value);
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Scrollback")
+      .setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`)
+      .addSlider((slider) =>
+        slider
+          .setLimits(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, 100)
+          .setValue(this.plugin.settings.scrollbackLines)
+          .onChange(async (value) => {
+            this.plugin.settings.scrollbackLines = value;
             await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Auto theme")
+      .setDesc("Terminal colors follow Obsidian's light/dark toggle. Turn off to use xterm.js's own default palette instead.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.autoThemeTerminal).onChange(async (value) => {
+          await this.plugin.setAutoThemeTerminal(value);
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Startup command")
+      .setDesc('Runs automatically in every new terminal once the shell is ready (e.g. "claude"). Leave blank for none.')
+      .addText((text) =>
+        text
+          .setPlaceholder("e.g. claude")
+          .setValue(this.plugin.settings.startupCommand)
+          .onChange(async (value) => {
+            this.plugin.settings.startupCommand = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Wiki-link autocomplete format")
+      .setDesc('Format inserted when picking a note after typing "[[" in a terminal.')
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(WIKI_LINK_INSERT_FORMAT_LABELS)
+          .setValue(this.plugin.settings.wikiLinkInsertFormat)
+          .onChange(async (value) => {
+            this.plugin.settings.wikiLinkInsertFormat = value as WikiLinkInsertFormat;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Ribbon icon")
+      .setDesc("Any Lucide icon name (e.g. \"square-terminal\", \"terminal\"). Invalid names fall back to Obsidian's default icon silently.")
+      .addText((text) =>
+        text
+          .setPlaceholder("square-terminal")
+          .setValue(this.plugin.settings.ribbonIcon)
+          .onChange(async (value) => {
+            await this.plugin.setRibbonIcon(value.trim() || DEFAULT_SETTINGS.ribbonIcon);
           })
       );
 

@@ -13,6 +13,7 @@ export interface PendingChange {
   payload: PreToolUseHookPayload;
   diff: DiffResult;
   panelLabel: string;
+  panelColor: string | null;
   createdAt: number;
   /** How many tool calls have been coalesced into this row. */
   editCount: number;
@@ -32,6 +33,7 @@ export interface RecordChangeInput {
   payload: PreToolUseHookPayload;
   diff: DiffResult;
   panelLabel: string;
+  panelColor: string | null;
 }
 
 interface PendingEntry {
@@ -85,6 +87,7 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
           payload: input.payload,
           diff: input.diff,
           panelLabel: input.panelLabel,
+          panelColor: input.panelColor,
           createdAt: Date.now(),
           editCount: 1,
           brokenBacklinks: [],

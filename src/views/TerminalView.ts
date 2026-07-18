@@ -1,14 +1,19 @@
-import { ItemView, Notice, TFile, ViewStateResult, WorkspaceLeaf } from "obsidian";
-import { IDecoration, Terminal } from "@xterm/xterm";
+import { ItemView, Notice, Platform, TFile, ViewStateResult, WorkspaceLeaf } from "obsidian";
+import { IDecoration, ITheme, Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { pathJoin, pathRelative, randomHex, getAllEnvVars, bufferToString } from "terminus-node-bridge";
+import { pathJoin, pathRelative, randomHex, getAllEnvVars, bufferToString, fileExistsSync } from "terminus-node-bridge";
 import { PtyProcess } from "../pty/PtyProcess";
 import { getShellIntegrationEnv } from "../pty/shellIntegration";
 import { buildDiff } from "../server/diff";
 import { detectBacklinkBreakage } from "../backlinks/breakage";
 import { CommandTracker, TrackedCommand } from "../terminal/CommandTracker";
+import { CwdTracker } from "../terminal/CwdTracker";
+import { WikiLinkAutocomplete } from "../terminal/WikiLinkAutocomplete";
+import { openTerminalColorPicker } from "../terminal/TerminalColorPicker";
+import { refreshTabHeader, refreshPaneTitle } from "../terminal/tabHeaderColor";
 import { CommandHelpModal } from "../modals/CommandHelpModal";
+import { RenameTerminalModal } from "../modals/RenameTerminalModal";
 import { PreToolUseHookPayload } from "../hooks/types";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
@@ -33,16 +38,66 @@ function resolveMonospaceFontStack(): string {
   return resolved ? `${resolved}, ${fallback}` : fallback;
 }
 
+/**
+ * Same rationale as resolveMonospaceFontStack(): xterm's `theme` option
+ * needs literal color strings, not CSS custom properties, so Obsidian's
+ * computed theme variables are read once (and re-read on Obsidian's own
+ * "css-change" event) rather than passed through as var(...) references.
+ */
+/** Wraps a path in single quotes for safe insertion into a shell input
+ *  line, escaping any embedded single quotes with the standard '\'' trick.
+ *  Only bothers quoting when the path actually needs it (contains a space
+ *  or a shell-meaningful character) -- a plain path stays unquoted so it
+ *  reads naturally for the common case. */
+function shellQuoteIfNeeded(path: string): string {
+  if (!/[\s'"$`\\!*?[\](){}<>|;&~]/.test(path)) return path;
+  return `'${path.replace(/'/g, `'\\''`)}'`;
+}
+
+/** A dropped OS file's absolute path used to be readable straight off
+ *  `File.path` -- Electron deprecated and then (Electron 32, bundled since
+ *  Obsidian 1.7ish) removed it, requiring `webUtils.getPathForFile()`
+ *  instead (verified empirically: Obsidian's own paste/drop handling in
+ *  app.js already switched to it). Falls back to the old property for
+ *  older Electron builds, since both have shipped in the wild. */
+function getOsFilePath(file: File): string | undefined {
+  if (!Platform.isDesktopApp) return undefined;
+  try {
+    const { webUtils } = require("electron") as { webUtils?: { getPathForFile(file: File): string } };
+    const path = webUtils?.getPathForFile(file);
+    if (path) return path;
+  } catch {
+    // require("electron") unavailable in this context -- fall through.
+  }
+  return (file as File & { path?: string }).path;
+}
+
+function resolveXtermTheme(): ITheme {
+  const style = getComputedStyle(activeDocument.body);
+  const v = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+  return {
+    background: v("--background-primary", "#1e1e1e"),
+    foreground: v("--text-normal", "#dcdcdc"),
+    cursor: v("--text-accent", v("--interactive-accent", "#dcdcdc")),
+    selectionBackground: v("--text-selection", "#3a3d41"),
+  };
+}
+
 export class TerminalView extends ItemView {
   private term: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private serializeAddon: SerializeAddon | null = null;
   private pty: PtyProcess | null = null;
   private commandTracker: CommandTracker | null = null;
+  private cwdTracker: CwdTracker | null = null;
+  private wikiLinkAutocomplete: WikiLinkAutocomplete | null = null;
   private readonly failureBadges = new Map<number, IDecoration>();
   private readonly token: string;
   private restoredScrollback: string | null = null;
   private scrollbackApplied = false;
+  // The cwd a restored terminal should start its fresh shell in -- read
+  // once in setState (before onOpen/startPty run), consumed by startPty().
+  private restoredCwd: string | null = null;
   // Assigned eagerly in the constructor (not onOpen) since getDisplayText()
   // can be called by Obsidian before onOpen runs (e.g. restoring tab titles
   // from the saved workspace layout). Resets each session -- not persisted
@@ -51,6 +106,11 @@ export class TerminalView extends ItemView {
   // terminals' PreToolUse traffic correctly isolated).
   private readonly terminalNumber: number;
   private resizeObserver: ResizeObserver | null = null;
+  // Display identity -- purely cosmetic, no effect on the review/hook
+  // plumbing (still keyed by `token` above). `color` is a literal CSS color
+  // string (see terminal/colorPalette.ts), not an indirect id.
+  private customName: string | null = null;
+  private color: string | null = null;
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -63,11 +123,11 @@ export class TerminalView extends ItemView {
   }
 
   getDisplayText(): string {
-    return `Terminus ${this.terminalNumber}`;
+    return this.customName ?? `Terminus ${this.terminalNumber}`;
   }
 
   getIcon(): string {
-    return "square-terminal";
+    return this.plugin.settings.ribbonIcon;
   }
 
   async onOpen(): Promise<void> {
@@ -77,9 +137,12 @@ export class TerminalView extends ItemView {
     const xtermContainer = container.createDiv({ cls: "terminus-xterm-container" });
 
     this.term = new Terminal({
-      cursorBlink: true,
+      cursorBlink: this.plugin.settings.cursorBlink,
+      cursorStyle: this.plugin.settings.cursorStyle,
       fontSize: this.plugin.settings.fontSize,
-      fontFamily: resolveMonospaceFontStack(),
+      fontFamily: this.plugin.settings.fontFamilyOverride.trim() || resolveMonospaceFontStack(),
+      scrollback: this.plugin.settings.scrollbackLines,
+      theme: this.plugin.settings.autoThemeTerminal ? resolveXtermTheme() : undefined,
       allowProposedApi: true,
     });
     this.fitAddon = new FitAddon();
@@ -91,7 +154,19 @@ export class TerminalView extends ItemView {
 
     this.applyRestoredScrollbackIfPending();
 
+    // Obsidian fires this on every theme toggle (dark/light, or switching
+    // Obsidian themes entirely) -- registerEvent ties its lifetime to this
+    // view, so it's torn down automatically on close, no manual dispose.
+    this.registerEvent(this.app.workspace.on("css-change", () => this.applyTheme()));
+
     this.commandTracker = new CommandTracker(this.term, (cmd) => this.handleCommandFinished(cmd));
+    // Debounced, not a raw write -- but without this, workspace.json only
+    // picks up a fresh cwd whenever Obsidian happens to re-serialize the
+    // layout for its own reasons (pane changes, etc.), which a terminal
+    // session cd'ing around never triggers on its own. Without it, a
+    // restart resumes wherever the shell happened to be at the *last*
+    // incidental layout save, not the cwd the user actually left it in.
+    this.cwdTracker = new CwdTracker(this.term, () => this.app.workspace.requestSaveLayout());
 
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload),
@@ -99,8 +174,41 @@ export class TerminalView extends ItemView {
 
     await this.startPty();
 
-    this.term.onData((data) => this.pty?.write(data));
+    this.wikiLinkAutocomplete = new WikiLinkAutocomplete({
+      app: this.app,
+      term: this.term,
+      xtermContainer,
+      getVaultBasePath: () => this.plugin.getVaultBasePath(),
+      getInsertFormat: () => this.plugin.settings.wikiLinkInsertFormat,
+      onInsert: (text) => this.pty?.write(text),
+      onPassthrough: (text) => this.pty?.write(text),
+    });
+    this.term.onData((data) => this.wikiLinkAutocomplete?.handleData(data));
     this.term.onResize(({ cols, rows }) => this.pty?.resize(cols, rows));
+
+    // xterm.js's default key handling sends the same \r for Shift+Enter as
+    // for plain Enter (evaluateKeyboardEvent only special-cases Alt+Enter,
+    // not Shift) -- there's no escape sequence distinguishing them without a
+    // protocol the pty helper's shell won't speak (kitty keyboard protocol,
+    // CSI u). Readline-style multiline prompts (e.g. Claude Code's own CLI)
+    // instead recognize a literal \n written directly as "insert newline"
+    // vs \r's "submit", so intercept Shift+Enter here and send \n instead of
+    // letting it fall through to xterm's default \r.
+    this.term.attachCustomKeyEventHandler((event) => {
+      if (
+        event.type === "keydown" &&
+        event.key === "Enter" &&
+        event.shiftKey &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey
+      ) {
+        event.preventDefault();
+        this.pty?.write("\n");
+        return false;
+      }
+      return true;
+    });
 
     // Obsidian's own ItemView.onResize() only fires for layout changes it
     // recognizes as a leaf resize (e.g. a full window resize) -- it's not
@@ -111,6 +219,61 @@ export class TerminalView extends ItemView {
     // every real size change regardless of cause.
     this.resizeObserver = new ResizeObserver(() => this.fitAddon?.fit());
     this.resizeObserver.observe(xtermContainer);
+
+    xtermContainer.addEventListener("dragover", (evt) => evt.preventDefault());
+    xtermContainer.addEventListener("drop", (evt) => this.handleDrop(evt));
+
+    this.addAction("pencil", "Rename terminal", () => void this.promptRename());
+    this.addAction("palette", "Set terminal color", (evt) =>
+      openTerminalColorPicker(evt.currentTarget as HTMLElement, this.color, (color) => this.setColor(color))
+    );
+
+    // setState() may have already run (restoring a saved name/color) before
+    // this point -- apply it now that the container/leaf are actually
+    // ready, rather than relying on setState's own timing.
+    this.refreshIdentity();
+  }
+
+  private async promptRename(): Promise<void> {
+    const name = await RenameTerminalModal.prompt(this.app, this.getDisplayText());
+    this.customName = name;
+    this.refreshIdentity();
+  }
+
+  private setColor(color: string | null): void {
+    this.color = color;
+    this.refreshIdentity();
+  }
+
+  private refreshIdentity(): void {
+    refreshTabHeader(this.leaf, this.color);
+    refreshPaneTitle(this, this.getDisplayText());
+  }
+
+  /** Inserts a dropped file's absolute path into the terminal's input line
+   *  (typed, not executed -- same "propose, don't run" principle as the
+   *  suggested-fix flow). Handles both an OS-level drag (Finder/Explorer,
+   *  giving real files resolved via getOsFilePath()) and Obsidian's own
+   *  internal vault-file drag (which carries a vault-relative path as
+   *  plain text, not a real File). */
+  private handleDrop(evt: DragEvent): void {
+    evt.preventDefault();
+    const dataTransfer = evt.dataTransfer;
+    if (!dataTransfer) return;
+
+    const osFile = dataTransfer.files[0];
+    const osFilePath = osFile && getOsFilePath(osFile);
+    if (osFilePath) {
+      this.pty?.write(shellQuoteIfNeeded(osFilePath));
+      return;
+    }
+
+    const text = dataTransfer.getData("text/plain").trim();
+    if (!text) return;
+
+    const abstractFile = this.app.vault.getAbstractFileByPath(text);
+    const absolutePath = abstractFile ? pathJoin(this.plugin.getVaultBasePath(), text) : text;
+    this.pty?.write(shellQuoteIfNeeded(absolutePath));
   }
 
   async onClose(): Promise<void> {
@@ -119,6 +282,21 @@ export class TerminalView extends ItemView {
     this.plugin.reviewServer.unregister(this.token);
     this.pty?.kill();
     this.commandTracker?.dispose();
+
+    // Captured before disposal so "Rescue closed terminal" can bring the
+    // transcript (and cwd) back later -- same content getState() would have
+    // saved for a restart, just routed into the in-session buffer instead.
+    this.plugin.closedTerminals.push({
+      displayText: this.getDisplayText(),
+      scrollback: this.serializeAddon?.serialize({ scrollback: SCROLLBACK_PERSIST_LINES }) ?? "",
+      cwd: this.cwdTracker?.getCwd() ?? this.restoredCwd,
+      customName: this.customName,
+      color: this.color,
+      closedAt: Date.now(),
+    });
+
+    this.cwdTracker?.dispose();
+    this.wikiLinkAutocomplete?.dispose();
     for (const decoration of this.failureBadges.values()) decoration.dispose();
     this.failureBadges.clear();
     this.term?.dispose();
@@ -128,11 +306,15 @@ export class TerminalView extends ItemView {
     return {
       ...super.getState(),
       scrollback: this.serializeAddon?.serialize({ scrollback: SCROLLBACK_PERSIST_LINES }) ?? "",
+      cwd: this.cwdTracker?.getCwd() ?? this.restoredCwd ?? undefined,
+      customName: this.customName ?? undefined,
+      color: this.color ?? undefined,
     };
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
-    const scrollback = (state as { scrollback?: unknown } | null)?.scrollback;
+    const typedState = state as { scrollback?: unknown; cwd?: unknown; customName?: unknown; color?: unknown } | null;
+    const scrollback = typedState?.scrollback;
     if (typeof scrollback === "string" && scrollback.length > 0) {
       if (this.term) {
         this.writeRestoredScrollback(scrollback);
@@ -142,6 +324,21 @@ export class TerminalView extends ItemView {
         this.restoredScrollback = scrollback;
       }
     }
+    if (typeof typedState?.cwd === "string" && typedState.cwd.length > 0) {
+      this.restoredCwd = typedState.cwd;
+    }
+    // customName/color are plain display fields (no PTY-spawn-time
+    // dependency like cwd, no terminal-buffer dependency like scrollback),
+    // so they're just assigned directly -- refreshIdentity() re-applies
+    // them once onOpen's DOM/leaf actually exist, whichever order this
+    // races with onOpen in.
+    if (typeof typedState?.customName === "string" && typedState.customName.length > 0) {
+      this.customName = typedState.customName;
+    }
+    if (typeof typedState?.color === "string" && typedState.color.length > 0) {
+      this.color = typedState.color;
+    }
+    this.refreshIdentity();
     await super.setState(state, result);
   }
 
@@ -172,6 +369,28 @@ export class TerminalView extends ItemView {
     this.pty?.resize(this.term.cols, this.term.rows);
   }
 
+  applyFontFamily(): void {
+    if (!this.term) return;
+    this.term.options.fontFamily = this.plugin.settings.fontFamilyOverride.trim() || resolveMonospaceFontStack();
+    this.fitAddon?.fit();
+    this.pty?.resize(this.term.cols, this.term.rows);
+  }
+
+  applyCursorStyle(): void {
+    if (!this.term) return;
+    this.term.options.cursorStyle = this.plugin.settings.cursorStyle;
+  }
+
+  applyCursorBlink(): void {
+    if (!this.term) return;
+    this.term.options.cursorBlink = this.plugin.settings.cursorBlink;
+  }
+
+  applyTheme(): void {
+    if (!this.term) return;
+    this.term.options.theme = this.plugin.settings.autoThemeTerminal ? resolveXtermTheme() : undefined;
+  }
+
   onResize(): void {
     this.fitAddon?.fit();
   }
@@ -183,11 +402,15 @@ export class TerminalView extends ItemView {
     const helperPath = pathJoin(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
 
+    // A restored cwd might no longer exist (deleted/moved directory since
+    // the last session) -- fall back rather than handing PtyProcess a path
+    // that would make the shell's own cwd-change (or the spawn itself) fail.
+    const restoredCwdStillExists = this.restoredCwd && fileExistsSync(this.restoredCwd);
     this.pty = new PtyProcess({
       pythonBin,
       helperPath,
       shell,
-      cwd: this.plugin.getVaultBasePath(),
+      cwd: restoredCwdStillExists ? this.restoredCwd! : this.plugin.getVaultBasePath(),
       cols: this.term?.cols ?? 80,
       rows: this.term?.rows ?? 24,
       env: {
@@ -204,6 +427,10 @@ export class TerminalView extends ItemView {
     this.pty.on("error", (err) => new Notice(`Terminus: PTY error: ${errorMessage(err)}`));
     this.pty.on("exit", ({ code }: { code: number | null }) => {
       this.term?.write(`\r\n[process exited${code !== null ? ` with code ${code}` : ""}]\r\n`);
+    });
+    this.pty.on("ready", () => {
+      const command = this.plugin.settings.startupCommand.trim();
+      if (command) this.pty?.write(`${command}\r`);
     });
 
     this.pty.start();
@@ -294,6 +521,7 @@ export class TerminalView extends ItemView {
       payload,
       diff,
       panelLabel: this.getDisplayText(),
+      panelColor: this.color,
     });
     // Doesn't reveal/focus the panel directly here -- Claude may make
     // several edits in one turn, and popping the sidebar open on each one

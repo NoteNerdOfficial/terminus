@@ -22,10 +22,15 @@ Edits land on disk immediately; you review what changed afterwards, with the opt
 ### Terminal
 
 - **A real PTY-backed terminal** — full interactive shell (zsh/bash), not a fake console. Run anything, not just `claude`.
-- **Multiple concurrent terminals** — open as many as you want; each is independently labeled ("Terminus 1", "Terminus 2", ...) and runs its own session.
+- **Multiple concurrent terminals** — open as many as you want; each runs its own session, defaulting to a numbered label ("Terminus 1", "Terminus 2", ...).
+- **Rename and color-code terminals** — a pencil and palette icon in each terminal's own header let you give it a custom name and a color tag. Both show on the terminal's native tab, carry through into its Pending Changes group so you can tell at a glance which session made which edits, and survive an Obsidian restart (or a "Rescue closed terminal", below).
 - **Choose where a new terminal opens** — clicking the ribbon icon (or running "Open Terminus") shows a quick menu: new tab, split right, split down, or new window. Set a fixed default in Settings to skip the menu entirely.
-- **Adjustable font size** — a settings slider, plus `Cmd/Ctrl+=` / `Cmd/Ctrl+-` / `Cmd/Ctrl+0` to zoom in/out/reset live.
-- **Scrollback persistence** — closing and reopening Obsidian restores what was on screen, clearly marked as a previous session.
+- **Drag-and-drop path insertion** — drag a note from Obsidian's file explorer, or a file from Finder/Explorer, onto a terminal to insert its absolute path into the input line (quoted if it has spaces), unexecuted.
+- **Wiki-link autocomplete** — type `[[` in a terminal to fuzzy-search your vault's notes and insert one as a wiki-link, a vault-relative path, or an absolute path — configurable in Settings.
+- **Scrollback and working-directory persistence** — closing and reopening Obsidian restores what was on screen (clearly marked as a previous session) and resumes each shell in the same directory you left it in, not the vault root.
+- **Rescue closed terminals** — closed a tab by accident? The "Rescue closed terminal" command brings back its transcript, working directory, name, and color from a 10-entry buffer.
+- **Startup command** — optionally run a fixed command (e.g. `claude`) automatically in every new terminal once its shell is ready.
+- **Deep appearance settings** — font size and family, cursor style and blink, scrollback size, and a customizable ribbon icon, plus a terminal color theme that follows Obsidian's light/dark toggle automatically (`Cmd/Ctrl+=` / `Cmd/Ctrl+-` / `Cmd/Ctrl+0` also zoom font size live).
 
 ### Claude Code review workflow
 
@@ -57,6 +62,7 @@ Edits land on disk immediately; you review what changed afterwards, with the opt
 | Open Terminus | — |
 | Open Pending Changes | — |
 | Open Action Log | — |
+| Rescue closed terminal | — |
 | Increase terminal font size | `Cmd/Ctrl` `=` |
 | Decrease terminal font size | `Cmd/Ctrl` `-` |
 | Reset terminal font size | `Cmd/Ctrl` `0` |
@@ -71,9 +77,11 @@ Edits land on disk immediately; you review what changed afterwards, with the opt
 
 **Terminal.** There's no native-addon PTY dependency (no `node-pty`, no Electron-ABI rebuild headaches). A small bundled Python script (`resources/pty_helper.py`) allocates a real pseudo-terminal via Python's stdlib and proxies bytes between the PTY and its own stdio; the plugin talks to it with a plain `child_process.spawn`. The terminal UI is `xterm.js`.
 
-**Shell integration.** Two tiny rc scripts (`resources/shell-integration/{zsh,bash}/`) get sourced by redirecting `ZDOTDIR` (zsh) or `HOME` (bash) for the *spawned shell only* — never the plugin's own Python helper process — restoring the real value immediately and chain-loading your actual `.zshrc`/`.bash_profile` before adding invisible `OSC 133` markers around each command. Nothing on disk is modified.
+**Shell integration.** Two tiny rc scripts (`resources/shell-integration/{zsh,bash}/`) get sourced by redirecting `ZDOTDIR` (zsh) or `HOME` (bash) for the *spawned shell only* — never the plugin's own Python helper process — restoring the real value immediately and chain-loading your actual `.zshrc`/`.bash_profile` before adding invisible `OSC 133` command-boundary markers and an `OSC 7` current-directory marker around each prompt. Nothing on disk is modified.
 
 **Command help.** "Explain this" and "Suggest a fix" are standalone `claude -p` calls with `--allowedTools ""` — no file or shell access, pure Q&A — independent of whatever's running in any terminal, so they work even if no terminal has `claude` open at all.
+
+**Wiki-link autocomplete.** A real terminal has no local echo — everything on screen is echoed back by the *remote* shell's own readline, not rendered by the plugin. So typing `[[` can't be reacted to after the fact; it's intercepted before either character ever reaches the shell, and a resolved link/path is written in its place only once you actually pick one.
 
 ## Requirements
 
@@ -96,26 +104,31 @@ The build bundles `src/main.ts` into `main.js` with esbuild, and regenerates `st
 | Path | Role |
 | --- | --- |
 | `src/main.ts` | Plugin entry: lifecycle, commands, settings persistence |
-| `src/settings.ts` | Settings tab (font size) + settings type/defaults |
-| `src/views/TerminalView.ts` | The terminal panel: xterm.js, PTY wiring, failure badges |
+| `src/settings.ts` | Settings tab + settings type/defaults |
+| `src/views/TerminalView.ts` | The terminal panel: xterm.js, PTY wiring, failure badges, rename/color identity |
 | `src/views/PendingChangesView.ts` | The Pending Changes sidebar panel |
 | `src/views/DiffSplitView.ts` | The Split Diff view (one pending change, opened per-file) |
 | `src/diff/buildDiffLines.ts`, `renderDiff.ts` | Line-structured, word-emphasized diff model + gutter/minimap rendering |
 | `src/diff/hunks.ts` | Groups a diff into context runs and hunks with stable offsets — shared by the Split Diff renderer and per-hunk resolution |
 | `src/diff/renderSplitDiff.ts` | Renders the Split Diff view's side-by-side body and per-hunk controls |
 | `src/pty/PtyProcess.ts`, `shellDetect.ts`, `shellIntegration.ts` | Node-side PTY process wrapper, binary resolution, shell-integration env |
+| `src/terminal/oscHandler.ts` | Shared workaround for xterm.js's non-functional public `registerOscHandler` |
 | `src/terminal/CommandTracker.ts` | OSC 133 command-boundary/exit-code tracking |
+| `src/terminal/CwdTracker.ts` | OSC 7 working-directory tracking |
+| `src/terminal/WikiLinkAutocomplete.ts` | `[[` fuzzy note picker inside the terminal |
+| `src/terminal/TerminalColorPicker.ts`, `colorPalette.ts`, `tabHeaderColor.ts` | Color-swatch popover, preset palette, and the native-tab tint/title-refresh |
 | `src/server/ReviewServer.ts`, `diff.ts` | Local hook-bridge HTTP server, diff computation |
 | `src/state/PendingChangesStore.ts`, `ActionLog.ts` | In-memory pending/undo state, persisted action log |
+| `src/state/ClosedTerminalBuffer.ts` | Ring buffer backing "Rescue closed terminal" |
 | `src/hooks/provisionSettings.ts`, `types.ts` | `.claude/settings.local.json` provisioning, hook payload types |
 | `src/editor/inlineDiff.ts`, `openWithDiff.ts` | CodeMirror 6 inline diff overlay |
 | `src/backlinks/breakage.ts` | Backlink-breakage detection |
 | `src/git/gitDiff.ts` | Git HEAD baseline diff |
 | `src/claude/headlessAssist.ts` | Standalone `claude -p` calls for explain/suggest-fix |
-| `src/modals/` | Diff preview, action log, and command-help modals |
+| `src/modals/` | Diff preview, action log, command-help, rename, and rescue-terminal modals |
 | `resources/pty_helper.py` | PTY allocation helper (spawned by the plugin) |
 | `resources/hook-bridge.sh` | `PreToolUse` hook → local server bridge |
-| `resources/shell-integration/{zsh,bash}/` | Shell rc scripts for command tracking |
+| `resources/shell-integration/{zsh,bash}/` | Shell rc scripts for command tracking and cwd tracking |
 
 ## License
 

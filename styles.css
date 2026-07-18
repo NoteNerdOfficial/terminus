@@ -211,19 +211,18 @@
 }
 
 /* Pending Changes sidebar panel -- Design 3a ("Scoped groups, one primary
-   CTA") from the approved Diff Panel Redesign. This palette is hardcoded
-   (not built from Obsidian's --background-* / --text-* theme variables) so
-   the panel matches the design exactly regardless of the user's active
-   Obsidian theme -- a deliberate exception to the rest of the plugin,
-   which stays theme-adaptive. */
+   CTA") from the approved Diff Panel Redesign. Built from Obsidian's
+   --background-* / --text-* theme variables (with fallbacks matching the
+   original dark-mode design) so the panel follows the user's active
+   Obsidian theme, same as the rest of the plugin. */
 
 .terminus-pending-view {
   padding: 0;
-  background-color: #1a1a1c;
-  border: 1px solid #2a2a2d;
+  background-color: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
   border-radius: 10px;
   overflow: hidden;
-  color: #d6d6d9;
+  color: var(--text-normal);
 }
 
 /* Full reset: Obsidian's own button chrome (background, border, box-shadow,
@@ -266,7 +265,7 @@
 }
 
 .terminus-pending-empty {
-  color: #77777c;
+  color: var(--text-muted);
   font-size: 12.5px;
   padding: 14px;
 }
@@ -276,8 +275,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 12px 14px;
-  background-color: #1f1f22;
-  border-bottom: 1px solid #2a2a2d;
+  background-color: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .terminus-pending-header-title-row {
@@ -287,7 +286,7 @@
 }
 
 .terminus-pending-header-title {
-  color: #e8e8ea;
+  color: var(--text-normal);
   font-size: 14px;
   font-weight: 700;
 }
@@ -298,7 +297,7 @@
 }
 
 .terminus-pending-header-subtitle {
-  color: #77777c;
+  color: var(--text-muted);
   font-size: 11.5px;
   margin-top: 1px;
 }
@@ -320,8 +319,8 @@
    we want plain text, or vice versa. */
 .terminus-pending-view .terminus-btn-outline {
   background: transparent;
-  border: 1px solid #3a3a3d;
-  color: #a8a8ad;
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
   border-radius: 6px;
   padding: 6px 10px;
   font-size: 11.5px;
@@ -349,13 +348,13 @@
 .terminus-pending-view .terminus-btn-ghost {
   background: transparent;
   border: none;
-  color: #6d6d72;
+  color: var(--text-faint);
   padding: 5px 6px;
   font-size: 10.5px;
 }
 
 .terminus-pending-view .terminus-btn-ghost:hover {
-  color: #a8a8ad;
+  color: var(--text-muted);
 }
 
 .terminus-pending-view .terminus-btn-ghost-accent {
@@ -377,7 +376,8 @@
 }
 
 .terminus-group {
-  border-bottom: 1px solid #232326;
+  position: relative;
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .terminus-group:last-child {
@@ -389,13 +389,13 @@
   align-items: center;
   gap: 8px;
   padding: 10px 14px;
-  background-color: #19191b;
+  background-color: var(--background-secondary);
   cursor: pointer;
 }
 
 .terminus-group-chevron {
   flex: 0 0 auto;
-  color: #77777c;
+  color: var(--text-muted);
   font-size: 18px;
   width: 18px;
   text-align: center;
@@ -417,7 +417,7 @@
 }
 
 .terminus-group-title {
-  color: #c8c8cd;
+  color: var(--text-normal);
   font-size: 12px;
   font-weight: 600;
 }
@@ -425,18 +425,18 @@
 /* File count now sits on its own line below the terminal name, matching
    the filename/path two-line treatment used for individual file rows. */
 .terminus-group-count {
-  color: #5a5a5e;
+  color: var(--text-faint);
   font-size: 11px;
 }
 
 .terminus-group-stat-add {
-  color: #4ade80;
+  color: var(--text-success, #4ade80);
   font-size: 10.5px;
   font-family: var(--font-monospace);
 }
 
 .terminus-group-stat-remove {
-  color: #f87171;
+  color: var(--text-error, #f87171);
   font-size: 10.5px;
   font-family: var(--font-monospace);
 }
@@ -471,17 +471,17 @@
 }
 
 .terminus-pending-row-summary:hover {
-  background-color: #232326;
+  background-color: var(--background-modifier-hover);
 }
 
 .terminus-pending-row-summary.is-expanded {
-  background-color: #232326;
+  background-color: var(--background-modifier-hover);
   border-radius: 0;
 }
 
 .terminus-pending-chevron {
   flex: 0 0 auto;
-  color: #77777c;
+  color: var(--text-muted);
   font-size: 20px;
   width: 20px;
   text-align: center;
@@ -505,7 +505,7 @@
 }
 
 .terminus-pending-filename {
-  color: #e0e0e3;
+  color: var(--text-normal);
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
@@ -514,31 +514,31 @@
 }
 
 .terminus-pending-row-summary.is-expanded .terminus-pending-filename {
-  color: #e8e8ea;
+  color: var(--text-normal);
   font-weight: 600;
 }
 
 .terminus-pending-edit-count {
   flex: 0 0 auto;
   font-size: 10.5px;
-  color: #77777c;
-  background-color: #2a2a2d;
+  color: var(--text-muted);
+  background-color: var(--background-modifier-border);
   border-radius: 4px;
   padding: 0 4px;
 }
 
 .terminus-backlink-warning {
   font-size: 11px;
-  color: #d9a441;
+  color: var(--color-yellow, #d9a441);
 }
 
 .terminus-backlink-warning-detail {
-  border: 1px solid #d9a441;
+  border: 1px solid var(--color-yellow, #d9a441);
   border-radius: 4px;
   padding: 6px 8px;
   margin: 8px 10px 0;
   font-size: 11.5px;
-  color: #d6d6d9;
+  color: var(--text-normal);
 }
 
 .terminus-backlink-warning-detail ul {
@@ -548,7 +548,7 @@
 
 .terminus-pending-path {
   font-size: 11px;
-  color: #77777c;
+  color: var(--text-muted);
   font-family: var(--font-monospace);
   white-space: nowrap;
   overflow: hidden;
@@ -566,13 +566,13 @@
    which no longer swaps to a separate full-text button set on expand. */
 .terminus-pending-view .terminus-action-open {
   background: transparent;
-  color: #6d6d72;
+  color: var(--text-faint);
   font-size: 10.5px;
   padding: 5px 6px;
 }
 
 .terminus-pending-view .terminus-action-open:hover {
-  color: #a8a8ad;
+  color: var(--text-muted);
 }
 
 /* Pulls Split Diff in closer to Open -- the container's flex `gap` (see
@@ -598,16 +598,16 @@
 
 .terminus-pending-view .terminus-icon-btn-reject {
   background: transparent;
-  border: 1px solid #3a3a3d;
-  color: #a8a8ad;
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
 }
 
-/* Deliberately not a solid fill -- a dark chip with an accent-colored
+/* Deliberately not a solid fill -- a chip with an accent-colored
    outline and glyph, matching the design's "available but not yet
    committed" tone for the compact accept control. Only the global/group
    Keep all buttons get the full solid-accent CTA treatment. */
 .terminus-pending-view .terminus-icon-btn-accept {
-  background: #2a2a2d;
+  background: var(--background-modifier-border);
   border: 1px solid var(--interactive-accent, #7c6ff0);
   color: var(--interactive-accent, #c9c2ff);
   font-weight: 600;
@@ -621,7 +621,7 @@
   display: flex;
   align-items: center;
   padding: 8px 10px;
-  background-color: #1a1a1c;
+  background-color: var(--background-primary);
 }
 
 /* Segmented-pill tab control (Diff / Preview / vs git HEAD): one rounded
@@ -631,21 +631,21 @@
   display: inline-flex;
   gap: 2px;
   padding: 2px;
-  background-color: #141416;
+  background-color: var(--background-secondary);
   border-radius: 7px;
 }
 
-/* Unselected tabs should show the track's own dark background (#141416,
-   set above), not a separate grey button-chrome layer on top of it.
-   Obsidian's base button styling has enough specificity to still paint its
-   own grey background here despite the panel-wide reset, so this needs its
-   own explicit override; !important is paired on .is-active below so the
-   selected tab's purple isn't clobbered by this same rule. */
+/* Unselected tabs should show the track's own background (--background-
+   secondary, set above), not a separate grey button-chrome layer on top of
+   it. Obsidian's base button styling has enough specificity to still paint
+   its own grey background here despite the panel-wide reset, so this needs
+   its own explicit override; !important is paired on .is-active below so
+   the selected tab's accent color isn't clobbered by this same rule. */
 .terminus-body-view-toggle button {
   border-radius: 5px;
   padding: 5px 12px;
   font-size: 11px;
-  color: #8a8a8f;
+  color: var(--text-muted);
   background-color: transparent !important;
 }
 
@@ -659,22 +659,22 @@
   max-height: 40vh;
   overflow-y: auto;
   padding: 8px 10px;
-  color: #d6d6d9;
-  background-color: #1a1a1c;
+  color: var(--text-normal);
+  background-color: var(--background-primary);
 }
 
-/* ---- Diff body inside the pending panel: overrides the shared (theme-
-   adaptive) diff styles above with Design 3a's exact hardcoded palette.
-   Scoped under .terminus-pending-view so the same diff renderer
+/* ---- Diff body inside the pending panel: Design 3a's exact layout
+   (compact padding, gutter widths, line height) with theme-adaptive
+   colors, matching the shared diff styles above and the same diff renderer
    used elsewhere (CommandHelpModal's transcript, the inline editor diff
-   overlay) keeps respecting the user's actual Obsidian theme. */
+   overlay). */
 
 .terminus-pending-view .terminus-diff-body {
   border: none;
   border-radius: 0;
   padding: 0;
   margin: 0;
-  background-color: #1a1a1c;
+  background-color: var(--background-primary);
   max-height: 200px;
 }
 
@@ -685,18 +685,18 @@
 }
 
 .terminus-pending-view .terminus-diff-line-context {
-  color: #9a9a9f;
+  color: var(--text-muted);
 }
 
 .terminus-pending-view .terminus-diff-line-remove {
-  color: #77777c;
+  color: var(--text-faint);
   padding: 4px 10px;
-  border-bottom: 1px solid #26262a;
+  border-bottom: 1px solid var(--background-modifier-border);
   background: none;
 }
 
 .terminus-pending-view .terminus-diff-line-add {
-  color: #c9e8d4;
+  color: var(--text-normal);
   background-color: rgba(74, 222, 128, 0.06);
 }
 
@@ -704,12 +704,12 @@
   min-width: 20px;
   padding-right: 0;
   margin-right: 8px;
-  color: #5a5a5e;
+  color: var(--text-faint);
   white-space: nowrap;
 }
 
 .terminus-pending-view .terminus-diff-line-add .terminus-diff-gutter-num {
-  color: #4ade80;
+  color: var(--text-success, #4ade80);
 }
 
 .terminus-pending-view .terminus-diff-marker {
@@ -717,11 +717,11 @@
 }
 
 .terminus-pending-view .terminus-diff-line-remove .terminus-diff-marker {
-  color: #f87171;
+  color: var(--text-error, #f87171);
 }
 
 .terminus-pending-view .terminus-diff-line-add .terminus-diff-marker {
-  color: #4ade80;
+  color: var(--text-success, #4ade80);
 }
 
 /* Word-level emphasis within an otherwise-shared line: the design's own
@@ -741,34 +741,22 @@
 
 .terminus-pending-view .terminus-diff-minimap {
   width: 3px;
-  background-color: #141416;
+  background-color: var(--background-secondary);
   margin: 0 6px 0 0;
   border-radius: 2px;
 }
 
 .terminus-pending-view .terminus-diff-minimap-tick-add {
-  background-color: #4ade80;
+  background-color: var(--text-success, #4ade80);
 }
 
 .terminus-pending-view .terminus-diff-minimap-tick-remove {
-  background-color: #f87171;
+  background-color: var(--text-error, #f87171);
 }
 
 .terminus-pending-view .terminus-diff-minimap-viewport {
-  background-color: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-}
-
-/* The shared +N/-N stat classes (header subtitle, per-row stats, and the
-   history section's Kept/Reverted labels) default to Obsidian's theme
-   success/error variables everywhere else in the plugin -- pin them to the
-   design's exact green/red here too, for consistency with the diff body. */
-.terminus-pending-view .terminus-diff-stat-add {
-  color: #4ade80;
-}
-
-.terminus-pending-view .terminus-diff-stat-remove {
-  color: #f87171;
+  background-color: var(--background-modifier-hover);
+  border: 1px solid var(--background-modifier-border);
 }
 
 /* Recently resolved / undo history */
@@ -813,22 +801,21 @@
   color: var(--text-muted);
 }
 
-/* History lives inside the same hardcoded-dark pending-view card (see
-   Design 3a above) but its own rules still use theme variables -- pin the
-   ones that would otherwise be illegible/inconsistent against #1a1a1c
-   regardless of the user's actual Obsidian theme. */
+/* History lives inside the same theme-adaptive pending-view card as the
+   rest of the panel (see Design 3a above); these overrides just tune
+   spacing/sizing for the card layout, colors stay theme variables. */
 .terminus-pending-view .terminus-history-section {
-  border-top: 1px solid #2a2a2d;
+  border-top: 1px solid var(--background-modifier-border);
   padding: 8px 14px;
   margin-top: 0;
 }
 
 .terminus-pending-view .terminus-history-toggle {
-  color: #77777c;
+  color: var(--text-muted);
 }
 
 .terminus-pending-view .terminus-history-filename {
-  color: #a8a8ad;
+  color: var(--text-muted);
 }
 
 .terminus-view-full-log {
@@ -1083,6 +1070,117 @@
 .terminus-split-diff-hunk-controls {
   margin: 6px 0;
   border-radius: 4px;
+}
+
+/* Wiki-link autocomplete popover (see terminal/WikiLinkAutocomplete.ts) --
+   positioned via inline left/top styles computed from the terminal's own
+   cell geometry, not from CSS layout. */
+.terminus-wikilink-popover {
+  position: fixed;
+  z-index: var(--layer-popover, 70);
+  min-width: 200px;
+  max-width: 360px;
+  background-color: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-s);
+  padding: 4px;
+  font-size: var(--font-ui-small);
+}
+
+.terminus-wikilink-item {
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-normal);
+}
+
+.terminus-wikilink-item.is-selected {
+  background-color: var(--interactive-accent, #7c6ff0);
+  color: var(--text-on-accent, #fff);
+}
+
+.terminus-wikilink-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Rename terminal modal (see modals/RenameTerminalModal.ts) */
+.terminus-rename-modal-input {
+  width: 100%;
+  margin: 8px 0;
+}
+
+/* Terminal color picker popover (see terminal/TerminalColorPicker.ts) --
+   positioned via inline left/top styles off the triggering action button. */
+.terminus-color-picker-popover {
+  position: fixed;
+  z-index: var(--layer-popover, 70);
+  display: flex;
+  gap: 6px;
+  background-color: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-s);
+  padding: 6px;
+}
+
+.terminus-color-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+
+.terminus-color-swatch:hover {
+  border-color: var(--text-muted);
+}
+
+.terminus-color-swatch.is-selected {
+  border-color: var(--text-normal);
+}
+
+.terminus-color-swatch-none {
+  background: linear-gradient(45deg, transparent 45%, var(--text-muted) 45%, var(--text-muted) 55%, transparent 55%);
+  background-color: var(--background-modifier-border);
+}
+
+/* Colored terminal identity on the native tab -- applied via
+   terminal/tabHeaderColor.ts, which appends a real .terminus-tab-color-bar
+   div (not a ::before/::after: .workspace-tab-header already uses both of
+   its own pseudo-elements for the decorative rounded tab corners, and
+   .workspace-tab-header-inner clips its own overflow with the outer
+   element's padding insetting it from the tab's true edge -- confirmed by
+   reading Obsidian's own app.css, not guessed). .workspace-tab-header is
+   already `position: relative` in Obsidian's own base styles, so this bar
+   (a sibling of -inner, appended after it) needs no positioning or
+   z-index override of its own to sit flush at the tab's left edge and
+   paint on top. Transparent background when uncolored, rather than adding/
+   removing the element, since refreshTabHeader() reuses the same node. */
+.terminus-tab-color-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  pointer-events: none;
+}
+
+/* Colored terminal identity in the Pending Changes group card (see
+   views/PendingChangesView.ts) -- edge strip spanning the whole group
+   (header + its file rows), matching the terminal tab's own indicator
+   rather than an inline dot next to the title. */
+.terminus-group-colored::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background-color: var(--terminus-group-color);
 }
 
 /**
