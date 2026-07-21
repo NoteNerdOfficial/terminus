@@ -106,6 +106,8 @@ export class TerminalView extends ItemView {
   // terminals' PreToolUse traffic correctly isolated).
   private readonly terminalNumber: number;
   private resizeObserver: ResizeObserver | null = null;
+  private fontLoadingDoneHandler: (() => void) | null = null;
+  private fontRemeasureTimer: number | null = null;
   // Display identity -- purely cosmetic, no effect on the review/hook
   // plumbing (still keyed by `token` above). `color` is a literal CSS color
   // string (see terminal/colorPalette.ts), not an indirect id.
@@ -165,6 +167,30 @@ export class TerminalView extends ItemView {
     // cell size. Re-applying the font family once fonts genuinely finish
     // loading forces that remeasure against real metrics.
     activeDocument.fonts?.ready.then(() => this.applyFontFamily());
+
+    // fonts.ready only covers glyph subsets the browser has already been
+    // asked to load by the time it fires -- many custom/variable fonts are
+    // split into several @font-face subsets (Latin, symbols, box-drawing,
+    // Nerd Font icon ranges), and the browser only fetches each subset the
+    // first time something actually tries to paint a codepoint in it. A
+    // shell prompt only exercises the ASCII subset early on, so fonts.ready
+    // fires and we remeasure -- then minutes later, the first time Claude
+    // Code's CLI prints an icon or box-drawing glyph outside that subset,
+    // its font file starts loading *after* our one-shot hook already ran.
+    // That late-arriving subset repaints with fallback-font tofu and can
+    // reintroduce the stale-cell-grid misalignment, with no further
+    // remeasure ever firing. Listening for every subsequent "loadingdone"
+    // for the life of this view (debounced, since a subset load fires one
+    // event per font file, often several in a burst) keeps the cell grid
+    // honest for as long as the terminal stays open.
+    this.fontLoadingDoneHandler = () => {
+      if (this.fontRemeasureTimer !== null) window.clearTimeout(this.fontRemeasureTimer);
+      this.fontRemeasureTimer = window.setTimeout(() => {
+        this.fontRemeasureTimer = null;
+        this.applyFontFamily();
+      }, 100);
+    };
+    activeDocument.fonts?.addEventListener("loadingdone", this.fontLoadingDoneHandler);
 
     this.applyRestoredScrollbackIfPending();
 
@@ -293,6 +319,14 @@ export class TerminalView extends ItemView {
   async onClose(): Promise<void> {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    if (this.fontLoadingDoneHandler) {
+      activeDocument.fonts?.removeEventListener("loadingdone", this.fontLoadingDoneHandler);
+      this.fontLoadingDoneHandler = null;
+    }
+    if (this.fontRemeasureTimer !== null) {
+      window.clearTimeout(this.fontRemeasureTimer);
+      this.fontRemeasureTimer = null;
+    }
     this.plugin.reviewServer.unregister(this.token);
     this.pty?.kill();
     this.commandTracker?.dispose();

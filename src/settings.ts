@@ -108,6 +108,7 @@ export class TerminusSettingTab extends PluginSettingTab {
         slider
           .setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1)
           .setValue(this.plugin.settings.fontSize)
+          .setDynamicTooltip()
           .onChange(async (value) => {
             await this.plugin.setFontSize(value);
           })
@@ -151,6 +152,7 @@ export class TerminusSettingTab extends PluginSettingTab {
         slider
           .setLimits(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, 100)
           .setValue(this.plugin.settings.scrollbackLines)
+          .setDynamicTooltip()
           .onChange(async (value) => {
             this.plugin.settings.scrollbackLines = value;
             await this.plugin.saveSettings();
@@ -227,6 +229,7 @@ export class TerminusSettingTab extends PluginSettingTab {
           slider
             .setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100)
             .setValue(this.plugin.settings.autoRevealDelayMs)
+            .setDynamicTooltip()
             .onChange(async (value) => {
               this.plugin.settings.autoRevealDelayMs = value;
               await this.plugin.saveSettings();

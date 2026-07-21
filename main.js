@@ -12120,6 +12120,8 @@ var TerminalView = class extends import_obsidian5.ItemView {
     // once in setState (before onOpen/startPty run), consumed by startPty().
     this.restoredCwd = null;
     this.resizeObserver = null;
+    this.fontLoadingDoneHandler = null;
+    this.fontRemeasureTimer = null;
     // Display identity -- purely cosmetic, no effect on the review/hook
     // plumbing (still keyed by `token` above). `color` is a literal CSS color
     // string (see terminal/colorPalette.ts), not an indirect id.
@@ -12139,7 +12141,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
     return this.plugin.settings.ribbonIcon;
   }
   async onOpen() {
-    var _a5;
+    var _a5, _b;
     const container = this.contentEl;
     container.empty();
     container.addClass("terminus-view");
@@ -12160,6 +12162,15 @@ var TerminalView = class extends import_obsidian5.ItemView {
     this.term.open(xtermContainer);
     this.fitAddon.fit();
     (_a5 = activeDocument.fonts) == null ? void 0 : _a5.ready.then(() => this.applyFontFamily());
+    this.fontLoadingDoneHandler = () => {
+      if (this.fontRemeasureTimer !== null)
+        window.clearTimeout(this.fontRemeasureTimer);
+      this.fontRemeasureTimer = window.setTimeout(() => {
+        this.fontRemeasureTimer = null;
+        this.applyFontFamily();
+      }, 100);
+    };
+    (_b = activeDocument.fonts) == null ? void 0 : _b.addEventListener("loadingdone", this.fontLoadingDoneHandler);
     this.applyRestoredScrollbackIfPending();
     this.registerEvent(this.app.workspace.on("css-change", () => this.applyTheme()));
     this.commandTracker = new CommandTracker(this.term, (cmd) => this.handleCommandFinished(cmd));
@@ -12254,26 +12265,34 @@ var TerminalView = class extends import_obsidian5.ItemView {
     (_b = this.pty) == null ? void 0 : _b.write(shellQuoteIfNeeded(absolutePath));
   }
   async onClose() {
-    var _a5, _b, _c2, _d, _e3, _f, _g, _h;
+    var _a5, _b, _c2, _d, _e3, _f, _g, _h, _i2;
     (_a5 = this.resizeObserver) == null ? void 0 : _a5.disconnect();
     this.resizeObserver = null;
+    if (this.fontLoadingDoneHandler) {
+      (_b = activeDocument.fonts) == null ? void 0 : _b.removeEventListener("loadingdone", this.fontLoadingDoneHandler);
+      this.fontLoadingDoneHandler = null;
+    }
+    if (this.fontRemeasureTimer !== null) {
+      window.clearTimeout(this.fontRemeasureTimer);
+      this.fontRemeasureTimer = null;
+    }
     this.plugin.reviewServer.unregister(this.token);
-    (_b = this.pty) == null ? void 0 : _b.kill();
-    (_c2 = this.commandTracker) == null ? void 0 : _c2.dispose();
+    (_c2 = this.pty) == null ? void 0 : _c2.kill();
+    (_d = this.commandTracker) == null ? void 0 : _d.dispose();
     this.plugin.closedTerminals.push({
       displayText: this.getDisplayText(),
       scrollback: this.serializeScrollback(),
-      cwd: (_e3 = (_d = this.cwdTracker) == null ? void 0 : _d.getCwd()) != null ? _e3 : this.restoredCwd,
+      cwd: (_f = (_e3 = this.cwdTracker) == null ? void 0 : _e3.getCwd()) != null ? _f : this.restoredCwd,
       customName: this.customName,
       color: this.color,
       closedAt: Date.now()
     });
-    (_f = this.cwdTracker) == null ? void 0 : _f.dispose();
-    (_g = this.wikiLinkAutocomplete) == null ? void 0 : _g.dispose();
+    (_g = this.cwdTracker) == null ? void 0 : _g.dispose();
+    (_h = this.wikiLinkAutocomplete) == null ? void 0 : _h.dispose();
     for (const decoration of this.failureBadges.values())
       decoration.dispose();
     this.failureBadges.clear();
-    (_h = this.term) == null ? void 0 : _h.dispose();
+    (_i2 = this.term) == null ? void 0 : _i2.dispose();
   }
   getState() {
     var _a5, _b, _c2, _d, _e3;
@@ -14386,7 +14405,7 @@ var TerminusSettingTab = class extends import_obsidian13.PluginSettingTab {
     new import_obsidian13.Setting(containerEl).setName("Terminal font size").setDesc(
       `Applies to all open terminal panels. Also adjustable via the "Increase/Decrease terminal font size" commands (${MIN_FONT_SIZE}-${MAX_FONT_SIZE}px).`
     ).addSlider(
-      (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).onChange(async (value) => {
+      (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
         await this.plugin.setFontSize(value);
       })
     );
@@ -14406,7 +14425,7 @@ var TerminusSettingTab = class extends import_obsidian13.PluginSettingTab {
       })
     );
     new import_obsidian13.Setting(containerEl).setName("Scrollback").setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`).addSlider(
-      (slider) => slider.setLimits(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, 100).setValue(this.plugin.settings.scrollbackLines).onChange(async (value) => {
+      (slider) => slider.setLimits(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, 100).setValue(this.plugin.settings.scrollbackLines).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.scrollbackLines = value;
         await this.plugin.saveSettings();
       })
@@ -14446,7 +14465,7 @@ var TerminusSettingTab = class extends import_obsidian13.PluginSettingTab {
       new import_obsidian13.Setting(containerEl).setName("Reveal delay").setDesc(
         "How long to wait after the last edit in a burst before revealing the panel, so a multi-file turn doesn't pop it up repeatedly."
       ).addSlider(
-        (slider) => slider.setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100).setValue(this.plugin.settings.autoRevealDelayMs).onChange(async (value) => {
+        (slider) => slider.setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100).setValue(this.plugin.settings.autoRevealDelayMs).setDynamicTooltip().onChange(async (value) => {
           this.plugin.settings.autoRevealDelayMs = value;
           await this.plugin.saveSettings();
         })
