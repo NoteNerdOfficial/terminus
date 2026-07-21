@@ -1,6 +1,6 @@
 {
   "name": "terminus",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "description": "Obsidian terminal plugin with Claude Code diff-review gating",
   "main": "main.js",
   "scripts": {
