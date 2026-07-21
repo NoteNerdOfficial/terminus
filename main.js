@@ -740,6 +740,18 @@ fi
 
 __rt_precmd() {
   local exit_code=$?
+  # A foreground program (a fullscreen TUI, Claude Code's own CLI included)
+  # can enable DEC private modes -- focus reporting, bracketed paste, mouse
+  # tracking -- that are terminal-level state, not tied to that program's
+  # lifetime. If it exits (or crashes) without disabling what it turned on,
+  # xterm.js keeps honoring the mode against this now-plain shell: e.g. with
+  # focus reporting still armed, every later pane/tab focus change writes a
+  # raw ESC[I/ESC[O into this shell, which has no handler for it and echoes
+  # the bytes back as literal garbage on the input line. Disabling them
+  # unconditionally on every fresh prompt (a harmless no-op if already off)
+  # guarantees a returned-to shell prompt never inherits stray state from
+  # whatever ran before it.
+  printf '\\033[?1004l\\033[?2004l\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1006l\\033[?1015l\\033[?1016l'
   printf '\\033]133;D;%d\\007' "$exit_code"
   # Custom cwd-tracking channel (OSC 7, plain path -- no file:// wrapping or
   # hostname, since Terminus is the only consumer and parsing that back out
@@ -798,6 +810,18 @@ trap '__rt_preexec' DEBUG
 
 __rt_precmd() {
   local exit_code=$?
+  # A foreground program (a fullscreen TUI, Claude Code's own CLI included)
+  # can enable DEC private modes -- focus reporting, bracketed paste, mouse
+  # tracking -- that are terminal-level state, not tied to that program's
+  # lifetime. If it exits (or crashes) without disabling what it turned on,
+  # xterm.js keeps honoring the mode against this now-plain shell: e.g. with
+  # focus reporting still armed, every later pane/tab focus change writes a
+  # raw ESC[I/ESC[O into this shell, which has no handler for it and echoes
+  # the bytes back as literal garbage on the input line. Disabling them
+  # unconditionally on every fresh prompt (a harmless no-op if already off)
+  # guarantees a returned-to shell prompt never inherits stray state from
+  # whatever ran before it.
+  printf '\\033[?1004l\\033[?2004l\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1006l\\033[?1015l\\033[?1016l'
   printf '\\033]133;D;%d\\007' "$exit_code"
   # Custom cwd-tracking channel (OSC 7, plain path -- no file:// wrapping or
   # hostname, since Terminus is the only consumer and parsing that back out
@@ -12230,7 +12254,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
     (_b = this.pty) == null ? void 0 : _b.write(shellQuoteIfNeeded(absolutePath));
   }
   async onClose() {
-    var _a5, _b, _c2, _d, _e3, _f, _g, _h, _i2, _j;
+    var _a5, _b, _c2, _d, _e3, _f, _g, _h;
     (_a5 = this.resizeObserver) == null ? void 0 : _a5.disconnect();
     this.resizeObserver = null;
     this.plugin.reviewServer.unregister(this.token);
@@ -12238,28 +12262,51 @@ var TerminalView = class extends import_obsidian5.ItemView {
     (_c2 = this.commandTracker) == null ? void 0 : _c2.dispose();
     this.plugin.closedTerminals.push({
       displayText: this.getDisplayText(),
-      scrollback: (_e3 = (_d = this.serializeAddon) == null ? void 0 : _d.serialize({ scrollback: SCROLLBACK_PERSIST_LINES })) != null ? _e3 : "",
-      cwd: (_g = (_f = this.cwdTracker) == null ? void 0 : _f.getCwd()) != null ? _g : this.restoredCwd,
+      scrollback: this.serializeScrollback(),
+      cwd: (_e3 = (_d = this.cwdTracker) == null ? void 0 : _d.getCwd()) != null ? _e3 : this.restoredCwd,
       customName: this.customName,
       color: this.color,
       closedAt: Date.now()
     });
-    (_h = this.cwdTracker) == null ? void 0 : _h.dispose();
-    (_i2 = this.wikiLinkAutocomplete) == null ? void 0 : _i2.dispose();
+    (_f = this.cwdTracker) == null ? void 0 : _f.dispose();
+    (_g = this.wikiLinkAutocomplete) == null ? void 0 : _g.dispose();
     for (const decoration of this.failureBadges.values())
       decoration.dispose();
     this.failureBadges.clear();
-    (_j = this.term) == null ? void 0 : _j.dispose();
+    (_h = this.term) == null ? void 0 : _h.dispose();
   }
   getState() {
-    var _a5, _b, _c2, _d, _e3, _f, _g;
+    var _a5, _b, _c2, _d, _e3;
     return {
       ...super.getState(),
-      scrollback: (_b = (_a5 = this.serializeAddon) == null ? void 0 : _a5.serialize({ scrollback: SCROLLBACK_PERSIST_LINES })) != null ? _b : "",
-      cwd: (_e3 = (_d = (_c2 = this.cwdTracker) == null ? void 0 : _c2.getCwd()) != null ? _d : this.restoredCwd) != null ? _e3 : void 0,
-      customName: (_f = this.customName) != null ? _f : void 0,
-      color: (_g = this.color) != null ? _g : void 0
+      scrollback: this.serializeScrollback(),
+      cwd: (_c2 = (_b = (_a5 = this.cwdTracker) == null ? void 0 : _a5.getCwd()) != null ? _b : this.restoredCwd) != null ? _c2 : void 0,
+      customName: (_d = this.customName) != null ? _d : void 0,
+      color: (_e3 = this.color) != null ? _e3 : void 0
     };
+  }
+  /**
+   * A running program (Claude Code's own TUI included) can leave DEC
+   * private modes switched on -- focus reporting, bracketed paste, mouse
+   * tracking, the alternate screen buffer -- and SerializeAddon faithfully
+   * re-emits whichever of those were active as part of its default output,
+   * so replaying it would re-arm them in the restored terminal too. That's
+   * fine when the *same* program keeps running, but a restore always spawns
+   * a brand new plain shell with no idea any of that state exists. Left
+   * armed, e.g. focus reporting, every later Obsidian pane/tab focus change
+   * makes xterm.js write a raw `ESC[I`/`ESC[O` to that shell, which has no
+   * handler for it and echoes the bytes back as literal garbage on the
+   * input line -- the exact "^[[O%" corruption this fixes. Scrollback text
+   * itself is still worth keeping (so the user sees prior output), just not
+   * the mode/alt-buffer state that assumes the same program is still there.
+   */
+  serializeScrollback() {
+    var _a5, _b;
+    return (_b = (_a5 = this.serializeAddon) == null ? void 0 : _a5.serialize({
+      scrollback: SCROLLBACK_PERSIST_LINES,
+      excludeModes: true,
+      excludeAltBuffer: true
+    })) != null ? _b : "";
   }
   async setState(state, result) {
     const typedState = state;

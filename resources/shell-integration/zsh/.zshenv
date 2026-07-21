@@ -21,6 +21,18 @@ fi
 
 __rt_precmd() {
   local exit_code=$?
+  # A foreground program (a fullscreen TUI, Claude Code's own CLI included)
+  # can enable DEC private modes -- focus reporting, bracketed paste, mouse
+  # tracking -- that are terminal-level state, not tied to that program's
+  # lifetime. If it exits (or crashes) without disabling what it turned on,
+  # xterm.js keeps honoring the mode against this now-plain shell: e.g. with
+  # focus reporting still armed, every later pane/tab focus change writes a
+  # raw ESC[I/ESC[O into this shell, which has no handler for it and echoes
+  # the bytes back as literal garbage on the input line. Disabling them
+  # unconditionally on every fresh prompt (a harmless no-op if already off)
+  # guarantees a returned-to shell prompt never inherits stray state from
+  # whatever ran before it.
+  printf '\033[?1004l\033[?2004l\033[?1000l\033[?1002l\033[?1003l\033[?1006l\033[?1015l\033[?1016l'
   printf '\033]133;D;%d\007' "$exit_code"
   # Custom cwd-tracking channel (OSC 7, plain path -- no file:// wrapping or
   # hostname, since Terminus is the only consumer and parsing that back out

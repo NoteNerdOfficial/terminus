@@ -302,7 +302,7 @@ export class TerminalView extends ItemView {
     // saved for a restart, just routed into the in-session buffer instead.
     this.plugin.closedTerminals.push({
       displayText: this.getDisplayText(),
-      scrollback: this.serializeAddon?.serialize({ scrollback: SCROLLBACK_PERSIST_LINES }) ?? "",
+      scrollback: this.serializeScrollback(),
       cwd: this.cwdTracker?.getCwd() ?? this.restoredCwd,
       customName: this.customName,
       color: this.color,
@@ -319,11 +319,36 @@ export class TerminalView extends ItemView {
   getState(): Record<string, unknown> {
     return {
       ...super.getState(),
-      scrollback: this.serializeAddon?.serialize({ scrollback: SCROLLBACK_PERSIST_LINES }) ?? "",
+      scrollback: this.serializeScrollback(),
       cwd: this.cwdTracker?.getCwd() ?? this.restoredCwd ?? undefined,
       customName: this.customName ?? undefined,
       color: this.color ?? undefined,
     };
+  }
+
+  /**
+   * A running program (Claude Code's own TUI included) can leave DEC
+   * private modes switched on -- focus reporting, bracketed paste, mouse
+   * tracking, the alternate screen buffer -- and SerializeAddon faithfully
+   * re-emits whichever of those were active as part of its default output,
+   * so replaying it would re-arm them in the restored terminal too. That's
+   * fine when the *same* program keeps running, but a restore always spawns
+   * a brand new plain shell with no idea any of that state exists. Left
+   * armed, e.g. focus reporting, every later Obsidian pane/tab focus change
+   * makes xterm.js write a raw `ESC[I`/`ESC[O` to that shell, which has no
+   * handler for it and echoes the bytes back as literal garbage on the
+   * input line -- the exact "^[[O%" corruption this fixes. Scrollback text
+   * itself is still worth keeping (so the user sees prior output), just not
+   * the mode/alt-buffer state that assumes the same program is still there.
+   */
+  private serializeScrollback(): string {
+    return (
+      this.serializeAddon?.serialize({
+        scrollback: SCROLLBACK_PERSIST_LINES,
+        excludeModes: true,
+        excludeAltBuffer: true,
+      }) ?? ""
+    );
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
