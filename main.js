@@ -12355,7 +12355,9 @@ var TerminalView = class extends import_obsidian5.ItemView {
     var _a5, _b;
     if (!this.term)
       return;
-    this.term.options.fontFamily = this.plugin.settings.fontFamilyOverride.trim() || resolveMonospaceFontStack();
+    const family = this.plugin.settings.fontFamilyOverride.trim() || resolveMonospaceFontStack();
+    this.term.options.fontFamily = "";
+    this.term.options.fontFamily = family;
     (_a5 = this.fitAddon) == null ? void 0 : _a5.fit();
     (_b = this.pty) == null ? void 0 : _b.resize(this.term.cols, this.term.rows);
   }

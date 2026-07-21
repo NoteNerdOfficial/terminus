@@ -410,7 +410,16 @@ export class TerminalView extends ItemView {
 
   applyFontFamily(): void {
     if (!this.term) return;
-    this.term.options.fontFamily = this.plugin.settings.fontFamilyOverride.trim() || resolveMonospaceFontStack();
+    const family = this.plugin.settings.fontFamilyOverride.trim() || resolveMonospaceFontStack();
+    // xterm's options setter only fires its change event (which drives the
+    // glyph-cell remeasure) when the new value differs from the current one
+    // -- and `family` here is usually identical to what's already set, since
+    // nothing about the resolved font string changes between pane-open and
+    // fonts.ready. Toggling through an empty value first forces a real
+    // inequality so the remeasure actually happens instead of silently
+    // no-opping.
+    this.term.options.fontFamily = "";
+    this.term.options.fontFamily = family;
     this.fitAddon?.fit();
     this.pty?.resize(this.term.cols, this.term.rows);
   }
