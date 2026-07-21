@@ -11797,17 +11797,23 @@ var TERMINAL_COLOR_PALETTE = [
   { name: "Cyan", value: "var(--color-cyan, #00bfbc)" },
   { name: "Blue", value: "var(--color-blue, #086ddd)" },
   { name: "Purple", value: "var(--color-purple, #7852ee)" },
-  { name: "Pink", value: "var(--color-pink, #d53984)" }
+  { name: "Pink", value: "var(--color-pink, #d53984)" },
+  { name: "Teal", value: "#12a594" },
+  { name: "Indigo", value: "#3559e8" },
+  { name: "Magenta", value: "#c026d3" },
+  { name: "Lime", value: "#83b311" },
+  { name: "Brown", value: "#a1662f" },
+  { name: "Gray", value: "#8a8f98" }
 ];
 
 // src/terminal/TerminalColorPicker.ts
 function openTerminalColorPicker(anchorEl, currentColor, onSelect) {
+  var _a5;
   const doc = anchorEl.ownerDocument;
+  const win = (_a5 = doc.defaultView) != null ? _a5 : window;
   const rect = anchorEl.getBoundingClientRect();
   const popover = doc.createElement("div");
   popover.addClass("terminus-color-picker-popover");
-  popover.style.left = `${rect.left}px`;
-  popover.style.top = `${rect.bottom + 4}px`;
   const addSwatch = (label, color) => {
     const swatch = popover.createDiv({ cls: "terminus-color-swatch" });
     swatch.setAttr("title", label);
@@ -11828,6 +11834,20 @@ function openTerminalColorPicker(anchorEl, currentColor, onSelect) {
   for (const option of TERMINAL_COLOR_PALETTE)
     addSwatch(option.name, option.value);
   doc.body.appendChild(popover);
+  const margin = 8;
+  const popRect = popover.getBoundingClientRect();
+  let left = rect.left;
+  if (left + popRect.width > win.innerWidth - margin) {
+    left = win.innerWidth - margin - popRect.width;
+  }
+  left = Math.max(margin, left);
+  let top = rect.bottom + 4;
+  if (top + popRect.height > win.innerHeight - margin) {
+    top = rect.top - popRect.height - 4;
+  }
+  top = Math.max(margin, top);
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
   const dismiss = (evt) => {
     if (evt instanceof KeyboardEvent && evt.key !== "Escape")
       return;
@@ -12095,6 +12115,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
     return this.plugin.settings.ribbonIcon;
   }
   async onOpen() {
+    var _a5;
     const container = this.contentEl;
     container.empty();
     container.addClass("terminus-view");
@@ -12114,6 +12135,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
     this.term.loadAddon(this.serializeAddon);
     this.term.open(xtermContainer);
     this.fitAddon.fit();
+    (_a5 = activeDocument.fonts) == null ? void 0 : _a5.ready.then(() => this.applyFontFamily());
     this.applyRestoredScrollbackIfPending();
     this.registerEvent(this.app.workspace.on("css-change", () => this.applyTheme()));
     this.commandTracker = new CommandTracker(this.term, (cmd) => this.handleCommandFinished(cmd));
@@ -12129,34 +12151,34 @@ var TerminalView = class extends import_obsidian5.ItemView {
       getVaultBasePath: () => this.plugin.getVaultBasePath(),
       getInsertFormat: () => this.plugin.settings.wikiLinkInsertFormat,
       onInsert: (text) => {
-        var _a5;
-        return (_a5 = this.pty) == null ? void 0 : _a5.write(text);
+        var _a6;
+        return (_a6 = this.pty) == null ? void 0 : _a6.write(text);
       },
       onPassthrough: (text) => {
-        var _a5;
-        return (_a5 = this.pty) == null ? void 0 : _a5.write(text);
+        var _a6;
+        return (_a6 = this.pty) == null ? void 0 : _a6.write(text);
       }
     });
     this.term.onData((data) => {
-      var _a5;
-      return (_a5 = this.wikiLinkAutocomplete) == null ? void 0 : _a5.handleData(data);
+      var _a6;
+      return (_a6 = this.wikiLinkAutocomplete) == null ? void 0 : _a6.handleData(data);
     });
     this.term.onResize(({ cols, rows }) => {
-      var _a5;
-      return (_a5 = this.pty) == null ? void 0 : _a5.resize(cols, rows);
+      var _a6;
+      return (_a6 = this.pty) == null ? void 0 : _a6.resize(cols, rows);
     });
     this.term.attachCustomKeyEventHandler((event) => {
-      var _a5;
+      var _a6;
       if (event.type === "keydown" && event.key === "Enter" && event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
         event.preventDefault();
-        (_a5 = this.pty) == null ? void 0 : _a5.write("\n");
+        (_a6 = this.pty) == null ? void 0 : _a6.write("\n");
         return false;
       }
       return true;
     });
     this.resizeObserver = new ResizeObserver(() => {
-      var _a5;
-      return (_a5 = this.fitAddon) == null ? void 0 : _a5.fit();
+      var _a6;
+      return (_a6 = this.fitAddon) == null ? void 0 : _a6.fit();
     });
     this.resizeObserver.observe(xtermContainer);
     xtermContainer.addEventListener("dragover", (evt) => evt.preventDefault());

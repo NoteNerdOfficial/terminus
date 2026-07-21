@@ -1119,7 +1119,12 @@
   position: fixed;
   z-index: var(--layer-popover, 70);
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  /* Wraps to multiple rows instead of growing into a single row wide
+     enough to run past the edge of a narrow pane (e.g. the right
+     sidebar) -- fits ~6 swatches per row before wrapping. */
+  max-width: 160px;
   background-color: var(--background-secondary);
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;

@@ -152,6 +152,20 @@ export class TerminalView extends ItemView {
     this.term.open(xtermContainer);
     this.fitAddon.fit();
 
+    // xterm's DOM renderer measures glyph cell size synchronously off
+    // whatever font is *currently* available -- it never itself waits on
+    // fonts.ready. If the resolved monospace font (a custom font, or a
+    // Nerd Font providing the glyphs a shell prompt needs) is still
+    // loading at this point, that first measurement locks in fallback-font
+    // metrics: box-drawing/prompt glyphs render as tofu ("?"), and once the
+    // real font swaps in, its differently-sized glyphs no longer match the
+    // cached cell grid, producing misaligned text that persists until
+    // something forces a remeasure -- merely resizing the pane doesn't,
+    // since fit() only recomputes cols/rows from the (still-stale) cached
+    // cell size. Re-applying the font family once fonts genuinely finish
+    // loading forces that remeasure against real metrics.
+    activeDocument.fonts?.ready.then(() => this.applyFontFamily());
+
     this.applyRestoredScrollbackIfPending();
 
     // Obsidian fires this on every theme toggle (dark/light, or switching
