@@ -4,6 +4,7 @@ import { pathJoin } from "terminus-node-bridge";
 import { WikiLinkInsertFormat } from "../settings";
 
 const MAX_SUGGESTIONS = 8;
+const POPOVER_EDGE_MARGIN = 8;
 
 export interface WikiLinkAutocompleteOptions {
   app: App;
@@ -195,8 +196,6 @@ export class WikiLinkAutocomplete {
 
     const popover = this.opts.xtermContainer.ownerDocument.createElement("div");
     popover.addClass("terminus-wikilink-popover");
-    popover.style.left = `${rect.left + cursorX * cellWidth}px`;
-    popover.style.top = `${rect.top + (cursorY + 1) * cellHeight}px`;
 
     if (this.matches.length === 0) {
       popover.createDiv({ cls: "terminus-wikilink-item terminus-wikilink-empty", text: "No matching notes" });
@@ -209,6 +208,23 @@ export class WikiLinkAutocomplete {
 
     this.opts.xtermContainer.ownerDocument.body.appendChild(popover);
     this.popoverEl = popover;
+
+    // Preferred spot is just below the cursor cell, but that overflows the
+    // window when the cursor is near the right/bottom edge (e.g. a terminal
+    // pane docked in a narrow sidebar) -- clamp horizontally and flip above
+    // the cursor line vertically once the popover's real (post-render) size
+    // is known, so it never gets visually cut off by the window edge.
+    const win = this.opts.xtermContainer.ownerDocument.defaultView ?? activeWindow;
+    const preferredLeft = rect.left + cursorX * cellWidth;
+    const belowTop = rect.top + (cursorY + 1) * cellHeight;
+    const { width: popWidth, height: popHeight } = popover.getBoundingClientRect();
+
+    const maxLeft = win.innerWidth - popWidth - POPOVER_EDGE_MARGIN;
+    popover.style.left = `${Math.max(POPOVER_EDGE_MARGIN, Math.min(preferredLeft, maxLeft))}px`;
+
+    const fitsBelow = belowTop + popHeight <= win.innerHeight - POPOVER_EDGE_MARGIN;
+    const top = fitsBelow ? belowTop : rect.top + cursorY * cellHeight - popHeight;
+    popover.style.top = `${Math.max(POPOVER_EDGE_MARGIN, top)}px`;
   }
 
   private closePopover(): void {

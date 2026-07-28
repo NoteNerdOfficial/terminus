@@ -11655,6 +11655,7 @@ var CwdTracker = class {
 var import_obsidian2 = require("obsidian");
 var import_terminus_node_bridge9 = __toESM(require_dist());
 var MAX_SUGGESTIONS = 8;
+var POPOVER_EDGE_MARGIN = 8;
 var WikiLinkAutocomplete = class {
   constructor(opts) {
     this.opts = opts;
@@ -11783,6 +11784,7 @@ var WikiLinkAutocomplete = class {
     return `[[${this.opts.app.metadataCache.fileToLinktext(file, "", true)}]]`;
   }
   renderPopover() {
+    var _a5;
     this.closePopover();
     const rect = this.opts.xtermContainer.getBoundingClientRect();
     const cellWidth = rect.width / Math.max(this.opts.term.cols, 1);
@@ -11791,8 +11793,6 @@ var WikiLinkAutocomplete = class {
     const cursorY = this.opts.term.buffer.active.cursorY;
     const popover = this.opts.xtermContainer.ownerDocument.createElement("div");
     popover.addClass("terminus-wikilink-popover");
-    popover.style.left = `${rect.left + cursorX * cellWidth}px`;
-    popover.style.top = `${rect.top + (cursorY + 1) * cellHeight}px`;
     if (this.matches.length === 0) {
       popover.createDiv({ cls: "terminus-wikilink-item terminus-wikilink-empty", text: "No matching notes" });
     } else {
@@ -11804,6 +11804,15 @@ var WikiLinkAutocomplete = class {
     }
     this.opts.xtermContainer.ownerDocument.body.appendChild(popover);
     this.popoverEl = popover;
+    const win = (_a5 = this.opts.xtermContainer.ownerDocument.defaultView) != null ? _a5 : activeWindow;
+    const preferredLeft = rect.left + cursorX * cellWidth;
+    const belowTop = rect.top + (cursorY + 1) * cellHeight;
+    const { width: popWidth, height: popHeight } = popover.getBoundingClientRect();
+    const maxLeft = win.innerWidth - popWidth - POPOVER_EDGE_MARGIN;
+    popover.style.left = `${Math.max(POPOVER_EDGE_MARGIN, Math.min(preferredLeft, maxLeft))}px`;
+    const fitsBelow = belowTop + popHeight <= win.innerHeight - POPOVER_EDGE_MARGIN;
+    const top = fitsBelow ? belowTop : rect.top + cursorY * cellHeight - popHeight;
+    popover.style.top = `${Math.max(POPOVER_EDGE_MARGIN, top)}px`;
   }
   closePopover() {
     var _a5;
@@ -12092,6 +12101,15 @@ function getOsFilePath(file) {
   }
   return file.path;
 }
+function parseObsidianFileUri(text) {
+  if (!text.startsWith("obsidian://open?"))
+    return null;
+  try {
+    return new URL(text).searchParams.get("file");
+  } catch (e) {
+    return null;
+  }
+}
 function resolveXtermTheme() {
   const style = getComputedStyle(activeDocument.body);
   const v3 = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
@@ -12246,7 +12264,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
    *  internal vault-file drag (which carries a vault-relative path as
    *  plain text, not a real File). */
   handleDrop(evt) {
-    var _a5, _b;
+    var _a5, _b, _c2;
     evt.preventDefault();
     const dataTransfer = evt.dataTransfer;
     if (!dataTransfer)
@@ -12260,9 +12278,10 @@ var TerminalView = class extends import_obsidian5.ItemView {
     const text = dataTransfer.getData("text/plain").trim();
     if (!text)
       return;
-    const abstractFile = this.app.vault.getAbstractFileByPath(text);
-    const absolutePath = abstractFile ? (0, import_terminus_node_bridge10.pathJoin)(this.plugin.getVaultBasePath(), text) : text;
-    (_b = this.pty) == null ? void 0 : _b.write(shellQuoteIfNeeded(absolutePath));
+    const vaultPath = (_b = parseObsidianFileUri(text)) != null ? _b : text;
+    const abstractFile = this.app.vault.getAbstractFileByPath(vaultPath);
+    const absolutePath = abstractFile ? (0, import_terminus_node_bridge10.pathJoin)(this.plugin.getVaultBasePath(), vaultPath) : text;
+    (_c2 = this.pty) == null ? void 0 : _c2.write(shellQuoteIfNeeded(absolutePath));
   }
   async onClose() {
     var _a5, _b, _c2, _d, _e3, _f, _g, _h, _i2;

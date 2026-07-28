@@ -72,6 +72,21 @@ function getOsFilePath(file: File): string | undefined {
   return (file as File & { path?: string }).path;
 }
 
+/** Dragging a folder from Obsidian's file explorer puts its plain
+ *  vault-relative path on `text/plain`, but dragging a *file* puts an
+ *  `obsidian://open?vault=...&file=...` deep link there instead (so
+ *  dropping it into another app gives a clickable link back into the
+ *  vault). Unwraps that URI back to the vault-relative path it encodes,
+ *  so both drag sources can be resolved the same way afterwards. */
+function parseObsidianFileUri(text: string): string | null {
+  if (!text.startsWith("obsidian://open?")) return null;
+  try {
+    return new URL(text).searchParams.get("file");
+  } catch {
+    return null;
+  }
+}
+
 function resolveXtermTheme(): ITheme {
   const style = getComputedStyle(activeDocument.body);
   const v = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
@@ -311,8 +326,9 @@ export class TerminalView extends ItemView {
     const text = dataTransfer.getData("text/plain").trim();
     if (!text) return;
 
-    const abstractFile = this.app.vault.getAbstractFileByPath(text);
-    const absolutePath = abstractFile ? pathJoin(this.plugin.getVaultBasePath(), text) : text;
+    const vaultPath = parseObsidianFileUri(text) ?? text;
+    const abstractFile = this.app.vault.getAbstractFileByPath(vaultPath);
+    const absolutePath = abstractFile ? pathJoin(this.plugin.getVaultBasePath(), vaultPath) : text;
     this.pty?.write(shellQuoteIfNeeded(absolutePath));
   }
 
