@@ -24,9 +24,16 @@ import json
 import os
 import pty
 import select
+import signal
 import struct
 import sys
 import termios
+import time
+
+# How often the proxy loop wakes up even with no terminal I/O, purely to
+# check whether it should exit (see `terminating` below). Also bounds how
+# long it takes to notice the parent has died.
+IDLE_POLL_SECONDS = 1.0
 
 
 def set_winsize(fd, rows, cols):
@@ -86,16 +93,51 @@ def main():
         return
 
     # Parent: proxy loop.
+    #
+    # If the Node/Electron parent quits gracefully it sends SIGTERM, caught
+    # below. But if Obsidian is force-quit or crashes, we're never signaled
+    # at all -- the OS just reparents us to launchd/init and we'd otherwise
+    # proxy a shell forever, which is exactly the orphaned-process pile-up
+    # this helper used to cause. `terminating` covers both: a caught signal
+    # sets it directly, and the idle-poll branch below sets it once our own
+    # getppid() no longer matches the parent we started under.
+    parent_pid = os.getppid()
+    terminating = False
+
+    def _request_shutdown(_signum, _frame):
+        nonlocal terminating
+        terminating = True
+
+    # A caught signal alone wouldn't wake a blocked select() until it next
+    # times out (up to IDLE_POLL_SECONDS later) -- noticeable as a stall
+    # every time a terminal tab is closed, versus the instant kill this
+    # helper had before it caught SIGTERM at all. set_wakeup_fd makes the
+    # C-level signal delivery itself write a byte to wake_r/wake_w, which
+    # is in the select() read set below, so shutdown is immediate again.
+    wake_r, wake_w = os.pipe()
+    os.set_blocking(wake_w, False)
+    signal.set_wakeup_fd(wake_w)
+
+    signal.signal(signal.SIGTERM, _request_shutdown)
+    signal.signal(signal.SIGHUP, _request_shutdown)
+
     set_winsize(master_fd, args.rows, args.cols)
     write_control({"type": "ready"})
 
     control_buf = b""
     exit_code = None
     try:
-        while True:
+        while not terminating:
             try:
-                readable, _, _ = select.select([0, master_fd, 3], [], [])
+                readable, _, _ = select.select(
+                    [0, master_fd, 3, wake_r], [], [], IDLE_POLL_SECONDS
+                )
             except InterruptedError:
+                continue
+
+            if not readable:
+                if os.getppid() != parent_pid:
+                    break
                 continue
 
             if master_fd in readable:
@@ -112,8 +154,17 @@ def main():
                     chunk = os.read(0, 65536)
                 except OSError:
                     chunk = b""
-                if chunk:
-                    os.write(master_fd, chunk)
+                if not chunk:
+                    # EOF: the parent's write end closed, which only
+                    # happens when it's shutting down (or the kernel
+                    # force-closed it on a crash/force-quit). Previously
+                    # this was silently ignored, and since a closed pipe
+                    # is permanently select()-readable, the loop spun at
+                    # full CPU forever instead of exiting -- the actual
+                    # cause of orphaned pty_helper processes pegging the
+                    # CPU rather than just idling.
+                    break
+                os.write(master_fd, chunk)
 
             if 3 in readable:
                 try:
@@ -133,11 +184,52 @@ def main():
                         if msg.get("type") == "resize":
                             set_winsize(master_fd, int(msg["rows"]), int(msg["cols"]))
     finally:
+        # Closing master_fd is what actually delivers the kernel's normal
+        # PTY-hangup SIGHUP to the shell's foreground process group -- it
+        # can't be deferred to implicit cleanup on process exit, since
+        # we're still inside this function (about to block in waitpid)
+        # when we reach here from the signal/orphan-detection exit paths,
+        # as opposed to the ordinary case where the shell already exited
+        # and closed its end first.
         try:
-            _, status = os.waitpid(pid, 0)
-            exit_code = os.waitstatus_to_exitcode(status)
-        except ChildProcessError:
-            exit_code = None
+            os.close(master_fd)
+        except OSError:
+            pass
+
+        exit_code = None
+        status = None
+        waited_pid = 0
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            try:
+                waited_pid, status = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                waited_pid = pid
+                break
+            if waited_pid != 0:
+                break
+            time.sleep(0.05)
+
+        if waited_pid == 0:
+            # The shell (or something it left running in the foreground)
+            # didn't respond to the hangup within the grace period. Force
+            # it rather than block here indefinitely -- that would just
+            # trade "orphaned and spinning" for "orphaned and stuck".
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                _, status = os.waitpid(pid, 0)
+            except ChildProcessError:
+                status = None
+
+        if status is not None:
+            try:
+                exit_code = os.waitstatus_to_exitcode(status)
+            except ValueError:
+                pass
+
         try:
             write_control({"type": "exited", "code": exit_code})
         except OSError:
