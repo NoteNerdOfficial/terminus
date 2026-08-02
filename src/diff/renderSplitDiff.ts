@@ -147,7 +147,7 @@ function renderContextBlock(container: HTMLElement, lines: string[], oldStart: n
  *  inline in a scrollable panel instead of floating over live editor text. */
 function renderHunkControls(container: HTMLElement, hunk: HunkPart, change: PendingChange, store: PendingChangesStore): void {
   const bar = container.createDiv({ cls: "terminus-inline-diff-controls terminus-split-diff-hunk-controls" });
-  bar.createEl("span", { cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
+  bar.createSpan({ cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
 
   const resolve = (accepted: boolean) => {
     store.resolveHunk(change.id, hunk.index, accepted).catch((err: unknown) => {
@@ -186,12 +186,12 @@ function renderSplitCell(
   });
   if (kind === "filler") return;
 
-  cell.createEl("span", { cls: "terminus-diff-gutter-num", text: lineNumber !== null ? String(lineNumber) : "" });
+  cell.createSpan({ cls: "terminus-diff-gutter-num", text: lineNumber !== null ? String(lineNumber) : "" });
 
-  const content = cell.createEl("span", { cls: "terminus-diff-content" });
+  const content = cell.createSpan({ cls: "terminus-diff-content" });
   for (const segment of cellLine?.segments ?? []) {
     if (segment.emphasis) {
-      content.createEl("span", {
+      content.createSpan({
         cls: kind === "remove" ? "terminus-diff-remove" : kind === "add" ? "terminus-diff-add" : undefined,
         text: segment.text,
       });

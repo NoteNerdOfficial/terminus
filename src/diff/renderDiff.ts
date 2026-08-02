@@ -76,13 +76,13 @@ function renderDiffLine(container: HTMLElement, line: DiffLine): void {
   const marker = line.marker === "+" ? "add" : line.marker === "-" ? "remove" : "context";
   const row = container.createDiv({ cls: `terminus-diff-line terminus-diff-line-${marker}` });
 
-  row.createEl("span", { cls: "terminus-diff-gutter-num", text: String(line.lineNumber) });
-  row.createEl("span", { cls: "terminus-diff-marker", text: line.marker });
+  row.createSpan({ cls: "terminus-diff-gutter-num", text: String(line.lineNumber) });
+  row.createSpan({ cls: "terminus-diff-marker", text: line.marker });
 
-  const content = row.createEl("span", { cls: "terminus-diff-content" });
+  const content = row.createSpan({ cls: "terminus-diff-content" });
   for (const segment of line.segments) {
     if (segment.emphasis) {
-      content.createEl("span", {
+      content.createSpan({
         cls: line.marker === "-" ? "terminus-diff-remove" : "terminus-diff-add",
         text: segment.text,
       });

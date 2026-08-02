@@ -73,9 +73,9 @@ export class DiffSplitView extends ItemView {
     }
 
     const header = container.createDiv({ cls: "terminus-split-diff-header" });
-    header.createEl("span", { cls: "terminus-split-diff-title", text: pathBasename(change.diff.filePath) });
+    header.createSpan({ cls: "terminus-split-diff-title", text: pathBasename(change.diff.filePath) });
     if (change.editCount > 1) {
-      header.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
+      header.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
     }
 
     renderSplitDiffBody(container, this.plugin.pendingChangesStore, change);

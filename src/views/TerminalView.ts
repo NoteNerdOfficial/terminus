@@ -208,7 +208,7 @@ export class TerminalView extends ItemView {
     // since fit() only recomputes cols/rows from the (still-stale) cached
     // cell size. Re-applying the font family once fonts genuinely finish
     // loading forces that remeasure against real metrics.
-    activeDocument.fonts?.ready.then(() => this.applyFontFamily());
+    void activeDocument.fonts?.ready.then(() => this.applyFontFamily());
 
     // fonts.ready only covers glyph subsets the browser has already been
     // asked to load by the time it fires -- many custom/variable fonts are
@@ -375,7 +375,7 @@ export class TerminalView extends ItemView {
     }
     // The icons must never be what gives way when the chip is wide. Set
     // here rather than in CSS for the same reason as above.
-    actions.style.flexShrink = "0";
+    actions.setCssStyles({ flexShrink: "0" });
 
     // Placed before the actions rather than appended, so the chip grows
     // leftward into empty header space instead of pushing the icons out.
@@ -422,10 +422,9 @@ export class TerminalView extends ItemView {
    *  the Pending Changes group edge, so it's obvious which session is busy
    *  when several are running. Falls back to the vault accent. */
   private refreshActivityColor(): void {
-    this.activityEl?.style.setProperty(
-      "--terminus-activity-color",
-      this.color ?? "var(--interactive-accent)"
-    );
+    this.activityEl?.setCssProps({
+      "--terminus-activity-color": this.color ?? "var(--interactive-accent)",
+    });
   }
 
   private async promptRename(): Promise<void> {

@@ -49,7 +49,7 @@ export class PendingChangesView extends ItemView {
     const header = container.createDiv({ cls: "terminus-pending-header" });
 
     if (changes.length === 0) {
-      header.createEl("div", { text: "No pending changes", cls: "terminus-pending-empty" });
+      header.createDiv({ text: "No pending changes", cls: "terminus-pending-empty" });
     } else {
       this.renderPendingSection(container, header, changes);
     }
@@ -84,11 +84,11 @@ export class PendingChangesView extends ItemView {
     const headerBar = header.createDiv({ cls: "terminus-pending-header-bar" });
     const headerText = headerBar.createDiv();
     const titleLine = headerText.createDiv({ cls: "terminus-pending-header-title-row" });
-    titleLine.createEl("span", { cls: "terminus-pending-header-title", text: "Pending changes" });
-    titleLine.createEl("span", { cls: "terminus-diff-stat-add", text: `+${totalAdded}` });
-    titleLine.createEl("span", { cls: "terminus-diff-stat-remove", text: `-${totalRemoved}` });
+    titleLine.createSpan({ cls: "terminus-pending-header-title", text: "Pending changes" });
+    titleLine.createSpan({ cls: "terminus-diff-stat-add", text: `+${totalAdded}` });
+    titleLine.createSpan({ cls: "terminus-diff-stat-remove", text: `-${totalRemoved}` });
 
-    const subtitle = headerText.createEl("div", { cls: "terminus-pending-header-subtitle" });
+    const subtitle = headerText.createDiv({ cls: "terminus-pending-header-subtitle" });
     const filesLabel = `${changes.length} ${changes.length === 1 ? "file" : "files"}`;
     // "across N terminals" only earns its place once there's more than one
     // terminal to disambiguate -- for the common single-terminal case it's
@@ -169,16 +169,16 @@ export class PendingChangesView extends ItemView {
       group.style.setProperty("--terminus-group-color", panelColor);
     }
     const groupHeader = group.createDiv({ cls: "terminus-group-header" });
-    const chevron = groupHeader.createEl("span", { cls: "terminus-group-chevron", text: "▾" });
+    const chevron = groupHeader.createSpan({ cls: "terminus-group-chevron", text: "▾" });
 
     // Two-line treatment matching the file rows below: heading (+ its
     // stats) on top, secondary count info stacked underneath, rather than
     // everything crammed into one row.
     const groupText = groupHeader.createDiv({ cls: "terminus-group-text" });
     const groupNameRow = groupText.createDiv({ cls: "terminus-group-name-row" });
-    groupNameRow.createEl("span", { text: panelLabel, cls: "terminus-group-title" });
-    groupNameRow.createEl("span", { cls: "terminus-group-stat-add", text: `+${groupAdded}` });
-    groupNameRow.createEl("span", { cls: "terminus-group-stat-remove", text: `-${groupRemoved}` });
+    groupNameRow.createSpan({ text: panelLabel, cls: "terminus-group-title" });
+    groupNameRow.createSpan({ cls: "terminus-group-stat-add", text: `+${groupAdded}` });
+    groupNameRow.createSpan({ cls: "terminus-group-stat-remove", text: `-${groupRemoved}` });
     groupText.createDiv({
       cls: "terminus-group-count",
       text: `${changes.length} ${changes.length === 1 ? "file" : "files"}`,
@@ -226,15 +226,15 @@ export class PendingChangesView extends ItemView {
     const row = list.createDiv({ cls: "terminus-pending-row" });
     const summary = row.createDiv({ cls: "terminus-pending-row-summary" });
 
-    const chevron = summary.createEl("span", { cls: "terminus-pending-chevron", text: "▸" });
+    const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "▸" });
 
     const info = summary.createDiv({ cls: "terminus-pending-info" });
     const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-    nameRow.createEl("span", { cls: "terminus-pending-filename", text: pathBasename(change.diff.filePath) });
-    nameRow.createEl("span", { cls: "terminus-diff-stat-add", text: `+${stats.added}` });
-    nameRow.createEl("span", { cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
+    nameRow.createSpan({ cls: "terminus-pending-filename", text: pathBasename(change.diff.filePath) });
+    nameRow.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
+    nameRow.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
     if (change.editCount > 1) {
-      nameRow.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
+      nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
     }
     // Cut down from the system root, not the vault root: keeps the vault
     // folder name as a recognizable anchor ("Test1/notes/File 8.md")
@@ -242,10 +242,10 @@ export class PendingChangesView extends ItemView {
     // filename-relative-to-nowhere path.
     const vaultName = pathBasename(this.plugin.getVaultBasePath());
     const relativePath = pathRelative(this.plugin.getVaultBasePath(), change.diff.filePath);
-    info.createEl("div", { cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
+    info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
     if (change.brokenBacklinks.length > 0) {
       const count = change.brokenBacklinks.length;
-      info.createEl("div", {
+      info.createDiv({
         cls: "terminus-backlink-warning",
         text: `⚠ may break ${count} incoming ${count === 1 ? "link" : "links"}`,
       });
@@ -311,7 +311,7 @@ export class PendingChangesView extends ItemView {
   private renderRowBody(body: HTMLElement, change: PendingChange): void {
     if (change.brokenBacklinks.length > 0) {
       const warning = body.createDiv({ cls: "terminus-backlink-warning-detail" });
-      warning.createEl("div", { text: "This edit removed a heading/block that other notes link to:" });
+      warning.createDiv({ text: "This edit removed a heading/block that other notes link to:" });
       const list = warning.createEl("ul");
       for (const link of change.brokenBacklinks) {
         list.createEl("li", {
@@ -367,7 +367,7 @@ export class PendingChangesView extends ItemView {
     const headContent = await getGitHeadContent(this.plugin.getVaultBasePath(), change.diff.filePath);
     container.empty();
     if (headContent === null) {
-      container.createEl("div", {
+      container.createDiv({
         cls: "terminus-pending-empty",
         text: "Not tracked in git, or this vault isn't a git repository.",
       });
@@ -384,9 +384,9 @@ export class PendingChangesView extends ItemView {
 
   private renderHistorySection(container: HTMLElement, history: ResolvedChange[]): void {
     const section = container.createDiv({ cls: "terminus-history-section" });
-    const summary = section.createEl("div", { cls: "terminus-history-toggle" });
-    const chevron = summary.createEl("span", { cls: "terminus-pending-chevron", text: "▸" });
-    summary.createEl("span", { text: `Recently resolved (${history.length})` });
+    const summary = section.createDiv({ cls: "terminus-history-toggle" });
+    const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "▸" });
+    summary.createSpan({ text: `Recently resolved (${history.length})` });
 
     const list = section.createDiv({ cls: "terminus-history-list" });
     list.hide();
@@ -408,11 +408,11 @@ export class PendingChangesView extends ItemView {
 
   private renderHistoryRow(list: HTMLElement, item: ResolvedChange): void {
     const row = list.createDiv({ cls: "terminus-history-row" });
-    row.createEl("span", {
+    row.createSpan({
       cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: item.accepted ? "Kept" : "Reverted",
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: pathBasename(item.diff.filePath) });
+    row.createSpan({ cls: "terminus-history-filename", text: pathBasename(item.diff.filePath) });
     row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
       this.plugin.pendingChangesStore.undo(item.historyId).catch((err: unknown) => {
         new Notice(`Terminus: failed to undo: ${errorMessage(err)}`);

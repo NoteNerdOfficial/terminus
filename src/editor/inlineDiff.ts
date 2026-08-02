@@ -41,10 +41,7 @@ class RemovedGhostWidget extends WidgetType {
     super();
   }
   toDOM(): HTMLElement {
-    const span = activeDocument.createElement("span");
-    span.className = "terminus-inline-diff-remove-line";
-    span.textContent = this.text;
-    return span;
+    return createSpan({ cls: "terminus-inline-diff-remove-line", text: this.text });
   }
   eq(other: RemovedGhostWidget): boolean {
     return other.text === this.text;
@@ -56,31 +53,27 @@ class DiffControlsWidget extends WidgetType {
     super();
   }
   toDOM(): HTMLElement {
-    const bar = activeDocument.createElement("div");
-    bar.className = "terminus-inline-diff-controls";
-    const label = activeDocument.createElement("span");
-    label.className = "terminus-inline-diff-label";
-    label.textContent = "Terminus · applied change";
-    bar.appendChild(label);
+    const bar = createDiv({ cls: "terminus-inline-diff-controls" });
+    bar.createSpan({ cls: "terminus-inline-diff-label", text: "Terminus · applied change" });
 
-    const reject = activeDocument.createElement("button");
-    reject.textContent = "Reject";
-    reject.className = "terminus-inline-diff-reject";
+    const reject = bar.createEl("button", {
+      cls: "terminus-inline-diff-reject",
+      text: "Reject",
+    });
     reject.addEventListener("click", (e) => {
       e.preventDefault();
       this.overlay.onReject();
     });
 
-    const accept = activeDocument.createElement("button");
-    accept.textContent = "Accept";
-    accept.className = "terminus-inline-diff-accept mod-cta";
+    const accept = bar.createEl("button", {
+      cls: "terminus-inline-diff-accept mod-cta",
+      text: "Accept",
+    });
     accept.addEventListener("click", (e) => {
       e.preventDefault();
       this.overlay.onAccept();
     });
 
-    bar.appendChild(reject);
-    bar.appendChild(accept);
     return bar;
   }
   // Always rebuild: the widget closes over onAccept/onReject callbacks tied

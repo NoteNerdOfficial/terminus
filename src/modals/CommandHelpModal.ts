@@ -55,14 +55,14 @@ export class CommandHelpModal extends Modal {
   private async runExplain(button: HTMLElement): Promise<void> {
     button.setAttribute("disabled", "true");
     this.explainResultEl.empty();
-    this.explainResultEl.createEl("div", { text: "Asking Claude…", cls: "terminus-pending-empty" });
+    this.explainResultEl.createDiv({ text: "Asking Claude…", cls: "terminus-pending-empty" });
     try {
       const explanation = await explainCommandOutput(this.claudeBin, this.cwd, this.transcript);
       this.explainResultEl.empty();
       this.explainResultEl.createEl("p", { text: explanation });
     } catch (err) {
       this.explainResultEl.empty();
-      this.explainResultEl.createEl("div", {
+      this.explainResultEl.createDiv({
         text: `Couldn't get an explanation: ${errorMessage(err)}`,
         cls: "terminus-pending-empty",
       });
@@ -74,14 +74,14 @@ export class CommandHelpModal extends Modal {
   private async runSuggestFix(button: HTMLElement): Promise<void> {
     button.setAttribute("disabled", "true");
     this.suggestResultEl.empty();
-    this.suggestResultEl.createEl("div", { text: "Asking Claude…", cls: "terminus-pending-empty" });
+    this.suggestResultEl.createDiv({ text: "Asking Claude…", cls: "terminus-pending-empty" });
     try {
       const result = await suggestFixCommand(this.claudeBin, this.cwd, this.transcript, this.shownCommands);
       this.suggestResultEl.empty();
       this.renderResult(result);
     } catch (err) {
       this.suggestResultEl.empty();
-      this.suggestResultEl.createEl("div", {
+      this.suggestResultEl.createDiv({
         text: `Couldn't get a suggestion: ${errorMessage(err)}`,
         cls: "terminus-pending-empty",
       });
@@ -92,7 +92,7 @@ export class CommandHelpModal extends Modal {
 
   private renderResult(result: FixSuggestionResult): void {
     if (result.type === "none") {
-      this.suggestResultEl.createEl("div", {
+      this.suggestResultEl.createDiv({
         text: "Claude couldn't suggest a safe fix for this.",
         cls: "terminus-pending-empty",
       });
@@ -114,7 +114,7 @@ export class CommandHelpModal extends Modal {
   private renderSuggestion(suggestion: FixSuggestion): void {
     const box = this.suggestResultEl.createDiv({ cls: "terminus-fix-suggestion-box" });
     box.createEl("code", { cls: "terminus-fix-suggestion-command", text: suggestion.command });
-    box.createEl("div", { cls: "terminus-fix-suggestion-description", text: suggestion.description });
+    box.createDiv({ cls: "terminus-fix-suggestion-description", text: suggestion.description });
 
     const footer = this.suggestResultEl.createDiv({ cls: "terminus-fix-suggestion-footer" });
     new Setting(footer)

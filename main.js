@@ -15803,14 +15803,14 @@ var CommandHelpModal = class extends import_obsidian3.Modal {
   async runExplain(button) {
     button.setAttribute("disabled", "true");
     this.explainResultEl.empty();
-    this.explainResultEl.createEl("div", { text: "Asking Claude\u2026", cls: "terminus-pending-empty" });
+    this.explainResultEl.createDiv({ text: "Asking Claude\u2026", cls: "terminus-pending-empty" });
     try {
       const explanation = await explainCommandOutput(this.claudeBin, this.cwd, this.transcript);
       this.explainResultEl.empty();
       this.explainResultEl.createEl("p", { text: explanation });
     } catch (err) {
       this.explainResultEl.empty();
-      this.explainResultEl.createEl("div", {
+      this.explainResultEl.createDiv({
         text: `Couldn't get an explanation: ${errorMessage2(err)}`,
         cls: "terminus-pending-empty"
       });
@@ -15821,14 +15821,14 @@ var CommandHelpModal = class extends import_obsidian3.Modal {
   async runSuggestFix(button) {
     button.setAttribute("disabled", "true");
     this.suggestResultEl.empty();
-    this.suggestResultEl.createEl("div", { text: "Asking Claude\u2026", cls: "terminus-pending-empty" });
+    this.suggestResultEl.createDiv({ text: "Asking Claude\u2026", cls: "terminus-pending-empty" });
     try {
       const result = await suggestFixCommand(this.claudeBin, this.cwd, this.transcript, this.shownCommands);
       this.suggestResultEl.empty();
       this.renderResult(result);
     } catch (err) {
       this.suggestResultEl.empty();
-      this.suggestResultEl.createEl("div", {
+      this.suggestResultEl.createDiv({
         text: `Couldn't get a suggestion: ${errorMessage2(err)}`,
         cls: "terminus-pending-empty"
       });
@@ -15838,7 +15838,7 @@ var CommandHelpModal = class extends import_obsidian3.Modal {
   }
   renderResult(result) {
     if (result.type === "none") {
-      this.suggestResultEl.createEl("div", {
+      this.suggestResultEl.createDiv({
         text: "Claude couldn't suggest a safe fix for this.",
         cls: "terminus-pending-empty"
       });
@@ -15854,7 +15854,7 @@ var CommandHelpModal = class extends import_obsidian3.Modal {
   renderSuggestion(suggestion) {
     const box = this.suggestResultEl.createDiv({ cls: "terminus-fix-suggestion-box" });
     box.createEl("code", { cls: "terminus-fix-suggestion-command", text: suggestion.command });
-    box.createEl("div", { cls: "terminus-fix-suggestion-description", text: suggestion.description });
+    box.createDiv({ cls: "terminus-fix-suggestion-description", text: suggestion.description });
     const footer = this.suggestResultEl.createDiv({ cls: "terminus-fix-suggestion-footer" });
     new import_obsidian3.Setting(footer).addButton(
       (btn) => (
@@ -16043,7 +16043,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
     this.term.open(xtermContainer);
     this.loadWebglRenderer();
     this.fitAddon.fit();
-    (_a8 = activeDocument.fonts) == null ? void 0 : _a8.ready.then(() => this.applyFontFamily());
+    void ((_a8 = activeDocument.fonts) == null ? void 0 : _a8.ready.then(() => this.applyFontFamily()));
     this.fontLoadingDoneHandler = () => {
       if (this.fontRemeasureTimer !== null)
         window.clearTimeout(this.fontRemeasureTimer);
@@ -16156,7 +16156,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
       console.warn("Terminus: no view-header actions container; skipping activity chip");
       return;
     }
-    actions.style.flexShrink = "0";
+    actions.setCssStyles({ flexShrink: "0" });
     const el2 = createDiv({ cls: "terminus-activity" });
     actions.parentElement.insertBefore(el2, actions);
     el2.createSpan({ cls: "terminus-activity-dot" });
@@ -16196,10 +16196,9 @@ var TerminalView = class extends import_obsidian5.ItemView {
    *  when several are running. Falls back to the vault accent. */
   refreshActivityColor() {
     var _a8, _b;
-    (_b = this.activityEl) == null ? void 0 : _b.style.setProperty(
-      "--terminus-activity-color",
-      (_a8 = this.color) != null ? _a8 : "var(--interactive-accent)"
-    );
+    (_b = this.activityEl) == null ? void 0 : _b.setCssProps({
+      "--terminus-activity-color": (_a8 = this.color) != null ? _a8 : "var(--interactive-accent)"
+    });
   }
   async promptRename() {
     const name = await RenameTerminalModal.prompt(this.app, this.getDisplayText());
@@ -17157,12 +17156,12 @@ function renderMinimap(wrapper, scrollBody, lines) {
 function renderDiffLine(container, line) {
   const marker = line.marker === "+" ? "add" : line.marker === "-" ? "remove" : "context";
   const row = container.createDiv({ cls: `terminus-diff-line terminus-diff-line-${marker}` });
-  row.createEl("span", { cls: "terminus-diff-gutter-num", text: String(line.lineNumber) });
-  row.createEl("span", { cls: "terminus-diff-marker", text: line.marker });
-  const content = row.createEl("span", { cls: "terminus-diff-content" });
+  row.createSpan({ cls: "terminus-diff-gutter-num", text: String(line.lineNumber) });
+  row.createSpan({ cls: "terminus-diff-marker", text: line.marker });
+  const content = row.createSpan({ cls: "terminus-diff-content" });
   for (const segment2 of line.segments) {
     if (segment2.emphasis) {
-      content.createEl("span", {
+      content.createSpan({
         cls: line.marker === "-" ? "terminus-diff-remove" : "terminus-diff-add",
         text: segment2.text
       });
@@ -17204,10 +17203,7 @@ var RemovedGhostWidget = class extends import_view.WidgetType {
     this.text = text;
   }
   toDOM() {
-    const span = activeDocument.createElement("span");
-    span.className = "terminus-inline-diff-remove-line";
-    span.textContent = this.text;
-    return span;
+    return createSpan({ cls: "terminus-inline-diff-remove-line", text: this.text });
   }
   eq(other) {
     return other.text === this.text;
@@ -17219,28 +17215,24 @@ var DiffControlsWidget = class extends import_view.WidgetType {
     this.overlay = overlay;
   }
   toDOM() {
-    const bar = activeDocument.createElement("div");
-    bar.className = "terminus-inline-diff-controls";
-    const label = activeDocument.createElement("span");
-    label.className = "terminus-inline-diff-label";
-    label.textContent = "Terminus \xB7 applied change";
-    bar.appendChild(label);
-    const reject = activeDocument.createElement("button");
-    reject.textContent = "Reject";
-    reject.className = "terminus-inline-diff-reject";
+    const bar = createDiv({ cls: "terminus-inline-diff-controls" });
+    bar.createSpan({ cls: "terminus-inline-diff-label", text: "Terminus \xB7 applied change" });
+    const reject = bar.createEl("button", {
+      cls: "terminus-inline-diff-reject",
+      text: "Reject"
+    });
     reject.addEventListener("click", (e) => {
       e.preventDefault();
       this.overlay.onReject();
     });
-    const accept = activeDocument.createElement("button");
-    accept.textContent = "Accept";
-    accept.className = "terminus-inline-diff-accept mod-cta";
+    const accept = bar.createEl("button", {
+      cls: "terminus-inline-diff-accept mod-cta",
+      text: "Accept"
+    });
     accept.addEventListener("click", (e) => {
       e.preventDefault();
       this.overlay.onAccept();
     });
-    bar.appendChild(reject);
-    bar.appendChild(accept);
     return bar;
   }
   // Always rebuild: the widget closes over onAccept/onReject callbacks tied
@@ -17513,7 +17505,7 @@ function renderContextBlock(container, lines, oldStart, newStart) {
 }
 function renderHunkControls(container, hunk, change, store) {
   const bar = container.createDiv({ cls: "terminus-inline-diff-controls terminus-split-diff-hunk-controls" });
-  bar.createEl("span", { cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
+  bar.createSpan({ cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
   const resolve = (accepted) => {
     store.resolveHunk(change.id, hunk.index, accepted).catch((err) => {
       new import_obsidian7.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge12.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
@@ -17534,11 +17526,11 @@ function renderSplitCell(row, side, kind, lineNumber, cellLine) {
   });
   if (kind === "filler")
     return;
-  cell.createEl("span", { cls: "terminus-diff-gutter-num", text: lineNumber !== null ? String(lineNumber) : "" });
-  const content = cell.createEl("span", { cls: "terminus-diff-content" });
+  cell.createSpan({ cls: "terminus-diff-gutter-num", text: lineNumber !== null ? String(lineNumber) : "" });
+  const content = cell.createSpan({ cls: "terminus-diff-content" });
   for (const segment2 of (_a8 = cellLine == null ? void 0 : cellLine.segments) != null ? _a8 : []) {
     if (segment2.emphasis) {
-      content.createEl("span", {
+      content.createSpan({
         cls: kind === "remove" ? "terminus-diff-remove" : kind === "add" ? "terminus-diff-add" : void 0,
         text: segment2.text
       });
@@ -17571,9 +17563,9 @@ var DiffSplitView = class extends import_obsidian8.ItemView {
         return;
       }
       const header = container.createDiv({ cls: "terminus-split-diff-header" });
-      header.createEl("span", { cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge13.pathBasename)(change.diff.filePath) });
+      header.createSpan({ cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge13.pathBasename)(change.diff.filePath) });
       if (change.editCount > 1) {
-        header.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
+        header.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
       }
       renderSplitDiffBody(container, this.plugin.pendingChangesStore, change);
     };
@@ -17634,7 +17626,7 @@ var ActionLogModal = class extends import_obsidian9.Modal {
       list.empty();
       const entries = this.actionLog.list({ search });
       if (entries.length === 0) {
-        list.createEl("div", { text: "No matching entries", cls: "terminus-pending-empty" });
+        list.createDiv({ text: "No matching entries", cls: "terminus-pending-empty" });
         return;
       }
       for (const entry of entries) {
@@ -17650,16 +17642,16 @@ var ActionLogModal = class extends import_obsidian9.Modal {
   }
   renderRow(list, entry) {
     const row = list.createDiv({ cls: "terminus-action-log-row" });
-    row.createEl("span", {
+    row.createSpan({
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted"
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge14.pathBasename)(entry.filePath) });
-    row.createEl("span", {
+    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge14.pathBasename)(entry.filePath) });
+    row.createSpan({
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` \xB7 ${entry.editCount} edits` : ""}`
     });
-    row.createEl("span", { cls: "terminus-pending-path", text: new Date(entry.timestamp).toLocaleString() });
+    row.createSpan({ cls: "terminus-pending-path", text: new Date(entry.timestamp).toLocaleString() });
   }
 };
 
@@ -17736,7 +17728,7 @@ var PendingChangesView = class extends import_obsidian11.ItemView {
       const history = this.plugin.pendingChangesStore.listHistory();
       const header = container.createDiv({ cls: "terminus-pending-header" });
       if (changes.length === 0) {
-        header.createEl("div", { text: "No pending changes", cls: "terminus-pending-empty" });
+        header.createDiv({ text: "No pending changes", cls: "terminus-pending-empty" });
       } else {
         this.renderPendingSection(container, header, changes);
       }
@@ -17781,10 +17773,10 @@ var PendingChangesView = class extends import_obsidian11.ItemView {
     const headerBar = header.createDiv({ cls: "terminus-pending-header-bar" });
     const headerText = headerBar.createDiv();
     const titleLine = headerText.createDiv({ cls: "terminus-pending-header-title-row" });
-    titleLine.createEl("span", { cls: "terminus-pending-header-title", text: "Pending changes" });
-    titleLine.createEl("span", { cls: "terminus-diff-stat-add", text: `+${totalAdded}` });
-    titleLine.createEl("span", { cls: "terminus-diff-stat-remove", text: `-${totalRemoved}` });
-    const subtitle = headerText.createEl("div", { cls: "terminus-pending-header-subtitle" });
+    titleLine.createSpan({ cls: "terminus-pending-header-title", text: "Pending changes" });
+    titleLine.createSpan({ cls: "terminus-diff-stat-add", text: `+${totalAdded}` });
+    titleLine.createSpan({ cls: "terminus-diff-stat-remove", text: `-${totalRemoved}` });
+    const subtitle = headerText.createDiv({ cls: "terminus-pending-header-subtitle" });
     const filesLabel = `${changes.length} ${changes.length === 1 ? "file" : "files"}`;
     subtitle.setText(groups.size > 1 ? `${filesLabel} across ${groups.size} terminals` : filesLabel);
     const bulkRow = headerBar.createDiv({ cls: "terminus-pending-bulk-actions" });
@@ -17843,12 +17835,12 @@ var PendingChangesView = class extends import_obsidian11.ItemView {
       group.style.setProperty("--terminus-group-color", panelColor);
     }
     const groupHeader = group.createDiv({ cls: "terminus-group-header" });
-    const chevron = groupHeader.createEl("span", { cls: "terminus-group-chevron", text: "\u25BE" });
+    const chevron = groupHeader.createSpan({ cls: "terminus-group-chevron", text: "\u25BE" });
     const groupText = groupHeader.createDiv({ cls: "terminus-group-text" });
     const groupNameRow = groupText.createDiv({ cls: "terminus-group-name-row" });
-    groupNameRow.createEl("span", { text: panelLabel, cls: "terminus-group-title" });
-    groupNameRow.createEl("span", { cls: "terminus-group-stat-add", text: `+${groupAdded}` });
-    groupNameRow.createEl("span", { cls: "terminus-group-stat-remove", text: `-${groupRemoved}` });
+    groupNameRow.createSpan({ text: panelLabel, cls: "terminus-group-title" });
+    groupNameRow.createSpan({ cls: "terminus-group-stat-add", text: `+${groupAdded}` });
+    groupNameRow.createSpan({ cls: "terminus-group-stat-remove", text: `-${groupRemoved}` });
     groupText.createDiv({
       cls: "terminus-group-count",
       text: `${changes.length} ${changes.length === 1 ? "file" : "files"}`
@@ -17883,21 +17875,21 @@ var PendingChangesView = class extends import_obsidian11.ItemView {
   renderRow(list, change, stats) {
     const row = list.createDiv({ cls: "terminus-pending-row" });
     const summary = row.createDiv({ cls: "terminus-pending-row-summary" });
-    const chevron = summary.createEl("span", { cls: "terminus-pending-chevron", text: "\u25B8" });
+    const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "\u25B8" });
     const info = summary.createDiv({ cls: "terminus-pending-info" });
     const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-    nameRow.createEl("span", { cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge16.pathBasename)(change.diff.filePath) });
-    nameRow.createEl("span", { cls: "terminus-diff-stat-add", text: `+${stats.added}` });
-    nameRow.createEl("span", { cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
+    nameRow.createSpan({ cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge16.pathBasename)(change.diff.filePath) });
+    nameRow.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
+    nameRow.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
     if (change.editCount > 1) {
-      nameRow.createEl("span", { cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
+      nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
     }
     const vaultName = (0, import_terminus_node_bridge16.pathBasename)(this.plugin.getVaultBasePath());
     const relativePath = (0, import_terminus_node_bridge16.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
-    info.createEl("div", { cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
+    info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
     if (change.brokenBacklinks.length > 0) {
       const count = change.brokenBacklinks.length;
-      info.createEl("div", {
+      info.createDiv({
         cls: "terminus-backlink-warning",
         text: `\u26A0 may break ${count} incoming ${count === 1 ? "link" : "links"}`
       });
@@ -17949,7 +17941,7 @@ var PendingChangesView = class extends import_obsidian11.ItemView {
   renderRowBody(body, change) {
     if (change.brokenBacklinks.length > 0) {
       const warning = body.createDiv({ cls: "terminus-backlink-warning-detail" });
-      warning.createEl("div", { text: "This edit removed a heading/block that other notes link to:" });
+      warning.createDiv({ text: "This edit removed a heading/block that other notes link to:" });
       const list = warning.createEl("ul");
       for (const link of change.brokenBacklinks) {
         list.createEl("li", {
@@ -17997,7 +17989,7 @@ var PendingChangesView = class extends import_obsidian11.ItemView {
     const headContent = await getGitHeadContent(this.plugin.getVaultBasePath(), change.diff.filePath);
     container.empty();
     if (headContent === null) {
-      container.createEl("div", {
+      container.createDiv({
         cls: "terminus-pending-empty",
         text: "Not tracked in git, or this vault isn't a git repository."
       });
@@ -18013,9 +18005,9 @@ var PendingChangesView = class extends import_obsidian11.ItemView {
   }
   renderHistorySection(container, history) {
     const section = container.createDiv({ cls: "terminus-history-section" });
-    const summary = section.createEl("div", { cls: "terminus-history-toggle" });
-    const chevron = summary.createEl("span", { cls: "terminus-pending-chevron", text: "\u25B8" });
-    summary.createEl("span", { text: `Recently resolved (${history.length})` });
+    const summary = section.createDiv({ cls: "terminus-history-toggle" });
+    const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "\u25B8" });
+    summary.createSpan({ text: `Recently resolved (${history.length})` });
     const list = section.createDiv({ cls: "terminus-history-list" });
     list.hide();
     for (const item of history) {
@@ -18034,11 +18026,11 @@ var PendingChangesView = class extends import_obsidian11.ItemView {
   }
   renderHistoryRow(list, item) {
     const row = list.createDiv({ cls: "terminus-history-row" });
-    row.createEl("span", {
+    row.createSpan({
       cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: item.accepted ? "Kept" : "Reverted"
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: (0, import_terminus_node_bridge16.pathBasename)(item.diff.filePath) });
+    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge16.pathBasename)(item.diff.filePath) });
     row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
       this.plugin.pendingChangesStore.undo(item.historyId).catch((err) => {
         new import_obsidian11.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);

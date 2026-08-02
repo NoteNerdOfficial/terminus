@@ -24,7 +24,7 @@ export class ActionLogModal extends Modal {
       list.empty();
       const entries = this.actionLog.list({ search });
       if (entries.length === 0) {
-        list.createEl("div", { text: "No matching entries", cls: "terminus-pending-empty" });
+        list.createDiv({ text: "No matching entries", cls: "terminus-pending-empty" });
         return;
       }
       for (const entry of entries) {
@@ -43,15 +43,15 @@ export class ActionLogModal extends Modal {
 
   private renderRow(list: HTMLElement, entry: ActionLogEntry): void {
     const row = list.createDiv({ cls: "terminus-action-log-row" });
-    row.createEl("span", {
+    row.createSpan({
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted",
     });
-    row.createEl("span", { cls: "terminus-history-filename", text: pathBasename(entry.filePath) });
-    row.createEl("span", {
+    row.createSpan({ cls: "terminus-history-filename", text: pathBasename(entry.filePath) });
+    row.createSpan({
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` · ${entry.editCount} edits` : ""}`,
     });
-    row.createEl("span", { cls: "terminus-pending-path", text: new Date(entry.timestamp).toLocaleString() });
+    row.createSpan({ cls: "terminus-pending-path", text: new Date(entry.timestamp).toLocaleString() });
   }
 }
