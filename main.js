@@ -85,7 +85,7 @@ var require_fs = __commonJS({
     }();
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.pathJoin = pathJoin8;
-    exports.pathBasename = pathBasename8;
+    exports.pathBasename = pathBasename9;
     exports.pathDirname = pathDirname3;
     exports.pathRelative = pathRelative5;
     exports.fileExistsSync = fileExistsSync4;
@@ -103,7 +103,7 @@ var require_fs = __commonJS({
     function pathJoin8(...segments) {
       return nodePath.join(...segments);
     }
-    function pathBasename8(filePath, ext) {
+    function pathBasename9(filePath, ext) {
       return nodePath.basename(filePath, ext);
     }
     function pathDirname3(filePath) {
@@ -12171,6 +12171,7 @@ var RenameTerminalModal = class extends import_obsidian4.Modal {
 // src/views/TerminalView.ts
 var TERMINUS_VIEW_TYPE = "terminus-view";
 var SCROLLBACK_PERSIST_LINES = 1e3;
+var ACTIVITY_LINGER_MS = 4e3;
 function resolveMonospaceFontStack() {
   const resolved = getComputedStyle(activeDocument.body).getPropertyValue("--font-monospace").trim();
   const fallback = "Menlo, Monaco, Consolas, monospace";
@@ -12180,6 +12181,13 @@ function shellQuoteIfNeeded(path) {
   if (!/[\s'"$`\\!*?[\](){}<>|;&~]/.test(path))
     return path;
   return `'${path.replace(/'/g, `'\\''`)}'`;
+}
+function middleTruncate(text, max = 26) {
+  if (text.length <= max)
+    return text;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = Math.floor((max - 1) / 2);
+  return `${text.slice(0, head)}\u2026${text.slice(text.length - tail)}`;
 }
 function getOsFilePath(file) {
   if (!import_obsidian5.Platform.isDesktopApp)
@@ -12237,6 +12245,13 @@ var TerminalView = class extends import_obsidian5.ItemView {
     // string (see terminal/colorPalette.ts), not an indirect id.
     this.customName = null;
     this.color = null;
+    // Live "Claude is editing X" chip in this view's own header. Driven by
+    // onChangeApplied (which already fires once per file this terminal's
+    // hook reports), so it needs no new plumbing -- see updateActivity().
+    this.activityEl = null;
+    this.activityLabelEl = null;
+    this.activityTimer = null;
+    this.activityFiles = /* @__PURE__ */ new Set();
     this.token = (0, import_terminus_node_bridge10.randomHex)(16);
     this.terminalNumber = plugin.allocateTerminalNumber();
   }
@@ -12329,12 +12344,71 @@ var TerminalView = class extends import_obsidian5.ItemView {
     xtermContainer.addEventListener("dragover", (evt) => evt.preventDefault());
     xtermContainer.addEventListener("drop", (evt) => this.handleDrop(evt));
     this.addAction("pencil", "Rename terminal", () => void this.promptRename());
-    this.addAction(
+    const paletteAction = this.addAction(
       "palette",
       "Set terminal color",
       (evt) => openTerminalColorPicker(evt.currentTarget, this.color, (color) => this.setColor(color))
     );
+    this.mountActivityIndicator(paletteAction);
     this.refreshIdentity();
+  }
+  /**
+   * "Claude is editing X" chip, mounted just left of the header's action
+   * icons. The Pending Changes panel is deliberately debounced so it
+   * doesn't steal focus mid-turn (see main.ts) -- which leaves a gap where
+   * a long multi-file turn is running and nothing on screen says so. This
+   * fills that gap without touching the non-blocking design.
+   */
+  mountActivityIndicator(anchorAction) {
+    const actions = anchorAction.parentElement;
+    if (!(actions == null ? void 0 : actions.parentElement)) {
+      console.warn("Terminus: no view-header actions container; skipping activity chip");
+      return;
+    }
+    actions.style.flexShrink = "0";
+    const el2 = createDiv({ cls: "terminus-activity" });
+    actions.parentElement.insertBefore(el2, actions);
+    el2.createSpan({ cls: "terminus-activity-dot" });
+    this.activityLabelEl = el2.createSpan({ cls: "terminus-activity-label" });
+    el2.addEventListener("click", () => void this.plugin.revealPendingChangesView());
+    this.activityEl = el2;
+    this.refreshActivityColor();
+  }
+  /** Called once per file this terminal's hook reports, before the write
+   *  lands -- so the name shown is the file being written, not one already
+   *  finished ("editing", never "edited"). */
+  noteActivity(filePath) {
+    if (!this.activityEl || !this.activityLabelEl)
+      return;
+    this.activityFiles.add(filePath);
+    const names = [...this.activityFiles];
+    const only = names.length === 1 ? names[0] : void 0;
+    const label = only ? middleTruncate((0, import_terminus_node_bridge10.pathBasename)(only)) : `${names.length} files`;
+    this.activityLabelEl.setText(label);
+    this.activityEl.setAttribute("aria-label", names.join("\n"));
+    this.activityEl.addClass("is-active");
+    if (this.activityTimer !== null)
+      window.clearTimeout(this.activityTimer);
+    this.activityTimer = window.setTimeout(() => this.clearActivity(), ACTIVITY_LINGER_MS);
+  }
+  clearActivity() {
+    var _a5;
+    if (this.activityTimer !== null) {
+      window.clearTimeout(this.activityTimer);
+      this.activityTimer = null;
+    }
+    this.activityFiles.clear();
+    (_a5 = this.activityEl) == null ? void 0 : _a5.removeClass("is-active");
+  }
+  /** The dot carries this terminal's own color, matching the tab strip and
+   *  the Pending Changes group edge, so it's obvious which session is busy
+   *  when several are running. Falls back to the vault accent. */
+  refreshActivityColor() {
+    var _a5, _b;
+    (_b = this.activityEl) == null ? void 0 : _b.style.setProperty(
+      "--terminus-activity-color",
+      (_a5 = this.color) != null ? _a5 : "var(--interactive-accent)"
+    );
   }
   async promptRename() {
     const name = await RenameTerminalModal.prompt(this.app, this.getDisplayText());
@@ -12344,6 +12418,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
   setColor(color) {
     this.color = color;
     this.refreshIdentity();
+    this.refreshActivityColor();
   }
   refreshIdentity() {
     refreshTabHeader(this.leaf, this.color);
@@ -12387,6 +12462,9 @@ var TerminalView = class extends import_obsidian5.ItemView {
       window.clearTimeout(this.fontRemeasureTimer);
       this.fontRemeasureTimer = null;
     }
+    this.clearActivity();
+    this.activityEl = null;
+    this.activityLabelEl = null;
     this.plugin.reviewServer.unregister(this.token);
     (_c2 = this.pty) == null ? void 0 : _c2.kill();
     (_d = this.commandTracker) == null ? void 0 : _d.dispose();
@@ -12612,6 +12690,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
    */
   async onChangeApplied(payload) {
     const diff = await buildDiff(payload);
+    this.noteActivity(diff.filePath);
     this.plugin.pendingChangesStore.recordChange({
       payload,
       diff,

@@ -2,7 +2,7 @@ import { ItemView, Notice, Platform, TFile, ViewStateResult, WorkspaceLeaf } fro
 import { IDecoration, ITheme, Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { pathJoin, pathRelative, randomHex, getAllEnvVars, fileExistsSync } from "terminus-node-bridge";
+import { pathJoin, pathRelative, pathBasename, randomHex, getAllEnvVars, fileExistsSync } from "terminus-node-bridge";
 import { PtyProcess } from "../pty/PtyProcess";
 import { getShellIntegrationEnv } from "../pty/shellIntegration";
 import { buildDiff } from "../server/diff";
@@ -24,6 +24,11 @@ export const TERMINUS_VIEW_TYPE = "terminus-view";
 // -- generous enough to feel continuous across an Obsidian restart, bounded
 // enough not to bloat the workspace layout file.
 const SCROLLBACK_PERSIST_LINES = 1000;
+/** How long the "editing" chip stays up after the last reported write.
+ *  A turn gives no end-of-turn signal, so this is what stands in for one --
+ *  long enough to outlast the gap between files in a burst and to still be
+ *  visible as the Pending Changes panel reveals. */
+const ACTIVITY_LINGER_MS = 4000;
 
 /**
  * xterm.js measures character cell width via Canvas 2D's `context.font`,
@@ -52,6 +57,17 @@ function resolveMonospaceFontStack(): string {
 function shellQuoteIfNeeded(path: string): string {
   if (!/[\s'"$`\\!*?[\](){}<>|;&~]/.test(path)) return path;
   return `'${path.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Note titles are long and their distinguishing part is often the tail
+ *  ("... draft v2.md"), so plain end-ellipsis collapses every file in a
+ *  folder to the same string. Keeps both ends instead. CSS can't do this
+ *  -- text-overflow only cuts one end. */
+function middleTruncate(text: string, max = 26): string {
+  if (text.length <= max) return text;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = Math.floor((max - 1) / 2);
+  return `${text.slice(0, head)}…${text.slice(text.length - tail)}`;
 }
 
 /** A dropped OS file's absolute path used to be readable straight off
@@ -128,6 +144,13 @@ export class TerminalView extends ItemView {
   // string (see terminal/colorPalette.ts), not an indirect id.
   private customName: string | null = null;
   private color: string | null = null;
+  // Live "Claude is editing X" chip in this view's own header. Driven by
+  // onChangeApplied (which already fires once per file this terminal's
+  // hook reports), so it needs no new plumbing -- see updateActivity().
+  private activityEl: HTMLElement | null = null;
+  private activityLabelEl: HTMLElement | null = null;
+  private activityTimer: number | null = null;
+  private readonly activityFiles = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -279,14 +302,89 @@ export class TerminalView extends ItemView {
     xtermContainer.addEventListener("drop", (evt) => this.handleDrop(evt));
 
     this.addAction("pencil", "Rename terminal", () => void this.promptRename());
-    this.addAction("palette", "Set terminal color", (evt) =>
+    const paletteAction = this.addAction("palette", "Set terminal color", (evt) =>
       openTerminalColorPicker(evt.currentTarget as HTMLElement, this.color, (color) => this.setColor(color))
     );
+    // Must come after addAction() -- the header's actions container doesn't
+    // exist until the first action is added, and the chip is positioned
+    // relative to it.
+    this.mountActivityIndicator(paletteAction);
 
     // setState() may have already run (restoring a saved name/color) before
     // this point -- apply it now that the container/leaf are actually
     // ready, rather than relying on setState's own timing.
     this.refreshIdentity();
+  }
+
+  /**
+   * "Claude is editing X" chip, mounted just left of the header's action
+   * icons. The Pending Changes panel is deliberately debounced so it
+   * doesn't steal focus mid-turn (see main.ts) -- which leaves a gap where
+   * a long multi-file turn is running and nothing on screen says so. This
+   * fills that gap without touching the non-blocking design.
+   */
+  private mountActivityIndicator(anchorAction: HTMLElement): void {
+    // Derived from the element addAction() hands back rather than looked up
+    // by class name -- ".view-actions" is an internal detail of Obsidian's
+    // header markup, and this is the container it actually put the icon in.
+    const actions = anchorAction.parentElement;
+    if (!actions?.parentElement) {
+      console.warn("Terminus: no view-header actions container; skipping activity chip");
+      return;
+    }
+    // The icons must never be what gives way when the chip is wide. Set
+    // here rather than in CSS for the same reason as above.
+    actions.style.flexShrink = "0";
+
+    // Placed before the actions rather than appended, so the chip grows
+    // leftward into empty header space instead of pushing the icons out.
+    const el = createDiv({ cls: "terminus-activity" });
+    actions.parentElement.insertBefore(el, actions);
+    el.createSpan({ cls: "terminus-activity-dot" });
+    this.activityLabelEl = el.createSpan({ cls: "terminus-activity-label" });
+    el.addEventListener("click", () => void this.plugin.revealPendingChangesView());
+    this.activityEl = el;
+    this.refreshActivityColor();
+  }
+
+  /** Called once per file this terminal's hook reports, before the write
+   *  lands -- so the name shown is the file being written, not one already
+   *  finished ("editing", never "edited"). */
+  private noteActivity(filePath: string): void {
+    if (!this.activityEl || !this.activityLabelEl) return;
+    this.activityFiles.add(filePath);
+
+    const names = [...this.activityFiles];
+    const only = names.length === 1 ? names[0] : undefined;
+    const label = only ? middleTruncate(pathBasename(only)) : `${names.length} files`;
+    this.activityLabelEl.setText(label);
+    // Full paths on hover -- the chip itself only ever shows basenames.
+    this.activityEl.setAttribute("aria-label", names.join("\n"));
+    this.activityEl.addClass("is-active");
+
+    // Lingers past the last edit so the chip is still up when the panel
+    // reveals, then clears itself -- a turn has no "done" signal to wait on.
+    if (this.activityTimer !== null) window.clearTimeout(this.activityTimer);
+    this.activityTimer = window.setTimeout(() => this.clearActivity(), ACTIVITY_LINGER_MS);
+  }
+
+  private clearActivity(): void {
+    if (this.activityTimer !== null) {
+      window.clearTimeout(this.activityTimer);
+      this.activityTimer = null;
+    }
+    this.activityFiles.clear();
+    this.activityEl?.removeClass("is-active");
+  }
+
+  /** The dot carries this terminal's own color, matching the tab strip and
+   *  the Pending Changes group edge, so it's obvious which session is busy
+   *  when several are running. Falls back to the vault accent. */
+  private refreshActivityColor(): void {
+    this.activityEl?.style.setProperty(
+      "--terminus-activity-color",
+      this.color ?? "var(--interactive-accent)"
+    );
   }
 
   private async promptRename(): Promise<void> {
@@ -298,6 +396,7 @@ export class TerminalView extends ItemView {
   private setColor(color: string | null): void {
     this.color = color;
     this.refreshIdentity();
+    this.refreshActivityColor();
   }
 
   private refreshIdentity(): void {
@@ -343,6 +442,9 @@ export class TerminalView extends ItemView {
       window.clearTimeout(this.fontRemeasureTimer);
       this.fontRemeasureTimer = null;
     }
+    this.clearActivity();
+    this.activityEl = null;
+    this.activityLabelEl = null;
     this.plugin.reviewServer.unregister(this.token);
     this.pty?.kill();
     this.commandTracker?.dispose();
@@ -624,6 +726,7 @@ export class TerminalView extends ItemView {
    */
   private async onChangeApplied(payload: PreToolUseHookPayload): Promise<void> {
     const diff = await buildDiff(payload);
+    this.noteActivity(diff.filePath);
     this.plugin.pendingChangesStore.recordChange({
       payload,
       diff,
