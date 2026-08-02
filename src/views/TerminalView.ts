@@ -2,6 +2,7 @@ import { ItemView, Notice, Platform, TFile, ViewStateResult, WorkspaceLeaf } fro
 import { IDecoration, ITheme, Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { pathJoin, pathRelative, pathBasename, randomHex, getAllEnvVars, fileExistsSync } from "terminus-node-bridge";
 import { PtyProcess } from "../pty/PtyProcess";
 import { getShellIntegrationEnv } from "../pty/shellIntegration";
@@ -118,6 +119,7 @@ export class TerminalView extends ItemView {
   private term: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private serializeAddon: SerializeAddon | null = null;
+  private webglAddon: WebglAddon | null = null;
   private pty: PtyProcess | null = null;
   private commandTracker: CommandTracker | null = null;
   private cwdTracker: CwdTracker | null = null;
@@ -190,6 +192,8 @@ export class TerminalView extends ItemView {
     this.term.loadAddon(this.fitAddon);
     this.term.loadAddon(this.serializeAddon);
     this.term.open(xtermContainer);
+    // Must come after open() -- the addon needs a live canvas to attach to.
+    this.loadWebglRenderer();
     this.fitAddon.fit();
 
     // xterm's DOM renderer measures glyph cell size synchronously off
@@ -314,6 +318,43 @@ export class TerminalView extends ItemView {
     // this point -- apply it now that the container/leaf are actually
     // ready, rather than relying on setState's own timing.
     this.refreshIdentity();
+  }
+
+  /**
+   * xterm's default DOM renderer paints every character with the font,
+   * including block elements (U+2580-259F) -- and font block glyphs
+   * essentially never fill the em box exactly, so vertically-stacked blocks
+   * (Claude Code's startup logo) show hairline gaps between rows. The
+   * WebGL/canvas renderers instead honour the `customGlyphs` option (on by
+   * default), drawing those characters geometrically so they span the full
+   * cell and adjacent rows meet seamlessly. xterm's own typings spell this
+   * out: "this doesn't work with the DOM renderer". WebGL is also markedly
+   * faster for the full-screen redraw churn a TUI like Claude Code
+   * generates.
+   *
+   * Failure here is never fatal: a GPU context can be refused up front
+   * (blocklisted driver, Electron software rendering) or lost later
+   * (backgrounding, driver reset). Either way we dispose and let xterm fall
+   * back to the DOM renderer -- the logo gaps come back, nothing breaks.
+   */
+  private loadWebglRenderer(): void {
+    if (!this.term) return;
+    try {
+      const webgl = new WebglAddon();
+      // Fires when the GPU drops the context out from under us. Without
+      // disposing, the terminal keeps "rendering" to a dead context and
+      // goes blank; disposing hands rendering back to the DOM renderer.
+      webgl.onContextLoss(() => {
+        webgl.dispose();
+        if (this.webglAddon === webgl) this.webglAddon = null;
+      });
+      this.term.loadAddon(webgl);
+      this.webglAddon = webgl;
+    } catch (err) {
+      // Thrown synchronously when WebGL2 isn't available at all.
+      console.warn("Terminus: WebGL renderer unavailable, using DOM renderer", err);
+      this.webglAddon = null;
+    }
   }
 
   /**
@@ -445,6 +486,11 @@ export class TerminalView extends ItemView {
     this.clearActivity();
     this.activityEl = null;
     this.activityLabelEl = null;
+    // Explicitly before term.dispose() -- the addon holds a GPU context and
+    // textures that shouldn't wait on GC, and closing terminals repeatedly
+    // would otherwise pile up live WebGL contexts (browsers cap these).
+    this.webglAddon?.dispose();
+    this.webglAddon = null;
     this.plugin.reviewServer.unregister(this.token);
     this.pty?.kill();
     this.commandTracker?.dispose();
