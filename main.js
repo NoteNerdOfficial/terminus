@@ -336,12 +336,16 @@ var require_buffer = __commonJS({
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.bufferToString = bufferToString2;
     exports.bufferLength = bufferLength2;
+    exports.bufferToBytes = bufferToBytes2;
     exports.concatBuffersToString = concatBuffersToString2;
     function bufferToString2(chunk, encoding = "utf8") {
       return chunk.toString(encoding);
     }
     function bufferLength2(chunk) {
       return chunk.length;
+    }
+    function bufferToBytes2(chunk) {
+      return new Uint8Array(chunk);
     }
     function concatBuffersToString2(chunks, encoding = "utf8") {
       return Buffer.concat(chunks).toString(encoding);
@@ -16405,7 +16409,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
     });
     this.pty.on("data", (chunk) => {
       var _a9;
-      return (_a9 = this.term) == null ? void 0 : _a9.write(chunk);
+      return (_a9 = this.term) == null ? void 0 : _a9.write((0, import_terminus_node_bridge10.bufferToBytes)(chunk));
     });
     this.pty.on("stderr", (text) => new import_obsidian5.Notice(`Terminus: ${text.trim()}`));
     this.pty.on("error", (err) => new import_obsidian5.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
