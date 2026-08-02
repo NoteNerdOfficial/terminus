@@ -2,7 +2,7 @@ import { ItemView, Notice, Platform, TFile, ViewStateResult, WorkspaceLeaf } fro
 import { IDecoration, ITheme, Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { pathJoin, pathRelative, randomHex, getAllEnvVars, bufferToString, fileExistsSync } from "terminus-node-bridge";
+import { pathJoin, pathRelative, randomHex, getAllEnvVars, fileExistsSync } from "terminus-node-bridge";
 import { PtyProcess } from "../pty/PtyProcess";
 import { getShellIntegrationEnv } from "../pty/shellIntegration";
 import { buildDiff } from "../server/diff";
@@ -520,7 +520,16 @@ export class TerminalView extends ItemView {
       },
     });
 
-    this.pty.on("data", (chunk: Buffer) => this.term?.write(bufferToString(chunk)));
+    /** Hand xterm the raw bytes, NOT a per-chunk utf8 string. A PTY read
+     *  boundary lands wherever the kernel filled the buffer, which is
+     *  routinely mid-character -- decoding each chunk independently turns
+     *  the split multi-byte sequence into two U+FFFD replacement chars.
+     *  Claude Code's TUI draws its input box out of 3-byte box-drawing
+     *  characters and fully redraws it on every keystroke, so a long input
+     *  line reliably shredded the border into "?" glyphs. xterm's own
+     *  decoder keeps state across write() calls and stitches the halves
+     *  back together. (Buffer is a Uint8Array, so this needs no copy.) */
+    this.pty.on("data", (chunk: Buffer) => this.term?.write(chunk));
     this.pty.on("stderr", (text: string) => new Notice(`Terminus: ${text.trim()}`));
     this.pty.on("error", (err) => new Notice(`Terminus: PTY error: ${errorMessage(err)}`));
     this.pty.on("exit", ({ code }: { code: number | null }) => {

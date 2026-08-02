@@ -334,10 +334,10 @@ var require_buffer = __commonJS({
   "node_modules/terminus-node-bridge/dist/buffer.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.bufferToString = bufferToString3;
+    exports.bufferToString = bufferToString2;
     exports.bufferLength = bufferLength2;
     exports.concatBuffersToString = concatBuffersToString2;
-    function bufferToString3(chunk, encoding = "utf8") {
+    function bufferToString2(chunk, encoding = "utf8") {
       return chunk.toString(encoding);
     }
     function bufferLength2(chunk) {
@@ -12535,7 +12535,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
     });
     this.pty.on("data", (chunk) => {
       var _a6;
-      return (_a6 = this.term) == null ? void 0 : _a6.write((0, import_terminus_node_bridge10.bufferToString)(chunk));
+      return (_a6 = this.term) == null ? void 0 : _a6.write(chunk);
     });
     this.pty.on("stderr", (text) => new import_obsidian5.Notice(`Terminus: ${text.trim()}`));
     this.pty.on("error", (err) => new import_obsidian5.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
