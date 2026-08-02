@@ -17,6 +17,14 @@ Edits land on disk immediately; you review what changed afterwards, with the opt
 | --- |
 | ![Command help popup](screenshots/command-help.png) |
 
+| Rename a terminal |
+| --- |
+| ![Rename terminal modal](screenshots/terminal-rename.png) |
+
+| Color-code a terminal — the tint carries to its native tab |
+| --- |
+| ![Terminal color picker](screenshots/terminal-color.png) |
+
 ## Features
 
 ### Terminal
