@@ -15,6 +15,9 @@
   flex: 1 1 auto;
   min-height: 0;
   padding: 4px;
+  /* Positioning context for the activity chip that floats in its
+     bottom-right corner (see .terminus-activity). */
+  position: relative;
 }
 
 /* xterm.css's own .xterm-char-measure-element (its hidden cell-size probe)
@@ -1190,19 +1193,39 @@
 /* Live "Claude is editing X" chip in a terminal's own view header (see
    views/TerminalView.ts). Sits between the header title and the action
    icons. */
+/* Floats over the bottom-right of the terminal, next to where Claude's own
+   input box sits -- see mountActivityIndicator() for why it lives there and
+   not in the view header.
+
+   Positioned against .terminus-xterm-container (which sets position:
+   relative for exactly this), not against xterm's own .xterm element: the
+   container is ours, so nothing here depends on xterm's internal DOM.
+
+   The inset clears the terminal's own scrollbar on the right and leaves the
+   bottom row legible. It deliberately sits *over* terminal output rather
+   than reserving space away from it -- the chip is only on screen while a
+   turn is actually writing files. */
 .terminus-activity {
+  position: absolute;
+  right: var(--size-4-3);
+  bottom: var(--size-4-2);
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: var(--size-2-2);
-  /* min-width:0 is load-bearing: without it a flex item refuses to shrink
-     below its content width, so a long filename shoves the pencil/palette
-     actions off the edge of a narrow (split-right) header. */
+  max-width: calc(100% - var(--size-4-6));
   min-width: 0;
-  flex: 0 1 auto;
   overflow: hidden;
-  margin-right: var(--size-4-2);
-  padding: 0 var(--size-2-2);
+  padding: var(--size-2-1) var(--size-2-3);
+  /* Reads as a control laid on the terminal rather than as terminal output:
+     the terminal's text is the plugin's least-owned surface, so anything
+     drawn on top has to be unmistakably not part of it. */
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background-color: var(--background-secondary);
+  box-shadow: var(--shadow-s);
   cursor: pointer;
+  user-select: none;
   opacity: 0;
   visibility: hidden;
   transition: opacity 150ms ease;
@@ -1212,11 +1235,6 @@
   opacity: 1;
   visibility: visible;
 }
-
-/* The header's action icons must never be the thing that gives way -- that
-   guard is applied to the actions container directly in
-   mountActivityIndicator(), since its class name is Obsidian's internal
-   detail rather than something to depend on from here. */
 
 /* A pulsing dot rather than a glyph: the header already renders a `pencil`
    action for Rename, so a second pencil would read as a duplicate control,
@@ -1252,4 +1270,112 @@
    the signal without the pulse. */
 @media (prefers-reduced-motion: reduce) {
   .terminus-activity-dot { animation: none; }
+}
+
+/* Tooltip shown while hovering a linkified path/URL in terminal output.
+   Positioned from the mouse coordinates the link provider hands us (see
+   LinkTooltip in TerminalLinks.ts) rather than anchored to a cell, since a
+   link's own range can span several wrapped rows.
+
+   The offsets are custom properties, not a static rule, because they change
+   per hover; everything else here is fixed and belongs in CSS. */
+.terminus-link-hover {
+  position: absolute;
+  left: var(--terminus-link-hover-left, 0);
+  top: var(--terminus-link-hover-top, 0);
+  /* Sits above the pointer rather than under it -- below the cursor it
+     would cover the very text the user is aiming at. */
+  transform: translate(-50%, calc(-100% - var(--size-4-2)));
+  z-index: var(--layer-tooltip);
+  pointer-events: none;
+  white-space: nowrap;
+  padding: var(--size-2-1) var(--size-2-3);
+  border-radius: var(--radius-s);
+  background-color: var(--background-modifier-message);
+  color: var(--text-on-accent);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+}
+
+/* Inline warning under the custom font field (see
+   describeCustomFontProblem). Empty most of the time -- :empty keeps it
+   from reserving vertical space when there's nothing to say. */
+.terminus-setting-warning {
+  color: var(--text-warning);
+  font-size: var(--font-ui-smaller);
+  margin-top: var(--size-2-2);
+}
+
+.terminus-setting-warning:empty {
+  display: none;
+}
+
+/* Onboarding modal. Wider than Obsidian's default so the shortcut tables
+   don't wrap a two-word key combo onto two lines, and height-capped so the
+   full guide scrolls its body rather than growing past the window. */
+.terminus-getting-started-modal {
+  max-width: 40rem;
+  width: 100%;
+}
+
+.terminus-getting-started-body {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.terminus-getting-started-body table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+/* The shortcut column shouldn't stretch to half the table just because the
+   description beside it is long. Applied to th as well as td, or the header
+   sits at its own natural width and stops lining up with the column it
+   labels -- which is what made these read as two loose lists rather than a
+   table. */
+.terminus-getting-started-body th:first-child,
+.terminus-getting-started-body td:first-child {
+  white-space: nowrap;
+  width: 1%;
+}
+
+/* Obsidian centers th by default; a left-aligned header is what actually
+   sits above the cells below it. */
+.terminus-getting-started-body th {
+  text-align: left;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  font-weight: var(--font-medium);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.terminus-getting-started-body th,
+.terminus-getting-started-body td {
+  padding: var(--size-2-2) var(--size-4-3) var(--size-2-2) 0;
+  vertical-align: baseline;
+  border-top: none;
+}
+
+/* Key caps. The markdown writes shortcuts as inline code, which by default
+   renders in the same flat style as a file path -- these want to read as
+   keys. */
+.terminus-getting-started-body td:first-child code {
+  background-color: var(--background-modifier-border);
+  color: var(--text-normal);
+  border-radius: var(--radius-s);
+  padding: 0.1em 0.4em;
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+/* Separated by a rule rather than whitespace alone: the body above it
+   scrolls, and without a hard edge a row clipped mid-scroll reads as the
+   modal being broken rather than as there being more to see. */
+.terminus-getting-started-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-3);
+  padding-top: var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
 }

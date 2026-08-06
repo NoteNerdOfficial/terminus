@@ -14,6 +14,7 @@ import { ClosedTerminalBuffer, ClosedTerminalEntry } from "./state/ClosedTermina
 import { ActionLogModal } from "./modals/ActionLogModal";
 import { ConfirmModal } from "./modals/ConfirmModal";
 import { RescueClosedTerminalModal } from "./modals/RescueClosedTerminalModal";
+import { GettingStartedModal } from "./modals/GettingStartedModal";
 import { computeDiffStats } from "./diff/renderDiff";
 import { inlineDiffDecorations, inlineDiffField } from "./editor/inlineDiff";
 import { errorMessage } from "./util/errors";
@@ -159,6 +160,12 @@ export default class TerminusPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "getting-started",
+      name: "Getting started",
+      callback: () => GettingStartedModal.openGuide(this.app),
+    });
+
+    this.addCommand({
       id: "rescue-closed-terminal",
       name: "Rescue closed terminal",
       checkCallback: (checking) => {
@@ -174,7 +181,21 @@ export default class TerminusPlugin extends Plugin {
     // Open the panel once on startup too, so it's already present (not just
     // revealed reactively once Claude's first change lands) if the user
     // goes looking for it.
-    this.app.workspace.onLayoutReady(() => void this.revealPendingChangesView());
+    this.app.workspace.onLayoutReady(() => {
+      void this.revealPendingChangesView();
+      void this.showWelcomeIfFirstRun();
+    });
+  }
+
+  /** Fires at most once per install. The flag is persisted before the modal
+   *  opens rather than after it's dismissed, so a crash or a force-quit
+   *  while it's on screen can't turn it into a modal that greets the user
+   *  on every single startup. */
+  private async showWelcomeIfFirstRun(): Promise<void> {
+    if (this.settings.hasSeenWelcome) return;
+    this.settings.hasSeenWelcome = true;
+    await this.saveSettings();
+    GettingStartedModal.openWelcome(this.app);
   }
 
   onunload(): void {

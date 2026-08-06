@@ -19,6 +19,7 @@ import { detectBacklinkBreakage } from "../backlinks/breakage";
 import { CommandTracker, TrackedCommand } from "../terminal/CommandTracker";
 import { CwdTracker } from "../terminal/CwdTracker";
 import { WikiLinkAutocomplete } from "../terminal/WikiLinkAutocomplete";
+import { registerTerminalLinks } from "../terminal/TerminalLinks";
 import { openTerminalColorPicker } from "../terminal/TerminalColorPicker";
 import { refreshTabHeader, refreshPaneTitle } from "../terminal/tabHeaderColor";
 import { CommandHelpModal } from "../modals/CommandHelpModal";
@@ -33,11 +34,15 @@ export const TERMINUS_VIEW_TYPE = "terminus-view";
 // -- generous enough to feel continuous across an Obsidian restart, bounded
 // enough not to bloat the workspace layout file.
 const SCROLLBACK_PERSIST_LINES = 1000;
-/** How long the "editing" chip stays up after the last reported write.
- *  A turn gives no end-of-turn signal, so this is what stands in for one --
- *  long enough to outlast the gap between files in a burst and to still be
- *  visible as the Pending Changes panel reveals. */
-const ACTIVITY_LINGER_MS = 4000;
+/** Backstop for the "editing" chip, measured from the last reported write.
+ *  The real end-of-turn signal is the Stop hook (see onTurnEnd), which is
+ *  what normally clears the chip; this only catches the cases where that
+ *  ping never arrives -- a `claude` session that was already running when
+ *  the Stop hook got provisioned, a user settings file that drops it, a
+ *  crashed CLI. Generous, because a legitimate turn can sit for minutes
+ *  between writes and cutting it short is the exact bug the Stop hook was
+ *  added to fix; the only cost of being wrong here is a stale chip. */
+const ACTIVITY_FALLBACK_MS = 5 * 60 * 1000;
 
 /**
  * xterm.js measures character cell width via Canvas 2D's `context.font`,
@@ -132,6 +137,7 @@ export class TerminalView extends ItemView {
   private commandTracker: CommandTracker | null = null;
   private cwdTracker: CwdTracker | null = null;
   private wikiLinkAutocomplete: WikiLinkAutocomplete | null = null;
+  private terminalLinks: { dispose(): void } | null = null;
   private readonly failureBadges = new Map<number, IDecoration>();
   private readonly token: string;
   private restoredScrollback: string | null = null;
@@ -154,11 +160,15 @@ export class TerminalView extends ItemView {
   // string (see terminal/colorPalette.ts), not an indirect id.
   private customName: string | null = null;
   private color: string | null = null;
-  // Live "Claude is editing X" chip in this view's own header. Driven by
-  // onChangeApplied (which already fires once per file this terminal's
-  // hook reports), so it needs no new plumbing -- see updateActivity().
+  // Live "Claude is editing X" chip, floating over the terminal's
+  // bottom-right corner (see mountActivityIndicator). Raised by
+  // onChangeApplied (once per file this terminal's PreToolUse hook reports)
+  // and lowered by onTurnEnd (this terminal's Stop hook), so it stays up for
+  // exactly as long as the turn does -- including the stretches in the
+  // middle where Claude is thinking or running non-write tools.
   private activityEl: HTMLElement | null = null;
   private activityLabelEl: HTMLElement | null = null;
+  /** Backstop only, for a turn whose Stop hook never lands. */
   private activityTimer: number | null = null;
   private readonly activityFiles = new Set<string>();
 
@@ -258,8 +268,17 @@ export class TerminalView extends ItemView {
     // incidental layout save, not the cwd the user actually left it in.
     this.cwdTracker = new CwdTracker(this.term, () => this.app.workspace.requestSaveLayout());
 
+    // Registered after cwdTracker: relative paths in output are resolved
+    // against the shell's live cwd, which is what that tracker holds.
+    this.terminalLinks = registerTerminalLinks(this.term, {
+      app: this.app,
+      getCwd: () => this.cwdTracker?.getCwd() ?? this.restoredCwd,
+      getVaultBasePath: () => this.plugin.getVaultBasePath(),
+    });
+
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload),
+      onTurnEnd: () => this.onTurnEnd(),
     });
 
     await this.startPty();
@@ -313,14 +332,12 @@ export class TerminalView extends ItemView {
     xtermContainer.addEventListener("dragover", (evt) => evt.preventDefault());
     xtermContainer.addEventListener("drop", (evt) => this.handleDrop(evt));
 
+    this.mountActivityIndicator(xtermContainer);
+
     this.addAction("pencil", "Rename terminal", () => void this.promptRename());
-    const paletteAction = this.addAction("palette", "Set terminal color", (evt) =>
+    this.addAction("palette", "Set terminal color", (evt) =>
       openTerminalColorPicker(evt.currentTarget as HTMLElement, this.color, (color) => this.setColor(color))
     );
-    // Must come after addAction() -- the header's actions container doesn't
-    // exist until the first action is added, and the chip is positioned
-    // relative to it.
-    this.mountActivityIndicator(paletteAction);
 
     // setState() may have already run (restoring a saved name/color) before
     // this point -- apply it now that the container/leaf are actually
@@ -366,29 +383,26 @@ export class TerminalView extends ItemView {
   }
 
   /**
-   * "Claude is editing X" chip, mounted just left of the header's action
-   * icons. The Pending Changes panel is deliberately debounced so it
-   * doesn't steal focus mid-turn (see main.ts) -- which leaves a gap where
-   * a long multi-file turn is running and nothing on screen says so. This
-   * fills that gap without touching the non-blocking design.
+   * "Claude is editing X" chip. The Pending Changes panel is deliberately
+   * debounced so it doesn't steal focus mid-turn (see main.ts) -- which
+   * leaves a gap where a long multi-file turn is running and nothing on
+   * screen says so. This fills that gap without touching the non-blocking
+   * design.
+   *
+   * Floats in the bottom-right of the terminal itself, not up in the view
+   * header: it's a "right now" signal, and the header is the one part of a
+   * terminal pane nobody is looking at -- eyes are on the prompt at the
+   * bottom, which is also where Claude's own input box is. Bottom-*right*
+   * because the prompt's own text grows from the left.
+   *
+   * An overlay rather than a strip below the terminal: a strip that appears
+   * and disappears would resize the PTY mid-turn (reflowing Claude's TUI
+   * every time a turn starts), and one that's always there to avoid that
+   * would cost a row of terminal height permanently, for something that's
+   * blank most of the time.
    */
-  private mountActivityIndicator(anchorAction: HTMLElement): void {
-    // Derived from the element addAction() hands back rather than looked up
-    // by class name -- ".view-actions" is an internal detail of Obsidian's
-    // header markup, and this is the container it actually put the icon in.
-    const actions = anchorAction.parentElement;
-    if (!actions?.parentElement) {
-      console.warn("Terminus: no view-header actions container; skipping activity chip");
-      return;
-    }
-    // The icons must never be what gives way when the chip is wide. Set
-    // here rather than in CSS for the same reason as above.
-    actions.setCssStyles({ flexShrink: "0" });
-
-    // Placed before the actions rather than appended, so the chip grows
-    // leftward into empty header space instead of pushing the icons out.
-    const el = createDiv({ cls: "terminus-activity" });
-    actions.parentElement.insertBefore(el, actions);
+  private mountActivityIndicator(xtermContainer: HTMLElement): void {
+    const el = xtermContainer.createDiv({ cls: "terminus-activity" });
     el.createSpan({ cls: "terminus-activity-dot" });
     this.activityLabelEl = el.createSpan({ cls: "terminus-activity-label" });
     el.addEventListener("click", () => void this.plugin.revealPendingChangesView());
@@ -411,10 +425,20 @@ export class TerminalView extends ItemView {
     this.activityEl.setAttribute("aria-label", names.join("\n"));
     this.activityEl.addClass("is-active");
 
-    // Lingers past the last edit so the chip is still up when the panel
-    // reveals, then clears itself -- a turn has no "done" signal to wait on.
+    // Refreshed on every write rather than set once, so the backstop always
+    // measures from the *last* file a turn touched. onTurnEnd() is what
+    // actually clears this in the normal case.
     if (this.activityTimer !== null) window.clearTimeout(this.activityTimer);
-    this.activityTimer = window.setTimeout(() => this.clearActivity(), ACTIVITY_LINGER_MS);
+    this.activityTimer = window.setTimeout(() => this.clearActivity(), ACTIVITY_FALLBACK_MS);
+  }
+
+  /** Fires from the Stop hook when Claude finishes its turn in this
+   *  terminal. Clears immediately rather than after a grace period: Stop
+   *  lands only once Claude has written its closing message, which is well
+   *  past the debounced Pending Changes reveal the chip needs to outlast
+   *  (see main.ts), so there's nothing left to stay up for. */
+  private onTurnEnd(): void {
+    this.clearActivity();
   }
 
   private clearActivity(): void {
@@ -473,10 +497,32 @@ export class TerminalView extends ItemView {
     const text = dataTransfer.getData("text/plain").trim();
     if (!text) return;
 
-    const vaultPath = parseObsidianFileUri(text) ?? text;
-    const abstractFile = this.app.vault.getAbstractFileByPath(vaultPath);
-    const absolutePath = abstractFile ? pathJoin(this.plugin.getVaultBasePath(), vaultPath) : text;
-    this.pty?.write(shellQuoteIfNeeded(absolutePath));
+    const uriPath = parseObsidianFileUri(text);
+    const vaultPath = uriPath ?? text;
+    // getFirstLinkpathDest as the fallback, because the obsidian://open
+    // deep link a dragged file carries spells its target the way a
+    // wiki-link does -- extension omitted ("docs/competitive-landscape",
+    // not "docs/competitive-landscape.md"). getAbstractFileByPath needs the
+    // literal on-disk path and so misses every time, which is what used to
+    // drop the whole thing through to the raw-text fallback below and type
+    // the deep link itself into the shell. getFirstLinkpathDest is the API
+    // that resolves that extension-less form, and its result carries the
+    // real path -- which is what gets joined, rather than the link text.
+    const resolved =
+      this.app.vault.getAbstractFileByPath(vaultPath) ??
+      this.app.metadataCache.getFirstLinkpathDest(vaultPath, "");
+    if (resolved) {
+      this.pty?.write(shellQuoteIfNeeded(pathJoin(this.plugin.getVaultBasePath(), resolved.path)));
+      return;
+    }
+
+    // An unresolvable deep link is not something to paste verbatim -- the
+    // URI is never a valid argument to anything the shell might run.
+    if (uriPath) {
+      new Notice(`Terminus: couldn't resolve the dragged file (${uriPath}) to a path in this vault.`);
+      return;
+    }
+    this.pty?.write(shellQuoteIfNeeded(text));
   }
 
   async onClose(): Promise<void> {
@@ -515,6 +561,8 @@ export class TerminalView extends ItemView {
     });
 
     this.cwdTracker?.dispose();
+    this.terminalLinks?.dispose();
+    this.terminalLinks = null;
     this.wikiLinkAutocomplete?.dispose();
     for (const decoration of this.failureBadges.values()) decoration.dispose();
     this.failureBadges.clear();

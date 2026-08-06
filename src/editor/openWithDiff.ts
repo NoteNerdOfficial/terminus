@@ -1,52 +1,63 @@
-import { App, MarkdownView, Notice, TFile } from "obsidian";
+import { MarkdownView, Notice, TFile } from "obsidian";
 import { EditorView } from "@codemirror/view";
-import { pathBasename, pathRelative } from "terminus-node-bridge";
+import { fileExistsSync, pathBasename, pathRelative } from "terminus-node-bridge";
 import { setInlineDiff } from "./inlineDiff";
-import { PendingChange, PendingChangesStore } from "../state/PendingChangesStore";
+import { computeHunks } from "../diff/hunks";
+import { PendingChange } from "../state/PendingChangesStore";
+import { openWithSystemDefaultApp } from "../util/systemOpen";
 import { errorMessage } from "../util/errors";
+import type TerminusPlugin from "../main";
 
-export async function openFileWithInlineDiff(
-  app: App,
-  vaultBasePath: string,
-  store: PendingChangesStore,
-  change: PendingChange
-): Promise<void> {
-  const relPath = pathRelative(vaultBasePath, change.diff.filePath);
-  if (relPath.startsWith("..")) {
-    new Notice("Terminus: file is outside the vault, can't open it as a note.");
-    return;
-  }
-
-  const file = app.vault.getAbstractFileByPath(relPath);
+/**
+ * What the panel's "Open" button does: opens the file, and nothing else.
+ *
+ * On a note it also decorates the editor with the change's inline diff, which
+ * is the whole point of reviewing in place. On anything that can't carry those
+ * decorations -- a .ts opened by a code-editor plugin, an image, a PDF -- the
+ * file simply opens as it normally would. This used to detach that leaf and
+ * substitute Split Diff, which meant "Open" answered a question the user
+ * hadn't asked: Split Diff has its own button right next to this one, so
+ * choosing it for them just took away the thing they clicked for.
+ */
+export async function openChangedFile(plugin: TerminusPlugin, change: PendingChange): Promise<void> {
+  const { app } = plugin;
+  const relPath = pathRelative(plugin.getVaultBasePath(), change.diff.filePath);
+  // Obsidian's vault index structurally excludes dot-prefixed files/folders,
+  // regardless of the "unhidden" plugin -- that plugin only patches
+  // file-explorer/search/Bases display, it doesn't promote dotfiles into real
+  // TFiles other plugins can openFile(). Those and out-of-vault paths go to
+  // the OS, the same fallback a Cmd-clicked path in the terminal takes.
+  const file = relPath.startsWith("..") ? null : app.vault.getAbstractFileByPath(relPath);
   if (!(file instanceof TFile)) {
-    // Obsidian's vault index structurally excludes dot-prefixed files/
-    // folders, regardless of the "unhidden" plugin -- that plugin only
-    // patches file-explorer/search/Bases display, it doesn't promote
-    // dotfiles into real TFiles other plugins can openFile(). Split Diff
-    // never needs a TFile (it renders the hook-captured text directly), so
-    // it's the correct fallback here rather than a dead end.
-    new Notice("Terminus: this file isn't visible to Obsidian's vault (e.g. a hidden dot-file/folder) -- use Split Diff to review it instead.");
+    openOutsideObsidian(change.diff.filePath);
     return;
   }
 
   const leaf = app.workspace.getLeaf(true);
-  await leaf.openFile(file);
+  // eState is how Obsidian itself scrolls a freshly-opened file to a line
+  // (it's the same mechanism a search result or a [[Note#Heading]] link
+  // uses). Scrolling has to be requested here rather than dispatched to
+  // CodeMirror once openFile() resolves: the view applies its own
+  // ephemeral state, scroll position included, as part of the open it is
+  // still finishing when that promise settles, so a scroll issued
+  // afterwards is simply overwritten and the file sits at the top.
+  const firstHunkLine = findFirstHunkLine(change);
+  await leaf.openFile(file, firstHunkLine === null ? undefined : { eState: { line: firstHunkLine } });
+
+  // Everything past this point is the inline-diff overlay, which is a bonus
+  // on top of the open rather than the reason for it -- so each of these
+  // bails leaves the file open and just skips the decorations. The view is
+  // something other than a MarkdownView whenever another plugin has claimed
+  // the extension (a code editor for .ts, say) or Obsidian is showing its own
+  // image/PDF/unsupported-file view; either way the file is on screen, which
+  // is what was asked for.
   const view = leaf.view;
-  if (!(view instanceof MarkdownView)) {
-    // The file is a real TFile but no plugin has registered its extension
-    // as an editable view (registerExtensions()), so openFile() opened some
-    // other view (or Obsidian's own unsupported-file placeholder) instead
-    // of a MarkdownView -- previously this returned with no feedback at all.
-    new Notice("Terminus: this file's type isn't registered as an editable view in Obsidian, so it can't show an inline diff -- use Split Diff to review it instead.");
-    return;
-  }
+  if (!(view instanceof MarkdownView)) return;
 
   const cm = (view.editor as unknown as { cm?: EditorView }).cm;
-  if (!cm) {
-    new Notice("Terminus: couldn't attach inline diff to this editor.");
-    return;
-  }
+  if (!cm) return;
 
+  const store = plugin.pendingChangesStore;
   store.registerInlineOverlay(change.id, () => {
     cm.dispatch({ effects: setInlineDiff.of(null) });
   });
@@ -66,4 +77,45 @@ export async function openFileWithInlineDiff(
       onReject: () => resolve(false),
     }),
   });
+}
+
+/**
+ * Line the first changed hunk starts on, for the caller to hand to
+ * openFile() as ephemeral state. Null when the diff has no hunks at all.
+ *
+ * On anything longer than a screenful, opening at line 1 means hunting for
+ * the change the panel just told you about: the decorations are there,
+ * they are simply somewhere off-screen.
+ */
+function findFirstHunkLine(change: PendingChange): number | null {
+  const firstHunk = computeHunks(change.diff.oldText, change.diff.newText)[0];
+  if (!firstHunk) return null;
+
+  // newStart is an offset into the post-edit text, which is what is on disk
+  // and therefore what the document holds. Clamped anyway: the user may
+  // have edited the note themselves between the hook capturing this change
+  // and opening it here.
+  const newText = change.diff.newText;
+  const offset = Math.min(firstHunk.newStart, newText.length);
+  let line = 0;
+  for (let i = 0; i < offset; i++) {
+    if (newText[i] === "\n") line++;
+  }
+  return line;
+}
+
+/**
+ * For the files Obsidian can't put in a leaf at all. Handing them to the OS
+ * is what "Open" plainly means, and it's already what a Cmd-clicked path in
+ * the terminal does (see TerminalLinks.ts) -- the two entry points shouldn't
+ * disagree about what opening a file is.
+ */
+function openOutsideObsidian(absolutePath: string): void {
+  if (!fileExistsSync(absolutePath)) {
+    // A file the change created and something has since deleted, or a path
+    // that never resolved -- worth saying, since nothing will visibly happen.
+    new Notice(`Terminus: couldn't find ${pathBasename(absolutePath)} on disk.`);
+    return;
+  }
+  openWithSystemDefaultApp(absolutePath);
 }

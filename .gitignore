@@ -23,3 +23,4 @@ app.css
 
 # Personal reference notes, not part of the shipped plugin or its docs
 docs/
+.claude/settings.local.json

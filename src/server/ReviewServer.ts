@@ -9,6 +9,12 @@ export interface RegisteredPanel {
    *  proceed immediately after this resolves, and review happens after the
    *  fact (see PendingChangesStore) rather than gating the write. */
   onChangeApplied(payload: PreToolUseHookPayload): Promise<void>;
+
+  /** Called from the Stop hook when Claude finishes a turn in this panel --
+   *  the one signal that says "no more writes are coming", which nothing in
+   *  the PreToolUse stream can express. Bodyless: the fact that it fired,
+   *  with this panel's token, is the whole message. */
+  onTurnEnd(): void;
 }
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024; // generous cap for a Write tool's full file content
@@ -63,7 +69,7 @@ export class ReviewServer {
   }
 
   private async handleRequest(req: SimpleHttpRequest, res: SimpleHttpResponse): Promise<void> {
-    if (req.method !== "POST" || req.url !== "/review") {
+    if (req.method !== "POST" || (req.url !== "/review" && req.url !== "/turn-end")) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
@@ -75,6 +81,15 @@ export class ReviewServer {
     if (!panel) {
       res.writeHead(403, { "Content-Type": "text/plain" });
       res.end("unknown or expired session token");
+      return;
+    }
+
+    // Answered before the body is read at all: the Stop bridge sends none,
+    // and there's nothing in one we'd want if it did.
+    if (req.url === "/turn-end") {
+      panel.onTurnEnd();
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("");
       return;
     }
 

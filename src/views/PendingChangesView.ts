@@ -2,7 +2,7 @@ import { ItemView, MarkdownRenderer, Notice, WorkspaceLeaf } from "obsidian";
 import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { PendingChange, ResolvedChange } from "../state/PendingChangesStore";
 import { computeDiffStats, renderDiffBody } from "../diff/renderDiff";
-import { openFileWithInlineDiff } from "../editor/openWithDiff";
+import { openChangedFile } from "../editor/openWithDiff";
 import { openDiffSplitView } from "./DiffSplitView";
 import { ActionLogModal } from "../modals/ActionLogModal";
 import { ConfirmModal } from "../modals/ConfirmModal";
@@ -268,7 +268,7 @@ export class PendingChangesView extends ItemView {
     // row doesn't visually jump as you review it.
     const actions = summary.createDiv({ cls: "terminus-pending-row-actions" });
     actions.createEl("button", { text: "Open", cls: "terminus-action-open" }).addEventListener("click", (e) =>
-      stop(e, () => void openFileWithInlineDiff(this.app, this.plugin.getVaultBasePath(), this.plugin.pendingChangesStore, change))
+      stop(e, () => void openChangedFile(this.plugin, change))
     );
     // NotebookEdit's oldText/newText are a display-only approximation (not
     // the real file content, see server/diff.ts) -- per-hunk accept/reject

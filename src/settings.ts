@@ -1,6 +1,11 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import { getEnvVar } from "terminus-node-bridge";
+import { isFontAvailable, isFontMonospaced, listAvailableMonospaceFonts } from "./terminal/fontCatalog";
 import type TerminusPlugin from "./main";
+
+/** Sentinel dropdown value -- can't collide with a real family name, which
+ *  is why it isn't just the empty string (that one means "inherit"). */
+const CUSTOM_FONT_VALUE = "__terminus_custom_font__";
 
 export type TerminalPlacement = "ask" | "tab" | "split-right" | "split-down" | "window";
 
@@ -44,6 +49,10 @@ export interface TerminusSettings {
   startupCommand: string;
   ribbonIcon: string;
   wikiLinkInsertFormat: WikiLinkInsertFormat;
+  /** Gates the first-run welcome modal to exactly one appearance, ever.
+   *  Defaults false so an existing install shows it once on upgrade too --
+   *  the shortcuts it covers are just as undiscovered there. */
+  hasSeenWelcome: boolean;
 }
 
 export const DEFAULT_SETTINGS: TerminusSettings = {
@@ -62,6 +71,7 @@ export const DEFAULT_SETTINGS: TerminusSettings = {
   startupCommand: "",
   ribbonIcon: "square-terminal",
   wikiLinkInsertFormat: "wikilink",
+  hasSeenWelcome: false,
 };
 
 export const MIN_FONT_SIZE = 8;
@@ -74,6 +84,11 @@ export const MIN_SCROLLBACK_LINES = 200;
 export const MAX_SCROLLBACK_LINES = 50000;
 
 export class TerminusSettingTab extends PluginSettingTab {
+  /** Sticky only while the tab is open. Without it, picking "Custom" would
+   *  immediately collapse back to the dropdown, since an empty override is
+   *  indistinguishable from "inherit" once the tab re-renders. */
+  private fontCustomMode = false;
+
   constructor(app: App, private plugin: TerminusPlugin) {
     super(app, plugin);
   }
@@ -114,17 +129,7 @@ export class TerminusSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Font family")
-      .setDesc('Leave blank to match Obsidian\'s own monospace font setting. Applies to all open terminal panels.')
-      .addText((text) =>
-        text
-          .setPlaceholder("e.g. Fira Code")
-          .setValue(this.plugin.settings.fontFamilyOverride)
-          .onChange(async (value) => {
-            await this.plugin.setFontFamilyOverride(value.trim());
-          })
-      );
+    this.displayFontFamilySetting(containerEl);
 
     new Setting(containerEl)
       .setName("Cursor style")
@@ -280,5 +285,91 @@ export class TerminusSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+  }
+
+  /**
+   * A dropdown of installed monospace fonts rather than free text.
+   *
+   * The old text field made it trivially easy to type a proportional font
+   * ("Inter"), which a terminal cannot render sanely -- every glyph gets
+   * painted into a fixed-width cell sized from the font's widest character,
+   * so narrow letters end up marooned in the middle of theirs. It reads as
+   * a plugin bug and isn't fixable at the terminal end; the honest fix is
+   * to offer fonts that work. Custom entry stays available (Nerd Font
+   * builds are too numerous and too locally-named to enumerate) but warns
+   * when the family it's given won't align.
+   */
+  private displayFontFamilySetting(containerEl: HTMLElement): void {
+    const availableFonts = listAvailableMonospaceFonts();
+    const current = this.plugin.settings.fontFamilyOverride.trim();
+    // A value saved before this dropdown existed (or a Nerd Font that isn't
+    // on the curated list) must not be silently dropped just because it has
+    // no matching option -- it opens in custom mode instead.
+    const isCustom = this.fontCustomMode || (current !== "" && !availableFonts.includes(current));
+
+    const options: Record<string, string> = { "": "Match Obsidian's monospace font" };
+    for (const font of availableFonts) options[font] = font;
+    options[CUSTOM_FONT_VALUE] = "Custom…";
+
+    new Setting(containerEl)
+      .setName("Font family")
+      .setDesc(
+        "Monospace fonts detected on this system. Applies to all open terminal panels. Proportional fonts aren't listed -- a terminal aligns text to a fixed character grid, which only a monospace font can sit in evenly."
+      )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(options)
+          .setValue(isCustom ? CUSTOM_FONT_VALUE : current)
+          .onChange(async (value) => {
+            if (value === CUSTOM_FONT_VALUE) {
+              this.fontCustomMode = true;
+              // Re-render rather than toggling the field's visibility: the
+              // same pattern the auto-reveal delay slider below already
+              // uses for its own conditional setting.
+              this.display();
+              return;
+            }
+            this.fontCustomMode = false;
+            await this.plugin.setFontFamilyOverride(value);
+            this.display();
+          })
+      );
+
+    if (!isCustom) return;
+
+    const customSetting = new Setting(containerEl)
+      .setName("Custom font family")
+      .setDesc("Any font installed on this system, by its exact name.");
+    // Lives in its own element so it can be rewritten on each keystroke
+    // without re-rendering the whole tab (which would drop input focus).
+    const warningEl = customSetting.descEl.createDiv({ cls: "terminus-setting-warning" });
+    const refreshWarning = (value: string) => {
+      warningEl.setText(this.describeCustomFontProblem(value));
+    };
+    refreshWarning(current);
+
+    customSetting.addText((text) =>
+      text
+        .setPlaceholder("e.g. MesloLGS NF")
+        .setValue(current)
+        .onChange(async (value) => {
+          const trimmed = value.trim();
+          refreshWarning(trimmed);
+          await this.plugin.setFontFamilyOverride(trimmed);
+        })
+    );
+  }
+
+  /** Empty string when there's nothing worth saying -- an always-present
+   *  warning line trains people to ignore it. */
+  private describeCustomFontProblem(family: string): string {
+    if (!family) return "";
+    if (!isFontAvailable(family)) {
+      return `"${family}" doesn't appear to be installed -- the terminal will silently fall back to another font.`;
+    }
+    if (!isFontMonospaced(family)) {
+      return `"${family}" isn't monospaced. Terminal output will look unevenly spaced and columns won't line up.`;
+    }
+    return "";
   }
 }
