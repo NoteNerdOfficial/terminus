@@ -1130,6 +1130,7 @@ ${transcript}`;
 
 // src/views/TerminalView.ts
 var import_obsidian7 = require("obsidian");
+var import_electron2 = require("electron");
 
 // node_modules/@xterm/xterm/lib/xterm.mjs
 var zs = Object.defineProperty;
@@ -15670,8 +15671,7 @@ var WikiLinkAutocomplete = class {
     const cellHeight = rect.height / Math.max(this.opts.term.rows, 1);
     const cursorX = this.opts.term.buffer.active.cursorX;
     const cursorY = this.opts.term.buffer.active.cursorY;
-    const popover = this.opts.xtermContainer.ownerDocument.createElement("div");
-    popover.addClass("terminus-wikilink-popover");
+    const popover = createDiv({ cls: "terminus-wikilink-popover" });
     if (this.matches.length === 0) {
       popover.createDiv({ cls: "terminus-wikilink-item terminus-wikilink-empty", text: "No matching notes" });
     } else {
@@ -15706,15 +15706,15 @@ var import_terminus_node_bridge11 = __toESM(require_dist());
 
 // src/util/systemOpen.ts
 var import_obsidian3 = require("obsidian");
+var import_electron = require("electron");
 var import_terminus_node_bridge10 = __toESM(require_dist());
 function openWithSystemDefaultApp(absolutePath) {
+  if (!import_electron.shell) {
+    new import_obsidian3.Notice(`Terminus: can't open ${(0, import_terminus_node_bridge10.pathBasename)(absolutePath)} outside Obsidian here.`);
+    return;
+  }
   try {
-    const { shell } = require("electron");
-    if (!shell) {
-      new import_obsidian3.Notice(`Terminus: can't open ${(0, import_terminus_node_bridge10.pathBasename)(absolutePath)} outside Obsidian here.`);
-      return;
-    }
-    void shell.openPath(absolutePath).then((error) => {
+    void import_electron.shell.openPath(absolutePath).then((error) => {
       if (error)
         new import_obsidian3.Notice(`Terminus: couldn't open ${(0, import_terminus_node_bridge10.pathBasename)(absolutePath)}: ${error}`);
     });
@@ -15806,11 +15806,11 @@ var PATH_PATTERN = new RegExp(
   String.raw`(?:~\/|\.{1,2}\/|\/)?(?:${PATH_SEGMENT}\/)*${PATH_SEGMENT}\.(?:${FILE_EXTENSIONS.join("|")})(?::\d+){0,2}`,
   "g"
 );
-var URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'` ]+/gi;
+var URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
 function trimTrailingPunctuation(text) {
   let result = text;
   for (; ; ) {
-    const last = result.at(-1);
+    const last = result[result.length - 1];
     if (!last)
       break;
     if (`.,;:!?'"`.includes(last)) {
@@ -15960,7 +15960,7 @@ var LinkTooltip = class {
     this.el = null;
   }
 };
-var MODIFIER_LABEL = navigator.userAgent.includes("Mac") ? "Cmd" : "Ctrl";
+var MODIFIER_LABEL = import_obsidian4.Platform.isMacOS ? "Cmd" : "Ctrl";
 function registerTerminalLinks(term, ctx) {
   const tooltip = new LinkTooltip(term);
   const provider = term.registerLinkProvider({
@@ -16027,8 +16027,7 @@ function openTerminalColorPicker(anchorEl, currentColor, onSelect) {
   const doc = anchorEl.ownerDocument;
   const win = (_a8 = doc.defaultView) != null ? _a8 : window;
   const rect = anchorEl.getBoundingClientRect();
-  const popover = doc.createElement("div");
-  popover.addClass("terminus-color-picker-popover");
+  const popover = createDiv({ cls: "terminus-color-picker-popover" });
   const addSwatch = (label, color) => {
     const swatch = popover.createDiv({ cls: "terminus-color-swatch" });
     swatch.setAttr("title", label);
@@ -16280,11 +16279,11 @@ function middleTruncate(text, max = 26) {
   return `${text.slice(0, head)}\u2026${text.slice(text.length - tail)}`;
 }
 function getOsFilePath(file) {
+  var _a8;
   if (!import_obsidian7.Platform.isDesktopApp)
     return void 0;
   try {
-    const { webUtils } = require("electron");
-    const path = webUtils == null ? void 0 : webUtils.getPathForFile(file);
+    const path = (_a8 = import_electron2.webUtils) == null ? void 0 : _a8.getPathForFile(file);
     if (path)
       return path;
   } catch (e) {
@@ -16755,7 +16754,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
   async startPty() {
     var _a8, _b, _c2, _d;
     const pythonBin = await this.plugin.getPython3Bin();
-    const shell = this.plugin.getUserShell();
+    const shell2 = this.plugin.getUserShell();
     const resourcesDir = (0, import_terminus_node_bridge12.pathJoin)(this.plugin.getPluginDir(), "resources");
     const helperPath = (0, import_terminus_node_bridge12.pathJoin)(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
@@ -16763,7 +16762,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     this.pty = new PtyProcess({
       pythonBin,
       helperPath,
-      shell,
+      shell: shell2,
       cwd: restoredCwdStillExists ? this.restoredCwd : this.plugin.getVaultBasePath(),
       cols: (_b = (_a8 = this.term) == null ? void 0 : _a8.cols) != null ? _b : 80,
       rows: (_d = (_c2 = this.term) == null ? void 0 : _c2.rows) != null ? _d : 24,
@@ -16772,7 +16771,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
-        ...getShellIntegrationEnv(shell, resourcesDir)
+        ...getShellIntegrationEnv(shell2, resourcesDir)
       }
     });
     this.pty.on("data", (chunk) => {
@@ -18902,7 +18901,7 @@ var MEASURE_FONT_SIZE = 72;
 var MEASURE_TEXT = "mmmmmmmmmmlli";
 var BASE_FAMILIES = ["monospace", "sans-serif", "serif"];
 function createMeasureContext() {
-  return activeDocument.createElement("canvas").getContext("2d");
+  return createEl("canvas").getContext("2d");
 }
 function measureWidth(ctx, family, text) {
   ctx.font = `${MEASURE_FONT_SIZE}px ${family}`;

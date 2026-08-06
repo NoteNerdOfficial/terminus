@@ -1,4 +1,4 @@
-import { App, Notice, TFile } from "obsidian";
+import { App, Notice, Platform, TFile } from "obsidian";
 import { IBufferRange, IDisposable, ILink, Terminal } from "@xterm/xterm";
 import { fileExistsSync, getEnvVar, pathJoin, pathRelative } from "terminus-node-bridge";
 import { openWithSystemDefaultApp } from "../util/systemOpen";
@@ -43,7 +43,7 @@ const PATH_PATTERN = new RegExp(
   "g"
 );
 
-const URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'` ]+/gi;
+const URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
 
 /** Prose routinely ends a sentence right after a URL or path, and the
  *  terminating punctuation is virtually never part of the target. Closing
@@ -52,7 +52,10 @@ const URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>"'` ]+/gi;
 function trimTrailingPunctuation(text: string): string {
   let result = text;
   for (;;) {
-    const last = result.at(-1);
+    // Indexed rather than String.at(): `at` is ES2022 and this project's
+    // lib is ES2020, which leaves its result untyped -- and an untyped
+    // value spreads to every use of it below.
+    const last = result[result.length - 1];
     if (!last) break;
     if (".,;:!?'\"".includes(last)) {
       result = result.slice(0, -1);
@@ -288,7 +291,7 @@ class LinkTooltip {
   }
 }
 
-const MODIFIER_LABEL = navigator.userAgent.includes("Mac") ? "Cmd" : "Ctrl";
+const MODIFIER_LABEL = Platform.isMacOS ? "Cmd" : "Ctrl";
 
 /**
  * Makes file paths and URLs in terminal output clickable.

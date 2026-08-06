@@ -8,6 +8,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 // Run before tsc (not just inside esbuild.config.mjs, which runs *after*
 // tsc in the build script) so `import ... from "../generated/resourceFiles"`
 // resolves even on a fresh checkout -- see package.json's pretsc/predev hooks.
+//
+// The output is also committed, not gitignored, even though every build
+// regenerates it. A checkout without it makes that import resolve to
+// nothing, which types RESOURCE_FILES as `any` and spreads through every
+// use of it in provisionResources.ts -- which is exactly what the Obsidian
+// review bot reported against the 1.0.25 release, since it reads the repo
+// rather than running the build.
 const EMBEDDED_RESOURCE_FILES = [
   { relativePath: "pty_helper.py", executable: true },
   { relativePath: "hook-bridge.sh", executable: true },

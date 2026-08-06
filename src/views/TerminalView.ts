@@ -1,4 +1,5 @@
 import { ItemView, Notice, Platform, TFile, ViewStateResult, WorkspaceLeaf } from "obsidian";
+import { webUtils } from "electron";
 import { IDecoration, ITheme, Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
@@ -93,11 +94,10 @@ function middleTruncate(text: string, max = 26): string {
 function getOsFilePath(file: File): string | undefined {
   if (!Platform.isDesktopApp) return undefined;
   try {
-    const { webUtils } = require("electron") as { webUtils?: { getPathForFile(file: File): string } };
     const path = webUtils?.getPathForFile(file);
     if (path) return path;
   } catch {
-    // require("electron") unavailable in this context -- fall through.
+    // webUtils unavailable or refused this File -- fall through.
   }
   return (file as File & { path?: string }).path;
 }

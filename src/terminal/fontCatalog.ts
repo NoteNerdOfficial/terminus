@@ -59,7 +59,8 @@ const MEASURE_TEXT = "mmmmmmmmmmlli";
 const BASE_FAMILIES = ["monospace", "sans-serif", "serif"];
 
 function createMeasureContext(): CanvasRenderingContext2D | null {
-  return activeDocument.createElement("canvas").getContext("2d");
+  // Never attached to the DOM -- it exists only to measure text widths.
+  return createEl("canvas").getContext("2d");
 }
 
 function measureWidth(ctx: CanvasRenderingContext2D, family: string, text: string): number {

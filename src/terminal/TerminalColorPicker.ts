@@ -16,8 +16,10 @@ export function openTerminalColorPicker(
   const win = doc.defaultView ?? window;
   const rect = anchorEl.getBoundingClientRect();
 
-  const popover = doc.createElement("div");
-  popover.addClass("terminus-color-picker-popover");
+  // Detached: it's positioned from the anchor's rect below and only then
+  // appended to `doc`, which may be a popout window's document rather than
+  // the main one.
+  const popover = createDiv({ cls: "terminus-color-picker-popover" });
 
   const addSwatch = (label: string, color: string | null) => {
     const swatch = popover.createDiv({ cls: "terminus-color-swatch" });

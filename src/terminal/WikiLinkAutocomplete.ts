@@ -194,8 +194,9 @@ export class WikiLinkAutocomplete {
     const cursorX = this.opts.term.buffer.active.cursorX;
     const cursorY = this.opts.term.buffer.active.cursorY;
 
-    const popover = this.opts.xtermContainer.ownerDocument.createElement("div");
-    popover.addClass("terminus-wikilink-popover");
+    // Detached until it's positioned and appended to the terminal's own
+    // document below, which may be a popout window's rather than the main one.
+    const popover = createDiv({ cls: "terminus-wikilink-popover" });
 
     if (this.matches.length === 0) {
       popover.createDiv({ cls: "terminus-wikilink-item terminus-wikilink-empty", text: "No matching notes" });
