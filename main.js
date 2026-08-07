@@ -18716,21 +18716,23 @@ function keys() {
 }
 function buildWelcomeMarkdown() {
   const k3 = keys();
-  return `A terminal that lives in your vault, with Claude Code's edits held for review before they stick.
+  return `Terminus is a real terminal, inside Obsidian. Run Claude Code alongside your notes, and every file it edits comes back to you, so you can keep the change or undo it.
 
-#### Editing a long line
+#### Nothing Claude writes is final
 
-You don't have to hold backspace:
+No more hunting for "where did that change happen." Each file it edits shows up in one Pending Changes panel (what changed, where, and by how much), with a real line-numbered diff per file and Accept / Reject / Open right there.
+
+#### Typing shortcuts
 
 | Shortcut | Does |
 | --- | --- |
 | \`Ctrl\` \`U\` | Clear the whole line |
 | \`${k3.alt}\` \`${k3.backspace}\` | Delete the previous word |
 | \`${k3.alt}\` \`\u2190\` / \`\u2192\` | Jump a word at a time |
-| \`Ctrl\` \`A\` / \`Ctrl\` \`E\` | Jump to start / end of line |
+| \`Ctrl\` \`A\` / \`Ctrl\` \`E\` | Jump to the start / end of the line |
 | \`Shift\` \`Enter\` | New line without submitting |
 
-#### In the terminal
+#### Your vault, from the prompt
 
 | Action | Does |
 | --- | --- |
@@ -18738,11 +18740,11 @@ You don't have to hold backspace:
 | Type \`[[\` | Autocomplete a note from your vault |
 | Drag a file in | Inserts its path, ready to run |
 
-Claude's edits land in the **Pending Changes** panel, where you keep or revert them file by file.`;
+Everything else \u2014 reviewing diffs, colored terminals, settings \u2014 is in the full guide.`;
 }
 function buildGettingStartedMarkdown() {
   const k3 = keys();
-  return `A terminal that lives in your vault, with Claude Code's edits held for review before they stick.
+  return `Terminus is a real terminal, inside Obsidian. Run Claude Code alongside your notes and every file it edits comes back to you, so you can keep the change or undo it.
 
 ## Keyboard
 
