@@ -380,11 +380,18 @@ export default class TerminusPlugin extends Plugin {
     let leaf: WorkspaceLeaf;
     switch (placement) {
       case "split-right":
-        leaf = workspace.getLeaf("split", "vertical");
+      case "split-down": {
+        // Resolve the anchor pane ourselves and split off of it explicitly,
+        // rather than trusting `getLeaf("split", direction)` to pick the
+        // right one internally (it's just `createLeafBySplit(getMostRecentLeaf(),
+        // direction)` under the hood) -- going through it directly fixed the
+        // exact same "split down" opening to the side instead of below bug
+        // in the Tab Spaces plugin.
+        const anchor = workspace.getMostRecentLeaf();
+        const direction = placement === "split-right" ? "vertical" : "horizontal";
+        leaf = anchor ? workspace.createLeafBySplit(anchor, direction) : workspace.getLeaf("split", direction);
         break;
-      case "split-down":
-        leaf = workspace.getLeaf("split", "horizontal");
-        break;
+      }
       case "window":
         leaf = workspace.getLeaf("window");
         break;

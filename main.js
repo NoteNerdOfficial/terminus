@@ -19465,11 +19465,12 @@ var TerminusPlugin = class extends import_obsidian18.Plugin {
     let leaf;
     switch (placement) {
       case "split-right":
-        leaf = workspace.getLeaf("split", "vertical");
+      case "split-down": {
+        const anchor = workspace.getMostRecentLeaf();
+        const direction = placement === "split-right" ? "vertical" : "horizontal";
+        leaf = anchor ? workspace.createLeafBySplit(anchor, direction) : workspace.getLeaf("split", direction);
         break;
-      case "split-down":
-        leaf = workspace.getLeaf("split", "horizontal");
-        break;
+      }
       case "window":
         leaf = workspace.getLeaf("window");
         break;
