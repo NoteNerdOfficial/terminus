@@ -16260,6 +16260,7 @@ var RenameTerminalModal = class extends import_obsidian6.Modal {
 // src/views/TerminalView.ts
 var TERMINUS_VIEW_TYPE = "terminus-view";
 var SCROLLBACK_PERSIST_LINES = 1e3;
+var SCROLLBACK_CACHE_TTL_MS = 2e3;
 var ACTIVITY_FALLBACK_MS = 5 * 60 * 1e3;
 function resolveMonospaceFontStack() {
   const resolved = getComputedStyle(activeDocument.body).getPropertyValue("--font-monospace").trim();
@@ -16325,6 +16326,12 @@ var TerminalView = class extends import_obsidian7.ItemView {
     this.failureBadges = /* @__PURE__ */ new Map();
     this.restoredScrollback = null;
     this.scrollbackApplied = false;
+    // Memoized serialize() output plus the two things needed to know whether
+    // it's still usable: when it was taken, and whether anything has been
+    // written to the buffer since. See serializeScrollback().
+    this.scrollbackCache = null;
+    this.scrollbackCacheAt = 0;
+    this.bufferDirty = true;
     // The cwd a restored terminal should start its fresh shell in -- read
     // once in setState (before onOpen/startPty run), consumed by startPty().
     this.restoredCwd = null;
@@ -16631,7 +16638,10 @@ var TerminalView = class extends import_obsidian7.ItemView {
     (_e4 = this.commandTracker) == null ? void 0 : _e4.dispose();
     this.plugin.closedTerminals.push({
       displayText: this.getDisplayText(),
-      scrollback: this.serializeScrollback(),
+      // Forced past the cache: this is the last chance to capture this
+      // session, so it has to be the real final buffer, not a snapshot from
+      // up to SCROLLBACK_CACHE_TTL_MS ago.
+      scrollback: this.serializeScrollback({ force: true }),
       cwd: (_g = (_f = this.cwdTracker) == null ? void 0 : _f.getCwd()) != null ? _g : this.restoredCwd,
       customName: this.customName,
       color: this.color,
@@ -16670,14 +16680,37 @@ var TerminalView = class extends import_obsidian7.ItemView {
    * input line -- the exact "^[[O%" corruption this fixes. Scrollback text
    * itself is still worth keeping (so the user sees prior output), just not
    * the mode/alt-buffer state that assumes the same program is still there.
+   *
+   * Serializing is O(cells) over a thousand lines of attribute-dense text, so
+   * the result is memoized. An idle terminal (nothing written since the last
+   * snapshot) reuses it indefinitely and costs nothing at all; a busy one --
+   * Claude Code's TUI redraws its whole input box on every keystroke, so its
+   * buffer is dirty essentially always -- is bounded to one serialization per
+   * SCROLLBACK_CACHE_TTL_MS however many callers ask. `force` bypasses both,
+   * for the one caller (onClose) that needs the true final state.
    */
-  serializeScrollback() {
+  serializeScrollback({ force = false } = {}) {
     var _a8, _b;
-    return (_b = (_a8 = this.serializeAddon) == null ? void 0 : _a8.serialize({
+    const now = Date.now();
+    const reusable = !this.bufferDirty || now - this.scrollbackCacheAt < SCROLLBACK_CACHE_TTL_MS;
+    if (!force && this.scrollbackCache !== null && reusable)
+      return this.scrollbackCache;
+    this.scrollbackCache = (_b = (_a8 = this.serializeAddon) == null ? void 0 : _a8.serialize({
       scrollback: SCROLLBACK_PERSIST_LINES,
       excludeModes: true,
       excludeAltBuffer: true
     })) != null ? _b : "";
+    this.scrollbackCacheAt = now;
+    this.bufferDirty = false;
+    return this.scrollbackCache;
+  }
+  /** The single way anything in this view puts bytes on screen, so the
+   *  scrollback cache above can never hand back a snapshot taken before a
+   *  write it didn't hear about. */
+  writeToTerminal(data) {
+    var _a8;
+    this.bufferDirty = true;
+    (_a8 = this.term) == null ? void 0 : _a8.write(data);
   }
   async setState(state, result) {
     const typedState = state;
@@ -16711,8 +16744,8 @@ var TerminalView = class extends import_obsidian7.ItemView {
     if (this.scrollbackApplied || !this.term)
       return;
     this.scrollbackApplied = true;
-    this.term.write(scrollback);
-    this.term.write("\r\n\x1B[90m\u2500\u2500\u2500 restored from previous session \u2500\u2500\u2500\x1B[0m\r\n");
+    this.writeToTerminal(scrollback);
+    this.writeToTerminal("\r\n\x1B[90m\u2500\u2500\u2500 restored from previous session \u2500\u2500\u2500\x1B[0m\r\n");
   }
   applyFontSize(size) {
     var _a8, _b;
@@ -16774,15 +16807,11 @@ var TerminalView = class extends import_obsidian7.ItemView {
         ...getShellIntegrationEnv(shell2, resourcesDir)
       }
     });
-    this.pty.on("data", (chunk) => {
-      var _a9;
-      return (_a9 = this.term) == null ? void 0 : _a9.write((0, import_terminus_node_bridge12.bufferToBytes)(chunk));
-    });
+    this.pty.on("data", (chunk) => this.writeToTerminal((0, import_terminus_node_bridge12.bufferToBytes)(chunk)));
     this.pty.on("stderr", (text) => new import_obsidian7.Notice(`Terminus: ${text.trim()}`));
     this.pty.on("error", (err) => new import_obsidian7.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
     this.pty.on("exit", ({ code }) => {
-      var _a9;
-      (_a9 = this.term) == null ? void 0 : _a9.write(`\r
+      this.writeToTerminal(`\r
 [process exited${code !== null ? ` with code ${code}` : ""}]\r
 `);
     });

@@ -35,6 +35,17 @@ export const TERMINUS_VIEW_TYPE = "terminus-view";
 // -- generous enough to feel continuous across an Obsidian restart, bounded
 // enough not to bloat the workspace layout file.
 const SCROLLBACK_PERSIST_LINES = 1000;
+/** How long a serialized scrollback snapshot stays reusable (see
+ *  serializeScrollback). getState() is public surface that anything can call
+ *  as often as it likes -- Obsidian on every layout save, and any other plugin
+ *  walking the workspace, which a tab-manager plugin does on a timer. Left
+ *  uncached, each of those calls re-serializes the full buffer synchronously
+ *  on the thread xterm.js needs to accept keystrokes and repaint, which is
+ *  felt directly as the terminal going unresponsive. Two seconds is short
+ *  enough that a persisted transcript is never meaningfully behind (a restore
+ *  already announces itself as a previous session's) and long enough to
+ *  collapse any burst of callers into a single serialization. */
+const SCROLLBACK_CACHE_TTL_MS = 2000;
 /** Backstop for the "editing" chip, measured from the last reported write.
  *  The real end-of-turn signal is the Stop hook (see onTurnEnd), which is
  *  what normally clears the chip; this only catches the cases where that
@@ -142,6 +153,12 @@ export class TerminalView extends ItemView {
   private readonly token: string;
   private restoredScrollback: string | null = null;
   private scrollbackApplied = false;
+  // Memoized serialize() output plus the two things needed to know whether
+  // it's still usable: when it was taken, and whether anything has been
+  // written to the buffer since. See serializeScrollback().
+  private scrollbackCache: string | null = null;
+  private scrollbackCacheAt = 0;
+  private bufferDirty = true;
   // The cwd a restored terminal should start its fresh shell in -- read
   // once in setState (before onOpen/startPty run), consumed by startPty().
   private restoredCwd: string | null = null;
@@ -553,7 +570,10 @@ export class TerminalView extends ItemView {
     // saved for a restart, just routed into the in-session buffer instead.
     this.plugin.closedTerminals.push({
       displayText: this.getDisplayText(),
-      scrollback: this.serializeScrollback(),
+      // Forced past the cache: this is the last chance to capture this
+      // session, so it has to be the real final buffer, not a snapshot from
+      // up to SCROLLBACK_CACHE_TTL_MS ago.
+      scrollback: this.serializeScrollback({ force: true }),
       cwd: this.cwdTracker?.getCwd() ?? this.restoredCwd,
       customName: this.customName,
       color: this.color,
@@ -593,15 +613,37 @@ export class TerminalView extends ItemView {
    * input line -- the exact "^[[O%" corruption this fixes. Scrollback text
    * itself is still worth keeping (so the user sees prior output), just not
    * the mode/alt-buffer state that assumes the same program is still there.
+   *
+   * Serializing is O(cells) over a thousand lines of attribute-dense text, so
+   * the result is memoized. An idle terminal (nothing written since the last
+   * snapshot) reuses it indefinitely and costs nothing at all; a busy one --
+   * Claude Code's TUI redraws its whole input box on every keystroke, so its
+   * buffer is dirty essentially always -- is bounded to one serialization per
+   * SCROLLBACK_CACHE_TTL_MS however many callers ask. `force` bypasses both,
+   * for the one caller (onClose) that needs the true final state.
    */
-  private serializeScrollback(): string {
-    return (
+  private serializeScrollback({ force = false }: { force?: boolean } = {}): string {
+    const now = Date.now();
+    const reusable = !this.bufferDirty || now - this.scrollbackCacheAt < SCROLLBACK_CACHE_TTL_MS;
+    if (!force && this.scrollbackCache !== null && reusable) return this.scrollbackCache;
+
+    this.scrollbackCache =
       this.serializeAddon?.serialize({
         scrollback: SCROLLBACK_PERSIST_LINES,
         excludeModes: true,
         excludeAltBuffer: true,
-      }) ?? ""
-    );
+      }) ?? "";
+    this.scrollbackCacheAt = now;
+    this.bufferDirty = false;
+    return this.scrollbackCache;
+  }
+
+  /** The single way anything in this view puts bytes on screen, so the
+   *  scrollback cache above can never hand back a snapshot taken before a
+   *  write it didn't hear about. */
+  private writeToTerminal(data: string | Uint8Array): void {
+    this.bufferDirty = true;
+    this.term?.write(data);
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
@@ -644,11 +686,11 @@ export class TerminalView extends ItemView {
   private writeRestoredScrollback(scrollback: string): void {
     if (this.scrollbackApplied || !this.term) return;
     this.scrollbackApplied = true;
-    this.term.write(scrollback);
+    this.writeToTerminal(scrollback);
     // The restored buffer is from a shell process that no longer exists --
     // a fresh PTY is about to start. Mark the boundary so old output isn't
     // mistaken for continuing live output.
-    this.term.write("\r\n\x1b[90m─── restored from previous session ───\x1b[0m\r\n");
+    this.writeToTerminal("\r\n\x1b[90m─── restored from previous session ───\x1b[0m\r\n");
   }
 
   applyFontSize(size: number): void {
@@ -734,11 +776,11 @@ export class TerminalView extends ItemView {
      *  back together. bufferToBytes() rather than the Buffer itself: xterm
      *  takes a Uint8Array, and handing it a Buffer reads as an unsafe
      *  argument to the review bot's checker (see terminus-node-bridge). */
-    this.pty.on("data", (chunk: Buffer) => this.term?.write(bufferToBytes(chunk)));
+    this.pty.on("data", (chunk: Buffer) => this.writeToTerminal(bufferToBytes(chunk)));
     this.pty.on("stderr", (text: string) => new Notice(`Terminus: ${text.trim()}`));
     this.pty.on("error", (err) => new Notice(`Terminus: PTY error: ${errorMessage(err)}`));
     this.pty.on("exit", ({ code }: { code: number | null }) => {
-      this.term?.write(`\r\n[process exited${code !== null ? ` with code ${code}` : ""}]\r\n`);
+      this.writeToTerminal(`\r\n[process exited${code !== null ? ` with code ${code}` : ""}]\r\n`);
     });
     this.pty.on("ready", () => {
       const command = this.plugin.settings.startupCommand.trim();
