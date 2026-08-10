@@ -276,6 +276,20 @@ export class TerminalView extends ItemView {
     // view, so it's torn down automatically on close, no manual dispose.
     this.registerEvent(this.app.workspace.on("css-change", () => this.applyTheme()));
 
+    // Obsidian activating a leaf focuses the leaf, not whatever the view put
+    // inside it -- so a terminal that just became the active pane can sit
+    // there looking ready (cursor drawn, pane highlighted) while the keyboard
+    // still belongs to wherever it was before, which is indistinguishable
+    // from the terminal refusing to accept typing. xterm only takes focus on
+    // its own via a direct click on the canvas, which misses every other way
+    // a pane becomes active: the tab strip, a pane-switching command, a modal
+    // closing, or another plugin's sidebar revealing this leaf.
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (leaf === this.leaf) this.term?.focus();
+      })
+    );
+
     this.commandTracker = new CommandTracker(this.term, (cmd) => this.handleCommandFinished(cmd));
     // Debounced, not a raw write -- but without this, workspace.json only
     // picks up a fresh cwd whenever Obsidian happens to re-serialize the

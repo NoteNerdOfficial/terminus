@@ -16401,6 +16401,13 @@ var TerminalView = class extends import_obsidian7.ItemView {
     (_b = activeDocument.fonts) == null ? void 0 : _b.addEventListener("loadingdone", this.fontLoadingDoneHandler);
     this.applyRestoredScrollbackIfPending();
     this.registerEvent(this.app.workspace.on("css-change", () => this.applyTheme()));
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        var _a9;
+        if (leaf === this.leaf)
+          (_a9 = this.term) == null ? void 0 : _a9.focus();
+      })
+    );
     this.commandTracker = new CommandTracker(this.term, (cmd) => this.handleCommandFinished(cmd));
     this.cwdTracker = new CwdTracker(this.term, () => this.app.workspace.requestSaveLayout());
     this.terminalLinks = registerTerminalLinks(this.term, {
