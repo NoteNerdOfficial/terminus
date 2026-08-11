@@ -21,7 +21,12 @@ const prod = process.argv[2] === "production";
 // is just for this repo's own dev vault setup (see syncToLocalVaultPlugin
 // below).
 function ensureResourcesExecutable() {
-  for (const f of ["resources/hook-bridge.sh", "resources/pty_helper.py"]) {
+  for (const f of [
+    "resources/hook-bridge.sh",
+    "resources/turn-end-bridge.sh",
+    "resources/notification-bridge.sh",
+    "resources/pty_helper.py",
+  ]) {
     if (existsSync(f)) chmodSync(f, 0o755);
   }
 }

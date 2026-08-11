@@ -17,6 +17,7 @@ interface ClaudeSettingsFile {
   hooks?: {
     PreToolUse?: HookMatcherEntry[];
     Stop?: HookMatcherEntry[];
+    Notification?: HookMatcherEntry[];
     [key: string]: unknown;
   };
   [key: string]: unknown;
@@ -35,6 +36,9 @@ const DEFAULT_TIMEOUT_SECONDS = 15;
 // reads nothing back, and it runs while Claude is trying to finish -- so it
 // gets the tightest budget of the two.
 const TURN_END_TIMEOUT_SECONDS = 10;
+// Same bodyless-ping shape as Stop, and same reasoning: nothing here should
+// ever be slow enough to need more than a few seconds.
+const NOTIFICATION_TIMEOUT_SECONDS = 5;
 const GITIGNORE_LINE = ".claude/settings.local.json";
 
 export function getVaultBasePath(app: App): string {
@@ -58,10 +62,15 @@ export function getTurnEndBridgePath(app: App, manifest: PluginManifest): string
   return resourcePath(app, manifest, "turn-end-bridge.sh");
 }
 
+export function getNotificationBridgePath(app: App, manifest: PluginManifest): string {
+  return resourcePath(app, manifest, "notification-bridge.sh");
+}
+
 /**
  * Idempotently ensures the vault's project-scoped .claude/settings.local.json
- * wires both of our hooks -- PreToolUse (record each write for review) and
- * Stop (turn is over) -- without clobbering any hooks or settings the user
+ * wires all three of our hooks -- PreToolUse (record each write for review),
+ * Stop (turn is over), and Notification (Claude needs permission or is
+ * waiting on the user) -- without clobbering any hooks or settings the user
  * already has there.
  */
 export async function provisionClaudeSettings(app: App, manifest: PluginManifest): Promise<void> {
@@ -80,9 +89,10 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
 
   const hooks = (settings.hooks ??= {});
 
-  // Two separate ensure calls rather than one loop over a table: the events
-  // differ in more than their command string (Stop takes no matcher, since
-  // it isn't tied to a tool), and the table would be longer than this.
+  // Separate ensure calls rather than one loop over a table: the events
+  // differ in more than their command string (Stop and Notification take no
+  // matcher, since neither is tied to a tool), and the table would be longer
+  // than this.
   const preToolUseChanged = ensureHook(hooks, "PreToolUse", {
     matcher: MATCHER,
     command: getHookBridgePath(app, manifest),
@@ -92,8 +102,12 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
     command: getTurnEndBridgePath(app, manifest),
     timeout: TURN_END_TIMEOUT_SECONDS,
   });
+  const notificationChanged = ensureHook(hooks, "Notification", {
+    command: getNotificationBridgePath(app, manifest),
+    timeout: NOTIFICATION_TIMEOUT_SECONDS,
+  });
 
-  if (preToolUseChanged || stopChanged) {
+  if (preToolUseChanged || stopChanged || notificationChanged) {
     await writeTextFile(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
 
@@ -110,7 +124,7 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
  */
 function ensureHook(
   hooks: NonNullable<ClaudeSettingsFile["hooks"]>,
-  event: "PreToolUse" | "Stop",
+  event: "PreToolUse" | "Stop" | "Notification",
   spec: { matcher?: string; command: string; timeout: number }
 ): boolean {
   const entries = (hooks[event] ??= []);
@@ -118,8 +132,8 @@ function ensureHook(
   const existing = entries.flatMap((entry) => entry.hooks ?? []).find((h) => h.command === spec.command);
   if (!existing) {
     entries.push({
-      // Omitted entirely for Stop: it doesn't run per-tool, so there's
-      // nothing for a matcher to match against.
+      // Omitted entirely for Stop/Notification: neither runs per-tool, so
+      // there's nothing for a matcher to match against.
       ...(spec.matcher === undefined ? {} : { matcher: spec.matcher }),
       hooks: [{ type: "command", command: spec.command, timeout: spec.timeout }],
     });

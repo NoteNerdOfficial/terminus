@@ -442,7 +442,7 @@ var ReviewServer = class {
   }
   async handleRequest(req, res) {
     var _a8;
-    if (req.method !== "POST" || req.url !== "/review" && req.url !== "/turn-end") {
+    if (req.method !== "POST" || req.url !== "/review" && req.url !== "/turn-end" && req.url !== "/notification") {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
@@ -457,6 +457,12 @@ var ReviewServer = class {
     }
     if (req.url === "/turn-end") {
       panel.onTurnEnd();
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("");
+      return;
+    }
+    if (req.url === "/notification") {
+      panel.onNeedsAttention();
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("");
       return;
@@ -512,6 +518,7 @@ function isClaudeSettingsFile(value) {
 var MATCHER = "Edit|Write|NotebookEdit";
 var DEFAULT_TIMEOUT_SECONDS = 15;
 var TURN_END_TIMEOUT_SECONDS = 10;
+var NOTIFICATION_TIMEOUT_SECONDS = 5;
 var GITIGNORE_LINE = ".claude/settings.local.json";
 function getVaultBasePath(app) {
   const adapter = app.vault.adapter;
@@ -529,6 +536,9 @@ function getHookBridgePath(app, manifest) {
 }
 function getTurnEndBridgePath(app, manifest) {
   return resourcePath(app, manifest, "turn-end-bridge.sh");
+}
+function getNotificationBridgePath(app, manifest) {
+  return resourcePath(app, manifest, "notification-bridge.sh");
 }
 async function provisionClaudeSettings(app, manifest) {
   var _a8;
@@ -553,7 +563,11 @@ async function provisionClaudeSettings(app, manifest) {
     command: getTurnEndBridgePath(app, manifest),
     timeout: TURN_END_TIMEOUT_SECONDS
   });
-  if (preToolUseChanged || stopChanged) {
+  const notificationChanged = ensureHook(hooks, "Notification", {
+    command: getNotificationBridgePath(app, manifest),
+    timeout: NOTIFICATION_TIMEOUT_SECONDS
+  });
+  if (preToolUseChanged || stopChanged || notificationChanged) {
     await (0, import_terminus_node_bridge2.writeTextFile)(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
   await ensureGitignoreEntry(basePath);
@@ -567,8 +581,8 @@ function ensureHook(hooks, event, spec) {
   }).find((h2) => h2.command === spec.command);
   if (!existing) {
     entries.push({
-      // Omitted entirely for Stop: it doesn't run per-tool, so there's
-      // nothing for a matcher to match against.
+      // Omitted entirely for Stop/Notification: neither runs per-tool, so
+      // there's nothing for a matcher to match against.
       ...spec.matcher === void 0 ? {} : { matcher: spec.matcher },
       hooks: [{ type: "command", command: spec.command, timeout: spec.timeout }]
     });
@@ -841,6 +855,7 @@ if __name__ == "__main__":
 `, executable: true },
   { relativePath: "hook-bridge.sh", content: '#!/usr/bin/env bash\n# PreToolUse hook bridge for the Terminus Obsidian plugin.\n#\n# Claude Code invokes this script (via a project-scoped .claude/settings.local.json\n# hooks.PreToolUse entry) as a subprocess of whatever shell is running inside a\n# Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT and\n# TERMINUS_HOOK_TOKEN from that shell\'s environment.\n#\n# This does NOT gate the write on a human decision -- Claude is allowed to\n# complete its whole turn uninterrupted, and review happens afterwards in the\n# Pending Changes panel (Accept = keep, Reject = revert the file). This\n# script\'s only job is to notify the plugin\'s local server of the change\n# (which reads the pre-edit file content for later revert) before the write\n# happens, then always let the write proceed.\n#\n# Always exits 0: a crashed/unreachable review server should never block\n# Claude from working, it just means that edit won\'t show up for review.\nset -u\n\nINPUT="$(cat)"\n\nif [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then\n  exit 0\nfi\n\ncurl -s -m 10 -o /dev/null \\\n  -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/review" \\\n  -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  --data-binary "$INPUT" 2>/dev/null \\\n  || echo "Terminus: could not reach review server -- proceeding without recording this change for review." >&2\n\nexit 0\n', executable: true },
   { relativePath: "turn-end-bridge.sh", content: '#!/usr/bin/env bash\n# Stop hook bridge for the Terminus Obsidian plugin.\n#\n# Companion to hook-bridge.sh. That one fires per file write (PreToolUse) and\n# is what raises the "Claude is editing X" chip in the terminal\'s header; this\n# one fires once when Claude finishes its turn, and is what lowers it again.\n#\n# Without this, the chip has no end-of-turn signal to wait on and has to guess\n# with a timer -- which either drops it while Claude is still mid-turn (just\n# thinking, or running tools that aren\'t writes) or leaves it up long after the\n# turn is over. The Stop hook is that signal.\n#\n# Same environment contract as hook-bridge.sh: runs as a subprocess of the\n# shell inside a Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT and\n# TERMINUS_HOOK_TOKEN from it, and does nothing at all outside one.\n#\n# Always exits 0, and never writes anything to stdout: a Stop hook\'s stdout is\n# how a hook tells Claude Code to *block* stopping, and a status chip has no\n# business doing that. An unreachable review server just means the chip clears\n# on its own fallback timer instead.\nset -u\n\n# Claude Code writes the hook payload to stdin. Drained and discarded rather\n# than left unread -- nothing here needs it, and not reading it risks handing\n# the writer an EPIPE on a pipe no one ever consumed.\ncat >/dev/null\n\nif [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then\n  exit 0\nfi\n\ncurl -s -m 5 -o /dev/null \\\n  -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/turn-end" \\\n  -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \\\n  2>/dev/null\n\nexit 0\n', executable: true },
+  { relativePath: "notification-bridge.sh", content: '#!/usr/bin/env bash\n# Notification hook bridge for the Terminus Obsidian plugin.\n#\n# Companion to hook-bridge.sh/turn-end-bridge.sh. Claude Code fires its\n# Notification hook when it needs the user\'s permission to use a tool, or\n# when input has sat idle long enough that it\'s waiting on the user -- both\n# are exactly "this terminal needs attention" moments, so any firing of this\n# hook is treated as one, without needing to parse the message text. This is\n# what raises the blinking dot on the terminal\'s tab header; onTurnEnd (via\n# the Stop hook) and focusing the tab are what lower it again.\n#\n# Same environment contract as the other two bridges: runs as a subprocess of\n# the shell inside a Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT\n# and TERMINUS_HOOK_TOKEN from it, and does nothing at all outside one.\n#\n# Always exits 0, and never writes anything to stdout: like the Stop hook, a\n# Notification hook\'s stdout is how it would block Claude, and this has no\n# business doing that. An unreachable review server just means the dot never\n# lights up for this particular prompt.\nset -u\n\n# Claude Code writes the hook payload to stdin. Drained and discarded rather\n# than left unread -- nothing here needs it, and not reading it risks handing\n# the writer an EPIPE on a pipe no one ever consumed.\ncat >/dev/null\n\nif [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then\n  exit 0\nfi\n\ncurl -s -m 5 -o /dev/null \\\n  -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/notification" \\\n  -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \\\n  2>/dev/null\n\nexit 0\n', executable: true },
   { relativePath: "shell-integration/zsh/.zshenv", content: `# Terminus shell integration (zsh).
 #
 # We hijack ZDOTDIR so zsh looks here for .zshenv, which is the ONLY rc file
@@ -16081,17 +16096,29 @@ function openTerminalColorPicker(anchorEl, currentColor, onSelect) {
 }
 
 // src/terminal/tabHeaderColor.ts
+function getTabHeaderEl(leaf) {
+  return leaf.tabHeaderEl;
+}
 function refreshTabHeader(leaf, color) {
   var _a8;
   const internal = leaf;
   (_a8 = internal.updateHeader) == null ? void 0 : _a8.call(internal);
-  const tabHeaderEl = internal.tabHeaderEl;
+  const tabHeaderEl = getTabHeaderEl(leaf);
   if (!tabHeaderEl)
     return;
   let bar = tabHeaderEl.querySelector(":scope > .terminus-tab-color-bar");
   if (!bar)
     bar = tabHeaderEl.createDiv({ cls: "terminus-tab-color-bar" });
   bar.style.backgroundColor = color != null ? color : "transparent";
+}
+function refreshTabPendingDot(leaf, isPending) {
+  const tabHeaderEl = getTabHeaderEl(leaf);
+  if (!tabHeaderEl)
+    return;
+  let dot = tabHeaderEl.querySelector(":scope > .terminus-tab-pending-dot");
+  if (!dot)
+    dot = tabHeaderEl.createDiv({ cls: "terminus-tab-pending-dot" });
+  dot.toggleClass("is-pending", isPending);
 }
 function refreshPaneTitle(view, displayText) {
   const titleEl = view.titleEl;
@@ -16354,6 +16381,16 @@ var TerminalView = class extends import_obsidian7.ItemView {
     /** Backstop only, for a turn whose Stop hook never lands. */
     this.activityTimer = null;
     this.activityFiles = /* @__PURE__ */ new Set();
+    // Blinking dot on this leaf's tab header (see tabHeaderColor.ts's
+    // refreshTabPendingDot) -- raised by onNeedsAttention (this terminal's
+    // Notification hook: Claude needs permission, or is waiting on idle
+    // input) and lowered by either onTurnEnd (this terminal's Stop hook) or
+    // the user actually looking at this tab (active-leaf-change), whichever
+    // happens first. Unlike the activity chip, this has no fallback timer --
+    // both of its clear paths are reliable enough (a turn always ends, and a
+    // dot the user never focuses is exactly the case it exists to catch)
+    // that a timed guess would only risk clearing it too early.
+    this.isPendingAttention = false;
     this.token = (0, import_terminus_node_bridge12.randomHex)(16);
     this.terminalNumber = plugin.allocateTerminalNumber();
   }
@@ -16404,8 +16441,10 @@ var TerminalView = class extends import_obsidian7.ItemView {
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
         var _a9;
-        if (leaf === this.leaf)
-          (_a9 = this.term) == null ? void 0 : _a9.focus();
+        if (leaf !== this.leaf)
+          return;
+        (_a9 = this.term) == null ? void 0 : _a9.focus();
+        this.clearPendingAttention();
       })
     );
     this.commandTracker = new CommandTracker(this.term, (cmd) => this.handleCommandFinished(cmd));
@@ -16420,7 +16459,8 @@ var TerminalView = class extends import_obsidian7.ItemView {
     });
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload),
-      onTurnEnd: () => this.onTurnEnd()
+      onTurnEnd: () => this.onTurnEnd(),
+      onNeedsAttention: () => this.onNeedsAttention()
     });
     await this.startPty();
     this.wikiLinkAutocomplete = new WikiLinkAutocomplete({
@@ -16556,6 +16596,24 @@ var TerminalView = class extends import_obsidian7.ItemView {
    *  (see main.ts), so there's nothing left to stay up for. */
   onTurnEnd() {
     this.clearActivity();
+    this.clearPendingAttention();
+  }
+  /** Fires from the Notification hook -- Claude needs this terminal's
+   *  permission, or has been sitting idle waiting on input. Either way,
+   *  this is the one signal that says "a human needs to look here", so any
+   *  firing raises the dot regardless of which of the two it was. */
+  onNeedsAttention() {
+    this.isPendingAttention = true;
+    this.refreshPendingDot();
+  }
+  clearPendingAttention() {
+    if (!this.isPendingAttention)
+      return;
+    this.isPendingAttention = false;
+    this.refreshPendingDot();
+  }
+  refreshPendingDot() {
+    refreshTabPendingDot(this.leaf, this.isPendingAttention);
   }
   clearActivity() {
     var _a8;

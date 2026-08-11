@@ -15,6 +15,13 @@ export interface RegisteredPanel {
    *  the PreToolUse stream can express. Bodyless: the fact that it fired,
    *  with this panel's token, is the whole message. */
   onTurnEnd(): void;
+
+  /** Called from the Notification hook, which Claude Code fires both when
+   *  it needs the user's permission to use a tool and when it's been idle
+   *  waiting on input -- both are "this panel needs attention" moments, so
+   *  any firing is treated the same regardless of the message text.
+   *  Bodyless like onTurnEnd, for the same reason. */
+  onNeedsAttention(): void;
 }
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024; // generous cap for a Write tool's full file content
@@ -69,7 +76,10 @@ export class ReviewServer {
   }
 
   private async handleRequest(req: SimpleHttpRequest, res: SimpleHttpResponse): Promise<void> {
-    if (req.method !== "POST" || (req.url !== "/review" && req.url !== "/turn-end")) {
+    if (
+      req.method !== "POST" ||
+      (req.url !== "/review" && req.url !== "/turn-end" && req.url !== "/notification")
+    ) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
@@ -84,10 +94,16 @@ export class ReviewServer {
       return;
     }
 
-    // Answered before the body is read at all: the Stop bridge sends none,
-    // and there's nothing in one we'd want if it did.
+    // Answered before the body is read at all: the Stop and Notification
+    // bridges both send none, and there's nothing in one we'd want if they did.
     if (req.url === "/turn-end") {
       panel.onTurnEnd();
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("");
+      return;
+    }
+    if (req.url === "/notification") {
+      panel.onNeedsAttention();
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("");
       return;

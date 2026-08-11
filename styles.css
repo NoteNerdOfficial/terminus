@@ -1177,6 +1177,60 @@
   pointer-events: none;
 }
 
+/* Blinking "needs attention" dot on the native tab header -- applied via
+   terminal/tabHeaderColor.ts's refreshTabPendingDot(). Signals that Claude
+   is waiting on this terminal (a permission prompt, or idle input) even when
+   the tab strip is crowded enough that the title text itself has truncated.
+   Same sibling-of-`-inner` trick as .terminus-tab-color-bar above, for the
+   same reason: -inner clips its own overflow, so anything meant to survive
+   truncation has to live outside it -- positioned off the tab's right edge
+   here rather than left, so it reads as sitting just past the title instead
+   of stacking on the color bar. Present-but-invisible by default (toggled
+   via .is-pending) rather than added/removed, since refreshTabPendingDot()
+   reuses the same node. */
+.terminus-tab-pending-dot {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: var(--color-orange, #e8a33d);
+  /* A hairline ring in the tab's own background color separates the dot from
+     the title text sitting right behind it, so it still reads as a distinct
+     badge rather than a smudge on the text. */
+  box-shadow: 0 0 0 1px var(--background-primary);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.terminus-tab-pending-dot.is-pending {
+  opacity: 1;
+  visibility: visible;
+  animation: terminus-tab-pending-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes terminus-tab-pending-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminus-tab-pending-dot.is-pending { animation: none; }
+}
+
+/* The tab's own close button occupies this same right-edge spot on hover
+   (or always, depending on the user's Obsidian settings) -- ceding the spot
+   while hovering avoids the two visually colliding. Higher specificity than
+   the .is-pending rule above (three selectors vs two) so it wins regardless
+   of source order. */
+.workspace-tab-header:hover > .terminus-tab-pending-dot.is-pending {
+  opacity: 0;
+  visibility: hidden;
+}
+
 /* Colored terminal identity in the Pending Changes group card (see
    views/PendingChangesView.ts) -- edge strip spanning the whole group
    (header + its file rows), matching the terminal tab's own indicator

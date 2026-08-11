@@ -45,6 +45,7 @@ Edits land on disk immediately; you review what changed afterwards, with the opt
 
 - **Non-blocking by design.** A `PreToolUse` hook records the pre-edit snapshot of every file Claude touches, but never blocks the write. Claude finishes its whole turn; you review afterward.
 - **Live "Claude is editing X" chip.** A pulsing dot and the file currently being written, floating in the bottom-right of the terminal right by Claude's own input box, collapsing to a count once a turn touches more than one. It's up for the whole turn — including the stretches where Claude is thinking or running tools that aren't writes — because a `Stop` hook tells the plugin when the turn actually ends. The dot carries that terminal's own color, so it's clear which session is busy.
+- **Blinking "needs attention" dot on the tab.** Lights up on a terminal's native tab the moment Claude needs permission to use a tool, or has gone idle waiting on you — the case a floating chip inside the pane can't help with, since you only see that if you're already looking at the right tab. Positioned to stay visible even when several tabs are open and the title text itself has truncated. Clears as soon as you focus that tab, or on its own once the turn ends.
 - **Pending Changes panel.** A persistent sidebar panel, grouped by terminal (each group collapsible independently), showing every file changed with a line-numbered, word-level diff and a scroll minimap. Colors follow your vault's accent color rather than a fixed theme.
 - **Comes to front automatically.** Once Claude finishes a burst of edits, the panel reveals itself (debounced across a whole multi-file turn, so it doesn't interrupt mid-turn or pop up once per file). Toggleable in Settings, with an adjustable delay.
 - **Accept / Reject, per file or in bulk.** Accept is a no-op (the file's already correct); Reject reverts to the exact pre-edit content, or deletes the file if it was newly created. A global "Reject all" / "Keep all" covers everything; each terminal group also gets its own scoped (visually secondary) versions. Optionally require a confirmation before any bulk action, off by default since every one is already reversible via "Recently resolved".
@@ -90,7 +91,9 @@ All of these appear in the command palette under `Terminus:`. None ship with a d
 
 **Knowing when a turn ends.** The same file also gets a `Stop` hook, pointing at a second bundled script that pings the same server when Claude finishes a turn. Nothing in the `PreToolUse` stream can express "no more writes are coming" — a turn goes quiet whenever Claude is thinking or running non-write tools — so without it the activity chip has to guess with a timer and either drops mid-turn or lingers past the end. It's a bodyless ping that writes nothing to stdout, since a `Stop` hook's stdout is how a hook tells Claude Code to *block* stopping.
 
-Both hooks are added without disturbing anything already in that file, and Claude Code reads hooks at session start — so a `claude` that was already running when the plugin first provisioned them picks them up on its next start.
+**Knowing when Claude needs you.** A third hook, `Notification`, points at a third bundled script and fires whenever Claude Code needs permission to use a tool or has sat idle waiting on input. Both are "a human needs to look here" moments, so either one lights up that terminal's tab dot the same way, without the plugin parsing the notification's message text. The `Stop` hook (above) or focusing that tab, whichever comes first, clears it again.
+
+All three hooks are added without disturbing anything already in that file, and Claude Code reads hooks at session start — so a `claude` that was already running when the plugin first provisioned them picks them up on its next start.
 
 **Terminal.** There's no native-addon PTY dependency (no `node-pty`, no Electron-ABI rebuild headaches). A small bundled Python script (`resources/pty_helper.py`) allocates a real pseudo-terminal via Python's stdlib and proxies bytes between the PTY and its own stdio; the plugin talks to it with a plain `child_process.spawn`. The terminal UI is `xterm.js`.
 
@@ -135,7 +138,7 @@ The build bundles `src/main.ts` into `main.js` with esbuild, and regenerates `st
 | `src/terminal/TerminalLinks.ts` | Clickable file paths and URLs in terminal output |
 | `src/terminal/fontCatalog.ts` | Installed-monospace-font detection for the settings dropdown |
 | `src/terminal/WikiLinkAutocomplete.ts` | `[[` fuzzy note picker inside the terminal |
-| `src/terminal/TerminalColorPicker.ts`, `colorPalette.ts`, `tabHeaderColor.ts` | Color-swatch popover, preset palette, and the native-tab tint/title-refresh |
+| `src/terminal/TerminalColorPicker.ts`, `colorPalette.ts`, `tabHeaderColor.ts` | Color-swatch popover, preset palette, and the native-tab tint/title-refresh/needs-attention dot |
 | `src/server/ReviewServer.ts`, `diff.ts` | Local hook-bridge HTTP server, diff computation |
 | `src/state/PendingChangesStore.ts`, `ActionLog.ts` | In-memory pending/undo state, persisted action log |
 | `src/state/ClosedTerminalBuffer.ts` | Ring buffer backing "Rescue closed terminal" |
@@ -150,6 +153,7 @@ The build bundles `src/main.ts` into `main.js` with esbuild, and regenerates `st
 | `resources/pty_helper.py` | PTY allocation helper (spawned by the plugin) |
 | `resources/hook-bridge.sh` | `PreToolUse` hook → local server bridge |
 | `resources/turn-end-bridge.sh` | `Stop` hook → local server bridge (end of turn) |
+| `resources/notification-bridge.sh` | `Notification` hook → local server bridge (needs-attention dot) |
 | `resources/shell-integration/{zsh,bash}/` | Shell rc scripts for command tracking and cwd tracking |
 
 ## License

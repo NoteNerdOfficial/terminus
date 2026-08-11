@@ -19,6 +19,7 @@ const EMBEDDED_RESOURCE_FILES = [
   { relativePath: "pty_helper.py", executable: true },
   { relativePath: "hook-bridge.sh", executable: true },
   { relativePath: "turn-end-bridge.sh", executable: true },
+  { relativePath: "notification-bridge.sh", executable: true },
   { relativePath: "shell-integration/zsh/.zshenv", executable: false },
   { relativePath: "shell-integration/bash/.bash_profile", executable: false },
 ];

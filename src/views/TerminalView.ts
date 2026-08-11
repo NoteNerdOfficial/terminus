@@ -22,7 +22,7 @@ import { CwdTracker } from "../terminal/CwdTracker";
 import { WikiLinkAutocomplete } from "../terminal/WikiLinkAutocomplete";
 import { registerTerminalLinks } from "../terminal/TerminalLinks";
 import { openTerminalColorPicker } from "../terminal/TerminalColorPicker";
-import { refreshTabHeader, refreshPaneTitle } from "../terminal/tabHeaderColor";
+import { refreshTabHeader, refreshPaneTitle, refreshTabPendingDot } from "../terminal/tabHeaderColor";
 import { CommandHelpModal } from "../modals/CommandHelpModal";
 import { RenameTerminalModal } from "../modals/RenameTerminalModal";
 import { PreToolUseHookPayload } from "../hooks/types";
@@ -189,6 +189,17 @@ export class TerminalView extends ItemView {
   private activityTimer: number | null = null;
   private readonly activityFiles = new Set<string>();
 
+  // Blinking dot on this leaf's tab header (see tabHeaderColor.ts's
+  // refreshTabPendingDot) -- raised by onNeedsAttention (this terminal's
+  // Notification hook: Claude needs permission, or is waiting on idle
+  // input) and lowered by either onTurnEnd (this terminal's Stop hook) or
+  // the user actually looking at this tab (active-leaf-change), whichever
+  // happens first. Unlike the activity chip, this has no fallback timer --
+  // both of its clear paths are reliable enough (a turn always ends, and a
+  // dot the user never focuses is exactly the case it exists to catch)
+  // that a timed guess would only risk clearing it too early.
+  private isPendingAttention = false;
+
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
     this.token = randomHex(16);
@@ -286,7 +297,9 @@ export class TerminalView extends ItemView {
     // closing, or another plugin's sidebar revealing this leaf.
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
-        if (leaf === this.leaf) this.term?.focus();
+        if (leaf !== this.leaf) return;
+        this.term?.focus();
+        this.clearPendingAttention();
       })
     );
 
@@ -310,6 +323,7 @@ export class TerminalView extends ItemView {
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload),
       onTurnEnd: () => this.onTurnEnd(),
+      onNeedsAttention: () => this.onNeedsAttention(),
     });
 
     await this.startPty();
@@ -470,6 +484,26 @@ export class TerminalView extends ItemView {
    *  (see main.ts), so there's nothing left to stay up for. */
   private onTurnEnd(): void {
     this.clearActivity();
+    this.clearPendingAttention();
+  }
+
+  /** Fires from the Notification hook -- Claude needs this terminal's
+   *  permission, or has been sitting idle waiting on input. Either way,
+   *  this is the one signal that says "a human needs to look here", so any
+   *  firing raises the dot regardless of which of the two it was. */
+  private onNeedsAttention(): void {
+    this.isPendingAttention = true;
+    this.refreshPendingDot();
+  }
+
+  private clearPendingAttention(): void {
+    if (!this.isPendingAttention) return;
+    this.isPendingAttention = false;
+    this.refreshPendingDot();
+  }
+
+  private refreshPendingDot(): void {
+    refreshTabPendingDot(this.leaf, this.isPendingAttention);
   }
 
   private clearActivity(): void {
