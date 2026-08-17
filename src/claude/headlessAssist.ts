@@ -1,7 +1,39 @@
 import { fileExistsSync, execFileText, getEnvVar, pathJoin, type ExecFileError } from "terminus-node-bridge";
 import { tryLoginShellWhich, resolveSpawnEnv } from "../pty/shellDetect";
+import { errorMessage } from "../util/errors";
 
 const TIMEOUT_MS = 45_000;
+const TEST_TIMEOUT_MS = 20_000;
+
+/** Every non-interactive `claude` invocation needs these two flags, not
+ *  just `--allowedTools ""`: with no `--mcp-config` given, `claude -p`
+ *  otherwise tries to connect every MCP server configured in the user's
+ *  *global* Claude Code settings (Figma, Slack, Jira, GitHub, etc.) before
+ *  it will answer at all -- confirmed (in a sibling plugin hitting the
+ *  identical problem) to hang for the full timeout if even one of those
+ *  needs interactive OAuth, which a spawned background process can never
+ *  complete. `--strict-mcp-config` with no `--mcp-config` means "use zero
+ *  MCP servers"; `--permission-mode dontAsk` stops it blocking on a tool-
+ *  approval prompt instead. Deliberately not `--bare`, which looks like the
+ *  same fix but also disables OAuth-token login entirely. */
+const NON_INTERACTIVE_ARGS = ["--strict-mcp-config", "--permission-mode", "dontAsk"];
+
+/** Every headless call here runs with `--allowedTools ""` (no file/bash
+ *  access), so unlike an interactive `claude` session, its own working
+ *  directory can never actually matter to the answer -- but claude's own
+ *  startup routine still walks upward from it looking for CLAUDE.md/git
+ *  context, and on some machines that walk into a TCC-protected folder
+ *  (e.g. a vault under `~/Documents`) triggers a fresh macOS permission
+ *  dialog that a spawned background process can never answer, hanging it
+ *  indefinitely (the exact same failure shape as the Keychain/MCP hangs
+ *  above, one layer further in). Pinning to the OS temp dir sidesteps the
+ *  whole class of problem regardless of where the vault happens to live,
+ *  with zero downside given tools are already off. `TMPDIR` is how macOS
+ *  and Linux both expose it via env (no Node `os.tmpdir()` available
+ *  through terminus-node-bridge); `/tmp` covers the rare case it's unset. */
+function resolveHeadlessCwd(): string {
+  return getEnvVar("TMPDIR") || "/tmp";
+}
 
 // ~/.local/bin/claude is where Claude Code's own official standalone
 // installer (the curl | sh method) puts it for a user-level, non-sudo
@@ -52,54 +84,66 @@ function settingsHint(authToken: string | undefined, confident: boolean): string
   return ' If this keeps happening, try adding a Claude Code auth token in Terminus settings under Advanced. Run "claude setup-token" in a real terminal and paste the result there.';
 }
 
-/** Fires a single, isolated, tool-free `claude -p` call -- independent of
- *  any interactive terminal session, so it works even when the terminal
- *  where the failure happened never ran `claude` at all. `--allowedTools
- *  ""` (verified empirically) keeps this a pure Q&A turn: no file/bash
- *  access, since this should never be able to take action on its own. */
-async function runHeadlessQuery(claudeBin: string, cwd: string, prompt: string, authToken?: string): Promise<string> {
-  let stdout: string;
+/** Shared low-level spawn, independent of any interactive terminal session
+ *  -- so it works even when the terminal where a failure happened never
+ *  ran `claude` at all. Throws a message that's already diagnostic (never
+ *  Node's own "Command failed: <cmd> <args...>", which is useless here
+ *  since one of the args is a multi-KB prompt) but with no settings hint
+ *  attached -- callers that want one add it themselves, since a hint makes
+ *  sense on a real failed query but not on the settings tab's own Test
+ *  button, which already has all the context it needs. */
+async function spawnClaude(claudeBin: string, args: string[], authToken: string | undefined, timeoutMs: number): Promise<string> {
+  // Obsidian's Electron process doesn't inherit the login shell's env
+  // (proxy vars a corporate network may require, etc.) -- without this,
+  // claude can silently hang trying to reach the API directly instead of
+  // failing fast, indistinguishable from a slow query until the timeout.
+  const env = await resolveSpawnEnv();
+  // On some machines, Claude Code's normal Keychain-based login can't be
+  // read by this freshly-spawned process at all (a differently-signed
+  // binary asking for another app's Keychain item can trigger an
+  // off-screen consent dialog that never resolves) -- an explicit token
+  // from `claude setup-token`, opted into via settings, bypasses that read
+  // entirely. Left untouched when no token is configured, so default
+  // behavior is exactly the existing Keychain-based login.
+  if (authToken) env.CLAUDE_CODE_OAUTH_TOKEN = authToken;
   try {
-    // Obsidian's Electron process doesn't inherit the login shell's env
-    // (proxy vars a corporate network may require, etc.) -- without this,
-    // claude can silently hang trying to reach the API directly instead of
-    // failing fast, indistinguishable from a slow query until the timeout.
-    const env = await resolveSpawnEnv();
-    // On some corporate machines, Claude Code's normal Keychain-based login
-    // can't be read by this freshly-spawned process at all (a differently-
-    // signed binary asking for another app's Keychain item can trigger an
-    // off-screen consent dialog that never resolves) -- an explicit token
-    // from `claude setup-token`, opted into via settings, bypasses that
-    // read entirely. Left untouched when no token is configured, so default
-    // behavior is exactly the existing Keychain-based login.
-    if (authToken) env.CLAUDE_CODE_OAUTH_TOKEN = authToken;
-    ({ stdout } = await execFileText(
-      claudeBin,
-      ["-p", prompt, "--allowedTools", "", "--output-format", "json"],
-      { cwd, timeout: TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, env }
-    ));
+    const { stdout } = await execFileText(claudeBin, args, {
+      cwd: resolveHeadlessCwd(),
+      timeout: timeoutMs,
+      maxBuffer: 10 * 1024 * 1024,
+      env,
+    });
+    return stdout;
   } catch (err) {
-    // execFileText's own rejection .message is Node's "Command failed:
-    // <cmd> <args...>" format -- useless here since one of the args is the
-    // entire multi-KB prompt, so it surfaces as an unreadable wall of text
-    // with no indication of what actually went wrong (confirmed: a killed-
-    // by-timeout process produces exactly this shape -- .message with no
-    // stderr at all, verified by reproducing a timeout locally). Pull the
-    // actually diagnostic fields off the error instead.
     const execErr = err as ExecFileError;
     if (execErr.killed || execErr.signal) {
-      // A hang can't be distinguished from a genuinely slow query until the
-      // timeout fires, so this is only ever a hedge, not a diagnosis.
-      throw new Error(`claude timed out after ${TIMEOUT_MS / 1000}s with no response.${settingsHint(authToken, false)}`);
+      throw new Error(`claude timed out after ${timeoutMs / 1000}s with no response`);
     }
     const stderr = execErr.stderr?.trim();
-    // Unlike the timeout above, "not logged in" (or similar) is an explicit,
-    // unambiguous signal straight from claude itself -- worth a confident
-    // pointer at the fix instead of the generic hedge.
-    const isAuthFailure = !!stderr && /not logged in|please run.*login|authentication/i.test(stderr);
-    throw new Error(
-      `claude exited with code ${execErr.code ?? "unknown"}${stderr ? `: ${stderr.slice(0, 500)}` : ""}${settingsHint(authToken, isAuthFailure)}`
+    throw new Error(`claude exited with code ${execErr.code ?? "unknown"}${stderr ? `: ${stderr.slice(0, 500)}` : ""}`);
+  }
+}
+
+/** `--allowedTools ""` (verified empirically) keeps this a pure Q&A turn:
+ *  no file/bash access, since this should never be able to take action on
+ *  its own. */
+async function runHeadlessQuery(claudeBin: string, prompt: string, authToken?: string): Promise<string> {
+  let stdout: string;
+  try {
+    stdout = await spawnClaude(
+      claudeBin,
+      ["-p", prompt, "--allowedTools", "", "--output-format", "json", ...NON_INTERACTIVE_ARGS],
+      authToken,
+      TIMEOUT_MS
     );
+  } catch (err) {
+    const message = errorMessage(err);
+    // "not logged in" (or similar) is an explicit, unambiguous signal
+    // straight from claude itself -- worth a confident pointer at the fix
+    // instead of the generic hedge a bare timeout gets, since a hang can't
+    // be distinguished from a genuinely slow query until the timeout fires.
+    const isAuthFailure = /not logged in|please run.*login|authentication/i.test(message);
+    throw new Error(`${message}${settingsHint(authToken, isAuthFailure)}`);
   }
 
   let parsed: ClaudeJsonResult;
@@ -117,6 +161,25 @@ async function runHeadlessQuery(claudeBin: string, cwd: string, prompt: string, 
   return parsed.result;
 }
 
+/** Backs the "Test" button next to the auth token field in settings.
+ *  Deliberately bypasses `runHeadlessQuery` (no JSON parsing, no settings
+ *  hint on failure -- the settings tab already has all the context a hint
+ *  would add) and uses a shorter timeout than a real query, since this is
+ *  a synchronous check the user is actively sitting and waiting on, not a
+ *  background command-help lookup. Settings changes apply immediately
+ *  (this function, like `explainCommandOutput`/`suggestFixCommand`, always
+ *  reads whatever token was just passed in -- nothing here is cached), so
+ *  a successful test means the feature is ready to use right away, no
+ *  restart needed. Throws on failure; the caller renders `errorMessage`. */
+export async function testClaudeConnection(claudeBin: string, authToken?: string): Promise<void> {
+  await spawnClaude(
+    claudeBin,
+    ["-p", "Reply with exactly: OK", "--allowedTools", "", "--output-format", "json", ...NON_INTERACTIVE_ARGS],
+    authToken,
+    TEST_TIMEOUT_MS
+  );
+}
+
 /** `transcript` is the raw captured terminal text leading up to and
  *  including the failed command -- CommandTracker.getRecentContext()
  *  already includes a few preceding commands too (each with its own
@@ -127,16 +190,11 @@ async function runHeadlessQuery(claudeBin: string, cwd: string, prompt: string, 
  *  enough context on its own. There's no need to separately parse "the
  *  command" out of it either way; Claude reads a terminal transcript just
  *  fine as-is. */
-export async function explainCommandOutput(
-  claudeBin: string,
-  cwd: string,
-  transcript: string,
-  authToken?: string
-): Promise<string> {
+export async function explainCommandOutput(claudeBin: string, transcript: string, authToken?: string): Promise<string> {
   const prompt = `Here is a raw terminal transcript: the most recent command that failed, plus a few commands run right before it for context (there may be just the one, or several). Explain in plain English, for someone new to the terminal, what happened with the LAST command and what they should consider doing next -- factoring in the earlier commands if they're relevant (e.g. a step that was skipped). Do not run any commands or use any tools, just answer in plain text (2-4 sentences max).
 
 ${transcript}`;
-  return runHeadlessQuery(claudeBin, cwd, prompt, authToken);
+  return runHeadlessQuery(claudeBin, prompt, authToken);
 }
 
 export interface FixSuggestion {
@@ -203,7 +261,6 @@ function parseSuggestion(text: string): FixSuggestion | null {
  *  repeating. */
 export async function suggestFixCommand(
   claudeBin: string,
-  cwd: string,
   transcript: string,
   excludeCommands: string[] = [],
   authToken?: string
@@ -217,7 +274,7 @@ export async function suggestFixCommand(
 ${exclusion}
 ${transcript}`;
 
-  const raw = (await runHeadlessQuery(claudeBin, cwd, prompt, authToken)).trim();
+  const raw = (await runHeadlessQuery(claudeBin, prompt, authToken)).trim();
   if (/^null\.?$/i.test(raw)) return { type: "none" };
 
   const suggestion = parseSuggestion(raw);

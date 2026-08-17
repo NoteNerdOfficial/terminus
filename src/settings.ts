@@ -1,6 +1,8 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import { getEnvVar } from "terminus-node-bridge";
 import { isFontAvailable, isFontMonospaced, listAvailableMonospaceFonts } from "./terminal/fontCatalog";
+import { testClaudeConnection } from "./claude/headlessAssist";
+import { errorMessage } from "./util/errors";
 import type TerminusPlugin from "./main";
 
 /** Sentinel dropdown value -- can't collide with a real family name, which
@@ -288,7 +290,19 @@ export class TerminusSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    this.displayClaudeAuthTokenSetting(containerEl);
+  }
+
+  /** Settings apply immediately -- `getClaudeBin()`/`this.plugin.settings`
+   *  are both read live by every headless call, nothing here is cached --
+   *  so "Test" always reflects the field's current saved value with no
+   *  restart or reload needed. Its own status line is a separate element
+   *  (same pattern as the custom-font warning below) so a click doesn't
+   *  need a full `display()` re-render, which would drop input focus. */
+  private displayClaudeAuthTokenSetting(containerEl: HTMLElement): void {
+    let statusEl: HTMLElement;
+
+    const setting = new Setting(containerEl)
       .setName("Claude Code auth token")
       .setDesc(
         'Only needed for "Explain this" / "Suggest a fix" on failed commands, and only if those hang or fail outright -- some machines can\'t read Claude Code\'s normal Keychain-based login from a spawned background process. Run "claude setup-token" in a real terminal and paste the result here. Leave blank to keep using your regular Claude Code login. Stored as plain text in this vault\'s plugin data, same as any other API key field.'
@@ -301,8 +315,30 @@ export class TerminusSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.claudeAuthToken = value.trim();
             await this.plugin.saveSettings();
+            statusEl.empty();
+            statusEl.removeClass("is-success", "is-error");
           });
-      });
+      })
+      .addButton((button) =>
+        button.setButtonText("Test").onClick(async () => {
+          button.setDisabled(true);
+          statusEl.removeClass("is-success", "is-error");
+          statusEl.setText("Testing…");
+          try {
+            const claudeBin = await this.plugin.getClaudeBin();
+            await testClaudeConnection(claudeBin, this.plugin.settings.claudeAuthToken || undefined);
+            statusEl.setText("Connected -- Explain this / Suggest a fix should work now.");
+            statusEl.addClass("is-success");
+          } catch (err) {
+            statusEl.setText(`Failed: ${errorMessage(err)}`);
+            statusEl.addClass("is-error");
+          } finally {
+            button.setDisabled(false);
+          }
+        })
+      );
+
+    statusEl = setting.descEl.createDiv({ cls: "terminus-setting-status" });
   }
 
   /**

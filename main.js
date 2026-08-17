@@ -1046,7 +1046,19 @@ async function resolveSpawnEnv() {
 
 // src/claude/headlessAssist.ts
 var import_terminus_node_bridge5 = __toESM(require_dist());
+
+// src/util/errors.ts
+function errorMessage2(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// src/claude/headlessAssist.ts
 var TIMEOUT_MS = 45e3;
+var TEST_TIMEOUT_MS = 2e4;
+var NON_INTERACTIVE_ARGS = ["--strict-mcp-config", "--permission-mode", "dontAsk"];
+function resolveHeadlessCwd() {
+  return (0, import_terminus_node_bridge5.getEnvVar)("TMPDIR") || "/tmp";
+}
 var CLAUDE_BIN_CANDIDATES = ["/usr/local/bin/claude", "/opt/homebrew/bin/claude"];
 function localBinCandidate() {
   const home = (0, import_terminus_node_bridge5.getEnvVar)("HOME");
@@ -1075,28 +1087,41 @@ function settingsHint(authToken, confident) {
   }
   return ' If this keeps happening, try adding a Claude Code auth token in Terminus settings under Advanced. Run "claude setup-token" in a real terminal and paste the result there.';
 }
-async function runHeadlessQuery(claudeBin, cwd, prompt, authToken) {
+async function spawnClaude(claudeBin, args, authToken, timeoutMs) {
   var _a8, _b;
-  let stdout;
+  const env = await resolveSpawnEnv();
+  if (authToken)
+    env.CLAUDE_CODE_OAUTH_TOKEN = authToken;
   try {
-    const env = await resolveSpawnEnv();
-    if (authToken)
-      env.CLAUDE_CODE_OAUTH_TOKEN = authToken;
-    ({ stdout } = await (0, import_terminus_node_bridge5.execFileText)(
-      claudeBin,
-      ["-p", prompt, "--allowedTools", "", "--output-format", "json"],
-      { cwd, timeout: TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, env }
-    ));
+    const { stdout } = await (0, import_terminus_node_bridge5.execFileText)(claudeBin, args, {
+      cwd: resolveHeadlessCwd(),
+      timeout: timeoutMs,
+      maxBuffer: 10 * 1024 * 1024,
+      env
+    });
+    return stdout;
   } catch (err) {
     const execErr = err;
     if (execErr.killed || execErr.signal) {
-      throw new Error(`claude timed out after ${TIMEOUT_MS / 1e3}s with no response.${settingsHint(authToken, false)}`);
+      throw new Error(`claude timed out after ${timeoutMs / 1e3}s with no response`);
     }
     const stderr = (_a8 = execErr.stderr) == null ? void 0 : _a8.trim();
-    const isAuthFailure = !!stderr && /not logged in|please run.*login|authentication/i.test(stderr);
-    throw new Error(
-      `claude exited with code ${(_b = execErr.code) != null ? _b : "unknown"}${stderr ? `: ${stderr.slice(0, 500)}` : ""}${settingsHint(authToken, isAuthFailure)}`
+    throw new Error(`claude exited with code ${(_b = execErr.code) != null ? _b : "unknown"}${stderr ? `: ${stderr.slice(0, 500)}` : ""}`);
+  }
+}
+async function runHeadlessQuery(claudeBin, prompt, authToken) {
+  let stdout;
+  try {
+    stdout = await spawnClaude(
+      claudeBin,
+      ["-p", prompt, "--allowedTools", "", "--output-format", "json", ...NON_INTERACTIVE_ARGS],
+      authToken,
+      TIMEOUT_MS
     );
+  } catch (err) {
+    const message = errorMessage2(err);
+    const isAuthFailure = /not logged in|please run.*login|authentication/i.test(message);
+    throw new Error(`${message}${settingsHint(authToken, isAuthFailure)}`);
   }
   let parsed;
   try {
@@ -1112,11 +1137,19 @@ async function runHeadlessQuery(claudeBin, cwd, prompt, authToken) {
   }
   return parsed.result;
 }
-async function explainCommandOutput(claudeBin, cwd, transcript, authToken) {
+async function testClaudeConnection(claudeBin, authToken) {
+  await spawnClaude(
+    claudeBin,
+    ["-p", "Reply with exactly: OK", "--allowedTools", "", "--output-format", "json", ...NON_INTERACTIVE_ARGS],
+    authToken,
+    TEST_TIMEOUT_MS
+  );
+}
+async function explainCommandOutput(claudeBin, transcript, authToken) {
   const prompt = `Here is a raw terminal transcript: the most recent command that failed, plus a few commands run right before it for context (there may be just the one, or several). Explain in plain English, for someone new to the terminal, what happened with the LAST command and what they should consider doing next -- factoring in the earlier commands if they're relevant (e.g. a step that was skipped). Do not run any commands or use any tools, just answer in plain text (2-4 sentences max).
 
 ${transcript}`;
-  return runHeadlessQuery(claudeBin, cwd, prompt, authToken);
+  return runHeadlessQuery(claudeBin, prompt, authToken);
 }
 function isFixSuggestion(value) {
   return typeof value === "object" && value !== null && typeof value.command === "string" && typeof value.description === "string";
@@ -1140,14 +1173,14 @@ function parseSuggestion(text) {
   }
   return null;
 }
-async function suggestFixCommand(claudeBin, cwd, transcript, excludeCommands = [], authToken) {
+async function suggestFixCommand(claudeBin, transcript, excludeCommands = [], authToken) {
   const exclusion = excludeCommands.length > 0 ? `
 The user already saw and rejected ${excludeCommands.length === 1 ? "this previous suggestion" : "these previous suggestions"} as not helpful -- suggest a genuinely different option: ${excludeCommands.join(", ")}
 ` : "";
   const prompt = `Here is a raw terminal transcript: the most recent command that failed, plus a few commands run right before it for context (there may be just the one, or several -- e.g. a failed \`git push\` after \`git init\`/\`git add\`/\`git commit\` might really need one of the earlier steps fixed, not push itself). The failing command might be a typo of a real command, or plain-English text the shell rejected because it isn't a command at all. Suggest the ONE best shell command to fix or address the problem with the LAST command, with a short one-sentence rationale, using the earlier commands as context where relevant. Respond with ONLY a raw JSON object, no markdown fences, no explanation outside the JSON: {"command": "...", "description": "..."}. If nothing safe/confident comes to mind, respond with exactly: null. Never suggest a command whose only purpose is to explain a refusal (e.g. an echo statement) -- in that case also just respond with null.
 ${exclusion}
 ${transcript}`;
-  const raw = (await runHeadlessQuery(claudeBin, cwd, prompt, authToken)).trim();
+  const raw = (await runHeadlessQuery(claudeBin, prompt, authToken)).trim();
   if (/^null\.?$/i.test(raw))
     return { type: "none" };
   const suggestion = parseSuggestion(raw);
@@ -16140,18 +16173,10 @@ function refreshPaneTitle(view, displayText) {
 
 // src/modals/CommandHelpModal.ts
 var import_obsidian5 = require("obsidian");
-
-// src/util/errors.ts
-function errorMessage2(err) {
-  return err instanceof Error ? err.message : String(err);
-}
-
-// src/modals/CommandHelpModal.ts
 var CommandHelpModal = class extends import_obsidian5.Modal {
-  constructor(app, claudeBin, cwd, exitCode, transcript, authToken, onApplyFix) {
+  constructor(app, claudeBin, exitCode, transcript, authToken, onApplyFix) {
     super(app);
     this.claudeBin = claudeBin;
-    this.cwd = cwd;
     this.exitCode = exitCode;
     this.transcript = transcript;
     this.authToken = authToken;
@@ -16180,7 +16205,7 @@ var CommandHelpModal = class extends import_obsidian5.Modal {
     this.explainResultEl.empty();
     this.explainResultEl.createDiv({ text: "Asking Claude\u2026", cls: "terminus-pending-empty" });
     try {
-      const explanation = await explainCommandOutput(this.claudeBin, this.cwd, this.transcript, this.authToken || void 0);
+      const explanation = await explainCommandOutput(this.claudeBin, this.transcript, this.authToken || void 0);
       this.explainResultEl.empty();
       this.explainResultEl.createEl("p", { text: explanation });
     } catch (err) {
@@ -16198,13 +16223,7 @@ var CommandHelpModal = class extends import_obsidian5.Modal {
     this.suggestResultEl.empty();
     this.suggestResultEl.createDiv({ text: "Asking Claude\u2026", cls: "terminus-pending-empty" });
     try {
-      const result = await suggestFixCommand(
-        this.claudeBin,
-        this.cwd,
-        this.transcript,
-        this.shownCommands,
-        this.authToken || void 0
-      );
+      const result = await suggestFixCommand(this.claudeBin, this.transcript, this.shownCommands, this.authToken || void 0);
       this.suggestResultEl.empty();
       this.renderResult(result);
     } catch (err) {
@@ -16953,7 +16972,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     var _a8, _b, _c2;
     const transcript = (_b = (_a8 = this.commandTracker) == null ? void 0 : _a8.getRecentContext(cmd)) != null ? _b : "";
     const claudeBin = await this.plugin.getClaudeBin();
-    new CommandHelpModal(this.app, claudeBin, this.plugin.getVaultBasePath(), (_c2 = cmd.exitCode) != null ? _c2 : 0, transcript, this.plugin.settings.claudeAuthToken, (command) => {
+    new CommandHelpModal(this.app, claudeBin, (_c2 = cmd.exitCode) != null ? _c2 : 0, transcript, this.plugin.settings.claudeAuthToken, (command) => {
       var _a9;
       (_a9 = this.pty) == null ? void 0 : _a9.write(command);
       new import_obsidian7.Notice(`Terminus: suggested command added to ${this.getDisplayText()} \u2014 press Enter to run it`);
@@ -19206,15 +19225,45 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian17.Setting(containerEl).setName("Claude Code auth token").setDesc(
+    this.displayClaudeAuthTokenSetting(containerEl);
+  }
+  /** Settings apply immediately -- `getClaudeBin()`/`this.plugin.settings`
+   *  are both read live by every headless call, nothing here is cached --
+   *  so "Test" always reflects the field's current saved value with no
+   *  restart or reload needed. Its own status line is a separate element
+   *  (same pattern as the custom-font warning below) so a click doesn't
+   *  need a full `display()` re-render, which would drop input focus. */
+  displayClaudeAuthTokenSetting(containerEl) {
+    let statusEl;
+    const setting = new import_obsidian17.Setting(containerEl).setName("Claude Code auth token").setDesc(
       `Only needed for "Explain this" / "Suggest a fix" on failed commands, and only if those hang or fail outright -- some machines can't read Claude Code's normal Keychain-based login from a spawned background process. Run "claude setup-token" in a real terminal and paste the result here. Leave blank to keep using your regular Claude Code login. Stored as plain text in this vault's plugin data, same as any other API key field.`
     ).addText((text) => {
       text.inputEl.type = "password";
       text.setPlaceholder("sk-ant-oat01-\u2026").setValue(this.plugin.settings.claudeAuthToken).onChange(async (value) => {
         this.plugin.settings.claudeAuthToken = value.trim();
         await this.plugin.saveSettings();
+        statusEl.empty();
+        statusEl.removeClass("is-success", "is-error");
       });
-    });
+    }).addButton(
+      (button) => button.setButtonText("Test").onClick(async () => {
+        button.setDisabled(true);
+        statusEl.removeClass("is-success", "is-error");
+        statusEl.setText("Testing\u2026");
+        try {
+          const claudeBin = await this.plugin.getClaudeBin();
+          await testClaudeConnection(claudeBin, this.plugin.settings.claudeAuthToken || void 0);
+          statusEl.setText("Connected -- Explain this / Suggest a fix should work now.");
+          statusEl.addClass("is-success");
+        } catch (err) {
+          statusEl.setText(`Failed: ${errorMessage2(err)}`);
+          statusEl.addClass("is-error");
+        } finally {
+          button.setDisabled(false);
+        }
+      })
+    );
+    statusEl = setting.descEl.createDiv({ cls: "terminus-setting-status" });
   }
   /**
    * A dropdown of installed monospace fonts rather than free text.

@@ -10,7 +10,6 @@ export class CommandHelpModal extends Modal {
   constructor(
     app: App,
     private claudeBin: string,
-    private cwd: string,
     private exitCode: number,
     private transcript: string,
     private authToken: string,
@@ -58,7 +57,7 @@ export class CommandHelpModal extends Modal {
     this.explainResultEl.empty();
     this.explainResultEl.createDiv({ text: "Asking Claude…", cls: "terminus-pending-empty" });
     try {
-      const explanation = await explainCommandOutput(this.claudeBin, this.cwd, this.transcript, this.authToken || undefined);
+      const explanation = await explainCommandOutput(this.claudeBin, this.transcript, this.authToken || undefined);
       this.explainResultEl.empty();
       this.explainResultEl.createEl("p", { text: explanation });
     } catch (err) {
@@ -77,13 +76,7 @@ export class CommandHelpModal extends Modal {
     this.suggestResultEl.empty();
     this.suggestResultEl.createDiv({ text: "Asking Claude…", cls: "terminus-pending-empty" });
     try {
-      const result = await suggestFixCommand(
-        this.claudeBin,
-        this.cwd,
-        this.transcript,
-        this.shownCommands,
-        this.authToken || undefined
-      );
+      const result = await suggestFixCommand(this.claudeBin, this.transcript, this.shownCommands, this.authToken || undefined);
       this.suggestResultEl.empty();
       this.renderResult(result);
     } catch (err) {

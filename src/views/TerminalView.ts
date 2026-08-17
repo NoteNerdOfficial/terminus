@@ -897,7 +897,7 @@ export class TerminalView extends ItemView {
     // anything about push itself.
     const transcript = this.commandTracker?.getRecentContext(cmd) ?? "";
     const claudeBin = await this.plugin.getClaudeBin();
-    new CommandHelpModal(this.app, claudeBin, this.plugin.getVaultBasePath(), cmd.exitCode ?? 0, transcript, this.plugin.settings.claudeAuthToken, (command) => {
+    new CommandHelpModal(this.app, claudeBin, cmd.exitCode ?? 0, transcript, this.plugin.settings.claudeAuthToken, (command) => {
       // Populates the terminal's input line without submitting it -- the
       // user reviews/edits and presses Enter themselves, same principle as
       // the rest of this plugin (Claude proposes, a human confirms before

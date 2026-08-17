@@ -1364,6 +1364,25 @@
   display: none;
 }
 
+/* Result line under the Claude Code auth token field's Test button. Empty
+   until a test runs, same :empty pattern as the warning above. */
+.terminus-setting-status {
+  font-size: var(--font-ui-smaller);
+  margin-top: var(--size-2-2);
+}
+
+.terminus-setting-status:empty {
+  display: none;
+}
+
+.terminus-setting-status.is-success {
+  color: var(--text-success);
+}
+
+.terminus-setting-status.is-error {
+  color: var(--text-error);
+}
+
 /* Onboarding modal. Wider than Obsidian's default so the shortcut tables
    don't wrap a two-word key combo onto two lines, and height-capped so the
    full guide scrolls its body rather than growing past the window. */
