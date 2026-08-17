@@ -41,6 +41,7 @@ export interface TerminusSettings {
   confirmBulkActions: boolean;
   shellBinOverride: string;
   python3BinOverride: string;
+  claudeAuthToken: string;
   fontFamilyOverride: string;
   cursorStyle: CursorStyle;
   cursorBlink: boolean;
@@ -63,6 +64,7 @@ export const DEFAULT_SETTINGS: TerminusSettings = {
   confirmBulkActions: false,
   shellBinOverride: "",
   python3BinOverride: "",
+  claudeAuthToken: "",
   fontFamilyOverride: "",
   cursorStyle: "block",
   cursorBlink: true,
@@ -285,6 +287,22 @@ export class TerminusSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName("Claude Code auth token")
+      .setDesc(
+        'Only needed for "Explain this" / "Suggest a fix" on failed commands, and only if those hang or fail outright -- some machines can\'t read Claude Code\'s normal Keychain-based login from a spawned background process. Run "claude setup-token" in a real terminal and paste the result here. Leave blank to keep using your regular Claude Code login. Stored as plain text in this vault\'s plugin data, same as any other API key field.'
+      )
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text
+          .setPlaceholder("sk-ant-oat01-…")
+          .setValue(this.plugin.settings.claudeAuthToken)
+          .onChange(async (value) => {
+            this.plugin.settings.claudeAuthToken = value.trim();
+            await this.plugin.saveSettings();
+          });
+      });
   }
 
   /**

@@ -107,6 +107,7 @@ All three hooks are added without disturbing anything already in that file, and 
 
 - macOS or Linux (Windows isn't supported; shell integration and the PTY helper are Unix-specific).
 - Python 3.9+ (`pty_helper.py` uses `os.waitstatus_to_exitcode`, added in 3.9) and the [`claude` CLI](https://claude.com/product/claude-code) installed and logged in. Both are auto-detected (including a login-shell `PATH` lookup, since Obsidian launched from Finder/Dock often inherits a minimal one); if detection ever picks the wrong binary, Settings has manual overrides for the shell and Python 3 paths.
+- On some machines, Claude Code's normal Keychain-based login can't be read by "Explain this" / "Suggest a fix" (a spawned background process asking for another app's Keychain item can hang indefinitely). If those hang or fail, run `claude setup-token` in a real terminal and paste the result into Settings → Advanced → "Claude Code auth token".
 - `git` is optional, only needed for the "vs git HEAD" diff view.
 
 ## Development
