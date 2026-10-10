@@ -1,5 +1,11 @@
 # Terminus
 
+<p align="center">
+  <a href="https://github.com/NoteNerdOfficial/terminus/commits/main"><img src="https://img.shields.io/github/last-commit/NoteNerdOfficial/terminus?style=flat-square" alt="last commit"></a>
+  <a href="https://github.com/NoteNerdOfficial/terminus/releases/latest"><img src="https://img.shields.io/github/v/release/NoteNerdOfficial/terminus?style=flat-square&label=release" alt="release"></a>
+  <a href="https://obsidian.md/plugins?id=terminus"><img src="https://img.shields.io/badge/dynamic/json?style=flat-square&logo=obsidian&color=7C3AED&label=downloads&query=%24%5B%22terminus%22%5D.downloads&url=https%3A%2F%2Fraw.githubusercontent.com%2Fobsidianmd%2Fobsidian-releases%2Fmaster%2Fcommunity-plugin-stats.json" alt="Obsidian downloads"></a>
+</p>
+
 A real terminal inside Obsidian that never lets you lose the thread on what [Claude Code](https://claude.com/product/claude-code) just did. You type `claude` (or anything else) exactly like you would in any other terminal, with nothing wrapped or intercepted, and Claude keeps working through a whole multi-file turn uninterrupted. Two things happen because of that:
 
 - **A command fails, and you don't leave the terminal to deal with it.** A small badge appears right next to the failed command. Click it and Claude explains what happened and proposes a fix, using the surrounding command history for context. No copying an error into a separate chat window and pasting the context back and forth by hand.
