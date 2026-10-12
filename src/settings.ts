@@ -39,11 +39,44 @@ export const WIKI_LINK_INSERT_FORMAT_LABELS: Record<WikiLinkInsertFormat, string
   absolute: "Absolute path",
 };
 
-export interface TerminusSettings {
-  fontSize: number;
-  terminalPlacement: TerminalPlacement;
+/** Classic is the single Pending Changes panel; Multi-agent is the Agent
+ *  inbox plus the Terminus sidebar's groups. Terminals, pending changes and
+ *  every setting outside the two per-mode objects below are shared. */
+export type Experience = "classic" | "multi-agent";
+
+export const EXPERIENCE_LABELS: Record<Experience, string> = {
+  classic: "Classic",
+  "multi-agent": "Multi-agent",
+};
+
+/** Off until the Agent inbox and the Terminus sidebar exist: while it's off,
+ *  the Experience setting and the invite to try Multi-agent stay hidden and
+ *  every install runs Classic, whatever its saved `experience` says, so a
+ *  release can never offer a mode with nothing in it. */
+export const MULTI_AGENT_AVAILABLE = false;
+
+export interface ClassicSettings {
   autoRevealPendingChanges: boolean;
   autoRevealDelayMs: number;
+}
+
+export interface MultiAgentSettings {
+  autoRevealInbox: boolean;
+  autoRevealDelayMs: number;
+  /** Installs the SubagentStart/SubagentStop hooks and the Agent matcher. */
+  trackSubagents: boolean;
+  showEstimatedCost: boolean;
+  showGitBranch: boolean;
+}
+
+export interface TerminusSettings {
+  experience: Experience;
+  /** Each mode's own settings, kept while the other mode is selected so
+   *  switching back finds them as they were. */
+  classic: ClassicSettings;
+  multiAgent: MultiAgentSettings;
+  fontSize: number;
+  terminalPlacement: TerminalPlacement;
   confirmBulkActions: boolean;
   shellBinOverride: string;
   python3BinOverride: string;
@@ -60,13 +93,30 @@ export interface TerminusSettings {
    *  Defaults false so an existing install shows it once on upgrade too --
    *  the shortcuts it covers are just as undiscovered there. */
   hasSeenWelcome: boolean;
+  /** Same one-time gate as hasSeenWelcome, for the invite to try
+   *  Multi-agent. Set whether it was accepted or dismissed. */
+  hasSeenMultiAgentInvite: boolean;
 }
 
-export const DEFAULT_SETTINGS: TerminusSettings = {
-  fontSize: 13,
-  terminalPlacement: "ask",
+export const DEFAULT_CLASSIC_SETTINGS: ClassicSettings = {
   autoRevealPendingChanges: true,
   autoRevealDelayMs: 800,
+};
+
+export const DEFAULT_MULTI_AGENT_SETTINGS: MultiAgentSettings = {
+  autoRevealInbox: true,
+  autoRevealDelayMs: 800,
+  trackSubagents: true,
+  showEstimatedCost: true,
+  showGitBranch: true,
+};
+
+export const DEFAULT_SETTINGS: TerminusSettings = {
+  experience: "classic",
+  classic: DEFAULT_CLASSIC_SETTINGS,
+  multiAgent: DEFAULT_MULTI_AGENT_SETTINGS,
+  fontSize: 13,
+  terminalPlacement: "ask",
   confirmBulkActions: false,
   shellBinOverride: "",
   python3BinOverride: "",
@@ -80,7 +130,38 @@ export const DEFAULT_SETTINGS: TerminusSettings = {
   ribbonIcon: "square-terminal",
   wikiLinkInsertFormat: "wikilink",
   hasSeenWelcome: false,
+  hasSeenMultiAgentInvite: false,
 };
+
+/** Fields that lived at the top level before the per-mode split, and now
+ *  belong to Classic. */
+interface LegacyFlatSettings {
+  autoRevealPendingChanges?: boolean;
+  autoRevealDelayMs?: number;
+}
+
+/**
+ * Builds the in-memory settings from whatever data.json holds. A plain
+ * shallow merge isn't enough: it would take a saved `classic` object as-is
+ * and drop any default added to it later, so each per-mode object is merged
+ * with its own defaults. Settings saved before the split have no `classic`
+ * at all; their flat auto-reveal fields move into it.
+ */
+export function resolveSettings(saved: unknown): TerminusSettings {
+  const data = (typeof saved === "object" && saved !== null ? saved : {}) as Partial<TerminusSettings> & LegacyFlatSettings;
+  const { autoRevealPendingChanges, autoRevealDelayMs, classic, multiAgent, ...rest } = data;
+
+  const legacyClassic: Partial<ClassicSettings> = {};
+  if (autoRevealPendingChanges !== undefined) legacyClassic.autoRevealPendingChanges = autoRevealPendingChanges;
+  if (autoRevealDelayMs !== undefined) legacyClassic.autoRevealDelayMs = autoRevealDelayMs;
+
+  return {
+    ...DEFAULT_SETTINGS,
+    ...rest,
+    classic: { ...DEFAULT_CLASSIC_SETTINGS, ...legacyClassic, ...classic },
+    multiAgent: { ...DEFAULT_MULTI_AGENT_SETTINGS, ...multiAgent },
+  };
+}
 
 export const MIN_FONT_SIZE = 8;
 export const MAX_FONT_SIZE = 32;
@@ -101,9 +182,149 @@ export class TerminusSettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
+  /** Shared by both modes' sections: the setting itself is shared. */
+  private renderConfirmBulkActions(containerEl: HTMLElement): void {
+    new Setting(containerEl)
+      .setName("Confirm before bulk actions")
+      .setDesc(
+        'Ask for confirmation before "Reject all" / "Keep all" (global or per-terminal). Off by default -- every bulk action is already reversible via the "Recently resolved" list.'
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.confirmBulkActions).onChange(async (value) => {
+          this.plugin.settings.confirmBulkActions = value;
+          await this.plugin.saveSettings();
+        })
+      );
+  }
+
+  /** Same slider for both modes, each writing its own value. */
+  private renderRevealDelay(containerEl: HTMLElement, value: number, desc: string, save: (value: number) => void): void {
+    new Setting(containerEl)
+      .setName("Reveal delay")
+      .setDesc(desc)
+      .addSlider((slider) =>
+        slider
+          .setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100)
+          .setValue(value)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            save(v);
+            await this.plugin.saveSettings();
+          })
+      );
+  }
+
+  private renderClassicSection(containerEl: HTMLElement): void {
+    const classic = this.plugin.settings.classic;
+    new Setting(containerEl).setName("Review").setHeading();
+
+    new Setting(containerEl)
+      .setName("Automatically reveal Pending Changes panel")
+      .setDesc(
+        "Bring the panel to front once Claude finishes a burst of edits, so a review is never sitting there unnoticed."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(classic.autoRevealPendingChanges).onChange(async (value) => {
+          classic.autoRevealPendingChanges = value;
+          await this.plugin.saveSettings();
+          this.display();
+        })
+      );
+
+    if (classic.autoRevealPendingChanges) {
+      this.renderRevealDelay(
+        containerEl,
+        classic.autoRevealDelayMs,
+        "How long to wait after the last edit in a burst before revealing the panel, so a multi-file turn doesn't pop it up repeatedly.",
+        (v) => (classic.autoRevealDelayMs = v)
+      );
+    }
+
+    this.renderConfirmBulkActions(containerEl);
+  }
+
+  private renderMultiAgentSection(containerEl: HTMLElement): void {
+    const multiAgent = this.plugin.settings.multiAgent;
+    new Setting(containerEl).setName("Agents and review").setHeading();
+
+    new Setting(containerEl)
+      .setName("Automatically reveal Agent inbox")
+      .setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs you.")
+      .addToggle((toggle) =>
+        toggle.setValue(multiAgent.autoRevealInbox).onChange(async (value) => {
+          multiAgent.autoRevealInbox = value;
+          await this.plugin.saveSettings();
+          this.display();
+        })
+      );
+
+    if (multiAgent.autoRevealInbox) {
+      this.renderRevealDelay(
+        containerEl,
+        multiAgent.autoRevealDelayMs,
+        "How long to wait after the last edit in a burst before revealing the inbox, so a multi-file turn doesn't pop it up repeatedly.",
+        (v) => (multiAgent.autoRevealDelayMs = v)
+      );
+    }
+
+    this.renderConfirmBulkActions(containerEl);
+
+    new Setting(containerEl)
+      .setName("Track subagents")
+      .setDesc(
+        "Show each subagent Claude starts as a row on its session's card, with the changes it made. Turning this off removes the subagent hooks from .claude/settings.local.json and credits every change to the main session."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(multiAgent.trackSubagents).onChange(async (value) => {
+          multiAgent.trackSubagents = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Show estimated cost")
+      .setDesc(
+        'Show an approximate cost ("≈ $0.42") from a built-in price table that is updated with each release. Off leaves tokens and context only.'
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(multiAgent.showEstimatedCost).onChange(async (value) => {
+          multiAgent.showEstimatedCost = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Show git branch on cards")
+      .setDesc("When a session's folder is a git repository, show its current branch on the session's card.")
+      .addToggle((toggle) =>
+        toggle.setValue(multiAgent.showGitBranch).onChange(async (value) => {
+          multiAgent.showGitBranch = value;
+          await this.plugin.saveSettings();
+        })
+      );
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+
+    if (MULTI_AGENT_AVAILABLE) {
+      new Setting(containerEl)
+        .setName("Experience")
+        .setDesc(
+          "Classic reviews every terminal's changes in one Pending Changes panel. Multi-agent adds an Agent inbox with a card per Claude session, and groups for your terminals. Each keeps its own review settings below; the rest are shared."
+        )
+        .addDropdown((dropdown) =>
+          dropdown
+            .addOptions(EXPERIENCE_LABELS)
+            .setValue(this.plugin.settings.experience)
+            .onChange(async (value) => {
+              await this.plugin.setExperience(value as Experience);
+              this.display();
+            })
+        );
+    }
+
 
     new Setting(containerEl)
       .setName("New terminal placement")
@@ -219,48 +440,11 @@ export class TerminusSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("Automatically reveal Pending Changes panel")
-      .setDesc(
-        "Bring the panel to front once Claude finishes a burst of edits, so a review is never sitting there unnoticed."
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.autoRevealPendingChanges).onChange(async (value) => {
-          this.plugin.settings.autoRevealPendingChanges = value;
-          await this.plugin.saveSettings();
-          this.display();
-        })
-      );
-
-    if (this.plugin.settings.autoRevealPendingChanges) {
-      new Setting(containerEl)
-        .setName("Reveal delay")
-        .setDesc(
-          "How long to wait after the last edit in a burst before revealing the panel, so a multi-file turn doesn't pop it up repeatedly."
-        )
-        .addSlider((slider) =>
-          slider
-            .setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100)
-            .setValue(this.plugin.settings.autoRevealDelayMs)
-            .setDynamicTooltip()
-            .onChange(async (value) => {
-              this.plugin.settings.autoRevealDelayMs = value;
-              await this.plugin.saveSettings();
-            })
-        );
+    if (this.plugin.experience === "multi-agent") {
+      this.renderMultiAgentSection(containerEl);
+    } else {
+      this.renderClassicSection(containerEl);
     }
-
-    new Setting(containerEl)
-      .setName("Confirm before bulk actions")
-      .setDesc(
-        'Ask for confirmation before "Reject all" / "Keep all" (global or per-terminal). Off by default -- every bulk action is already reversible via the "Recently resolved" list.'
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.confirmBulkActions).onChange(async (value) => {
-          this.plugin.settings.confirmBulkActions = value;
-          await this.plugin.saveSettings();
-        })
-      );
 
     new Setting(containerEl).setName("Advanced").setHeading();
 

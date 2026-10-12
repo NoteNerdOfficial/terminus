@@ -391,7 +391,7 @@ __export(main_exports, {
   default: () => TerminusPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian18 = require("obsidian");
+var import_obsidian19 = require("obsidian");
 var import_terminus_node_bridge23 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
@@ -18915,169 +18915,13 @@ var RescueClosedTerminalModal = class extends import_obsidian14.FuzzySuggestModa
 };
 
 // src/modals/GettingStartedModal.ts
-var import_obsidian16 = require("obsidian");
+var import_obsidian17 = require("obsidian");
 
 // src/onboarding/gettingStarted.ts
-var import_obsidian15 = require("obsidian");
-function keys() {
-  const mac = import_obsidian15.Platform.isMacOS;
-  return {
-    mod: mac ? "Cmd" : "Ctrl",
-    alt: mac ? "Opt" : "Alt",
-    backspace: mac ? "\u232B" : "Backspace"
-  };
-}
-function buildWelcomeMarkdown() {
-  const k3 = keys();
-  return `Terminus is a real terminal, inside Obsidian. Run Claude Code alongside your notes, and every file it edits comes back to you, so you can keep the change or undo it.
-
-#### Nothing Claude writes is final
-
-No more hunting for "where did that change happen." Each file it edits shows up in one Pending Changes panel (what changed, where, and by how much), with a real line-numbered diff per file and Accept / Reject / Open right there.
-
-#### Typing shortcuts
-
-| Shortcut | Does |
-| --- | --- |
-| \`Ctrl\` \`U\` | Clear the whole line |
-| \`${k3.alt}\` \`${k3.backspace}\` | Delete the previous word |
-| \`${k3.alt}\` \`\u2190\` / \`\u2192\` | Jump a word at a time |
-| \`Ctrl\` \`A\` / \`Ctrl\` \`E\` | Jump to the start / end of the line |
-| \`Shift\` \`Enter\` | New line without submitting |
-
-#### Your vault, from the prompt
-
-| Action | Does |
-| --- | --- |
-| \`${k3.mod}\` + click | Open a file path or URL from the output |
-| Type \`[[\` | Autocomplete a note from your vault |
-| Drag a file in | Inserts its path, ready to run |
-
-Everything else \u2014 reviewing diffs, colored terminals, settings \u2014 is in the full guide.`;
-}
-function buildGettingStartedMarkdown() {
-  const k3 = keys();
-  return `Terminus is a real terminal, inside Obsidian. Run Claude Code alongside your notes and every file it edits comes back to you, so you can keep the change or undo it.
-
-## Keyboard
-
-Terminus passes these straight through to your shell, so they work at a plain prompt and inside Claude Code alike.
-
-| Shortcut | Does |
-| --- | --- |
-| \`Ctrl\` \`U\` | Clear the whole line |
-| \`Ctrl\` \`W\` | Delete the previous word |
-| \`${k3.alt}\` \`${k3.backspace}\` | Delete the previous word |
-| \`${k3.alt}\` \`\u2190\` / \`\u2192\` | Jump a word at a time |
-| \`Ctrl\` \`A\` / \`Ctrl\` \`E\` | Jump to start / end of line |
-| \`Ctrl\` \`C\` | Cancel what's running |
-| \`Shift\` \`Enter\` | New line without submitting, for multi-line prompts to Claude |
-| \`${k3.mod}\` + click | Open a file path or URL printed in the output |
-
-Font size has its own commands: **Increase / Decrease / Reset terminal font size**.
-
-## Reviewing Claude's changes
-
-This is what Terminus is really for.
-
-When Claude edits a file, the edit goes through immediately. Nothing is blocked, so a long multi-file turn never stalls waiting on you. What Terminus captures is the *before* state, so every change stays reversible.
-
-1. A live **"editing\u2026"** chip appears in the bottom-right of the terminal, naming the file being written, for as long as the turn runs.
-2. Once the burst settles, the **Pending Changes** panel comes to front.
-3. Review each file, then **Keep** or **Revert** it.
-
-Two ways to read a diff:
-
-- **Inline.** **Open** opens the file, landing on the first changed hunk. On a note the change is marked up in the editor, so you can accept or reject in place; anything else \u2014 a code file another plugin opens, an image, a PDF \u2014 just opens normally.
-- **Split Diff.** A side-by-side view, with its own Accept/Reject on each changed block. It renders from the text the hook captured rather than the file, so it works even for dot-files and paths outside the vault.
-
-Bulk actions (**Keep all** / **Reject all**) are available per-terminal or globally, and every one of them is undoable from the **Recently resolved** list. If you'd rather be asked first, turn on *Confirm before bulk actions* in settings.
-
-The **Action Log** command shows every change you've kept or reverted, with line counts.
-
-### Broken links
-
-If Claude renames or moves a note, Terminus checks whether anything in your vault linked to it and flags the breakage on the pending change, so a tidy-up doesn't quietly sever your backlinks.
-
-## Working with your vault
-
-- **Type \`[[\`** in the terminal to autocomplete a note name from your vault. Choose the format it inserts (wiki-link, vault-relative path, or absolute path) in settings.
-- **Drag a file in** from Obsidian's file explorer or from Finder. Its path is typed into the input line, not run, so you can finish the command yourself.
-- **\`${k3.mod}\` + click a path** in the output to open that file. A trailing \`:42\` jumps to the line. Anything Obsidian can't open \u2014 a dot-file, a path outside the vault \u2014 opens in your system's default app instead.
-- **\`${k3.mod}\` + click a URL** to open it in your browser.
-
-## Managing terminals
-
-Open as many as you like. Each runs its own \`claude\` session, and their reviews stay separate.
-
-- **Rename** a terminal with the pencil icon in its pane header \u2014 the bar with the terminal's name, above the terminal itself.
-- **Color** it with the palette icon next to it. The color carries through to the tab, the activity chip, and its group in Pending Changes \u2014 useful once several are running.
-- **Rescue closed terminal** brings back one you closed by mistake, with its scrollback and working directory.
-- Terminals **survive a restart**: scrollback and working directory are restored, with a fresh shell.
-
-## When a command fails
-
-A failed command gets a **\u26A0** badge next to it. Click it and Claude reads the surrounding commands, not just the failed one, and proposes a fix.
-
-The suggestion is typed into your input line. It never runs on its own; you read it and press Enter.
-
-## Settings worth a look
-
-- **Startup command.** Run something in every new terminal automatically. Set it to \`claude\` to skip a step every time.
-- **New terminal placement.** New tab, split, or window, instead of being asked each time.
-- **Font family.** Monospace fonts detected on your system.
-- **Scrollback.** How much history each terminal keeps.
-- **Automatically reveal Pending Changes.** Plus how long to wait after a burst of edits before it comes forward.
-
----
-
-Reopen this any time with the **Terminus: Getting started** command.`;
-}
-
-// src/modals/GettingStartedModal.ts
-var GettingStartedModal = class extends import_obsidian16.Modal {
-  constructor(app, full) {
-    super(app);
-    this.full = full;
-    /** MarkdownRenderer.render() attaches child components (callouts,
-     *  embeds, internal-link hover) to a parent whose lifecycle it inherits.
-     *  Modal isn't a Component, so this owns them and is unloaded on close --
-     *  without it those children would leak past the modal. */
-    this.renderHost = new import_obsidian16.Component();
-  }
-  /** Short version, shown once on first load. */
-  static openWelcome(app) {
-    new GettingStartedModal(app, false).open();
-  }
-  /** Full reference, from the command palette. */
-  static openGuide(app) {
-    new GettingStartedModal(app, true).open();
-  }
-  onOpen() {
-    const { contentEl, modalEl } = this;
-    modalEl.addClass("terminus-getting-started-modal");
-    this.renderHost.load();
-    contentEl.createEl("h2", { text: this.full ? "Terminus \u2014 getting started" : "Welcome to Terminus" });
-    const body = contentEl.createDiv({ cls: "terminus-getting-started-body" });
-    const markdown = this.full ? buildGettingStartedMarkdown() : buildWelcomeMarkdown();
-    void import_obsidian16.MarkdownRenderer.render(this.app, markdown, body, "", this.renderHost);
-    const actions = contentEl.createDiv({ cls: "terminus-getting-started-actions" });
-    if (!this.full) {
-      actions.createEl("button", { text: "Full guide" }).addEventListener("click", () => {
-        this.close();
-        GettingStartedModal.openGuide(this.app);
-      });
-    }
-    actions.createEl("button", { text: this.full ? "Done" : "Got it", cls: "mod-cta" }).addEventListener("click", () => this.close());
-  }
-  onClose() {
-    this.renderHost.unload();
-    this.contentEl.empty();
-  }
-};
+var import_obsidian16 = require("obsidian");
 
 // src/settings.ts
-var import_obsidian17 = require("obsidian");
+var import_obsidian15 = require("obsidian");
 var import_terminus_node_bridge22 = __toESM(require_dist());
 
 // src/terminal/fontCatalog.ts
@@ -19170,11 +19014,28 @@ var WIKI_LINK_INSERT_FORMAT_LABELS = {
   "vault-relative": "Vault-relative path",
   absolute: "Absolute path"
 };
+var EXPERIENCE_LABELS = {
+  classic: "Classic",
+  "multi-agent": "Multi-agent"
+};
+var MULTI_AGENT_AVAILABLE = false;
+var DEFAULT_CLASSIC_SETTINGS = {
+  autoRevealPendingChanges: true,
+  autoRevealDelayMs: 800
+};
+var DEFAULT_MULTI_AGENT_SETTINGS = {
+  autoRevealInbox: true,
+  autoRevealDelayMs: 800,
+  trackSubagents: true,
+  showEstimatedCost: true,
+  showGitBranch: true
+};
 var DEFAULT_SETTINGS = {
+  experience: "classic",
+  classic: DEFAULT_CLASSIC_SETTINGS,
+  multiAgent: DEFAULT_MULTI_AGENT_SETTINGS,
   fontSize: 13,
   terminalPlacement: "ask",
-  autoRevealPendingChanges: true,
-  autoRevealDelayMs: 800,
   confirmBulkActions: false,
   shellBinOverride: "",
   python3BinOverride: "",
@@ -19187,15 +19048,31 @@ var DEFAULT_SETTINGS = {
   startupCommand: "",
   ribbonIcon: "square-terminal",
   wikiLinkInsertFormat: "wikilink",
-  hasSeenWelcome: false
+  hasSeenWelcome: false,
+  hasSeenMultiAgentInvite: false
 };
+function resolveSettings(saved) {
+  const data = typeof saved === "object" && saved !== null ? saved : {};
+  const { autoRevealPendingChanges, autoRevealDelayMs, classic, multiAgent, ...rest } = data;
+  const legacyClassic = {};
+  if (autoRevealPendingChanges !== void 0)
+    legacyClassic.autoRevealPendingChanges = autoRevealPendingChanges;
+  if (autoRevealDelayMs !== void 0)
+    legacyClassic.autoRevealDelayMs = autoRevealDelayMs;
+  return {
+    ...DEFAULT_SETTINGS,
+    ...rest,
+    classic: { ...DEFAULT_CLASSIC_SETTINGS, ...legacyClassic, ...classic },
+    multiAgent: { ...DEFAULT_MULTI_AGENT_SETTINGS, ...multiAgent }
+  };
+}
 var MIN_FONT_SIZE = 8;
 var MAX_FONT_SIZE = 32;
 var MIN_AUTO_REVEAL_DELAY_MS = 0;
 var MAX_AUTO_REVEAL_DELAY_MS = 5e3;
 var MIN_SCROLLBACK_LINES = 200;
 var MAX_SCROLLBACK_LINES = 5e4;
-var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
+var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -19204,84 +19081,9 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
      *  indistinguishable from "inherit" once the tab re-renders. */
     this.fontCustomMode = false;
   }
-  display() {
-    const { containerEl } = this;
-    containerEl.empty();
-    new import_obsidian17.Setting(containerEl).setName("New terminal placement").setDesc(
-      'Where the ribbon icon and "Open Terminus" command open a new terminal. "Always ask" shows a quick menu at the click; any other choice opens directly there every time.'
-    ).addDropdown(
-      (dropdown) => dropdown.addOptions(TERMINAL_PLACEMENT_LABELS).setValue(this.plugin.settings.terminalPlacement).onChange(async (value) => {
-        this.plugin.settings.terminalPlacement = value;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian17.Setting(containerEl).setName("Terminal appearance").setHeading();
-    new import_obsidian17.Setting(containerEl).setName("Terminal font size").setDesc(
-      `Applies to all open terminal panels. Also adjustable via the "Increase/Decrease terminal font size" commands (${MIN_FONT_SIZE}-${MAX_FONT_SIZE}px).`
-    ).addSlider(
-      (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
-        await this.plugin.setFontSize(value);
-      })
-    );
-    this.displayFontFamilySetting(containerEl);
-    new import_obsidian17.Setting(containerEl).setName("Cursor style").addDropdown(
-      (dropdown) => dropdown.addOptions(CURSOR_STYLE_LABELS).setValue(this.plugin.settings.cursorStyle).onChange(async (value) => {
-        await this.plugin.setCursorStyle(value);
-      })
-    );
-    new import_obsidian17.Setting(containerEl).setName("Cursor blink").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.cursorBlink).onChange(async (value) => {
-        await this.plugin.setCursorBlink(value);
-      })
-    );
-    new import_obsidian17.Setting(containerEl).setName("Scrollback").setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`).addSlider(
-      (slider) => slider.setLimits(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, 100).setValue(this.plugin.settings.scrollbackLines).setDynamicTooltip().onChange(async (value) => {
-        this.plugin.settings.scrollbackLines = value;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian17.Setting(containerEl).setName("Auto theme").setDesc("Terminal colors follow Obsidian's light/dark toggle. Turn off to use xterm.js's own default palette instead.").addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.autoThemeTerminal).onChange(async (value) => {
-        await this.plugin.setAutoThemeTerminal(value);
-      })
-    );
-    new import_obsidian17.Setting(containerEl).setName("Startup command").setDesc('Runs automatically in every new terminal once the shell is ready (e.g. "claude"). Leave blank for none.').addText(
-      (text) => text.setPlaceholder("e.g. claude").setValue(this.plugin.settings.startupCommand).onChange(async (value) => {
-        this.plugin.settings.startupCommand = value;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian17.Setting(containerEl).setName("Wiki-link autocomplete format").setDesc('Format inserted when picking a note after typing "[[" in a terminal.').addDropdown(
-      (dropdown) => dropdown.addOptions(WIKI_LINK_INSERT_FORMAT_LABELS).setValue(this.plugin.settings.wikiLinkInsertFormat).onChange(async (value) => {
-        this.plugin.settings.wikiLinkInsertFormat = value;
-        await this.plugin.saveSettings();
-      })
-    );
-    new import_obsidian17.Setting(containerEl).setName("Ribbon icon").setDesc(`Any Lucide icon name (e.g. "square-terminal", "terminal"). Invalid names fall back to Obsidian's default icon silently.`).addText(
-      (text) => text.setPlaceholder("square-terminal").setValue(this.plugin.settings.ribbonIcon).onChange(async (value) => {
-        await this.plugin.setRibbonIcon(value.trim() || DEFAULT_SETTINGS.ribbonIcon);
-      })
-    );
-    new import_obsidian17.Setting(containerEl).setName("Automatically reveal Pending Changes panel").setDesc(
-      "Bring the panel to front once Claude finishes a burst of edits, so a review is never sitting there unnoticed."
-    ).addToggle(
-      (toggle) => toggle.setValue(this.plugin.settings.autoRevealPendingChanges).onChange(async (value) => {
-        this.plugin.settings.autoRevealPendingChanges = value;
-        await this.plugin.saveSettings();
-        this.display();
-      })
-    );
-    if (this.plugin.settings.autoRevealPendingChanges) {
-      new import_obsidian17.Setting(containerEl).setName("Reveal delay").setDesc(
-        "How long to wait after the last edit in a burst before revealing the panel, so a multi-file turn doesn't pop it up repeatedly."
-      ).addSlider(
-        (slider) => slider.setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100).setValue(this.plugin.settings.autoRevealDelayMs).setDynamicTooltip().onChange(async (value) => {
-          this.plugin.settings.autoRevealDelayMs = value;
-          await this.plugin.saveSettings();
-        })
-      );
-    }
-    new import_obsidian17.Setting(containerEl).setName("Confirm before bulk actions").setDesc(
+  /** Shared by both modes' sections: the setting itself is shared. */
+  renderConfirmBulkActions(containerEl) {
+    new import_obsidian15.Setting(containerEl).setName("Confirm before bulk actions").setDesc(
       'Ask for confirmation before "Reject all" / "Keep all" (global or per-terminal). Off by default -- every bulk action is already reversible via the "Recently resolved" list.'
     ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.confirmBulkActions).onChange(async (value) => {
@@ -19289,8 +19091,155 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian17.Setting(containerEl).setName("Advanced").setHeading();
-    new import_obsidian17.Setting(containerEl).setName("Shell binary override").setDesc(
+  }
+  /** Same slider for both modes, each writing its own value. */
+  renderRevealDelay(containerEl, value, desc, save) {
+    new import_obsidian15.Setting(containerEl).setName("Reveal delay").setDesc(desc).addSlider(
+      (slider) => slider.setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100).setValue(value).setDynamicTooltip().onChange(async (v3) => {
+        save(v3);
+        await this.plugin.saveSettings();
+      })
+    );
+  }
+  renderClassicSection(containerEl) {
+    const classic = this.plugin.settings.classic;
+    new import_obsidian15.Setting(containerEl).setName("Review").setHeading();
+    new import_obsidian15.Setting(containerEl).setName("Automatically reveal Pending Changes panel").setDesc(
+      "Bring the panel to front once Claude finishes a burst of edits, so a review is never sitting there unnoticed."
+    ).addToggle(
+      (toggle) => toggle.setValue(classic.autoRevealPendingChanges).onChange(async (value) => {
+        classic.autoRevealPendingChanges = value;
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+    if (classic.autoRevealPendingChanges) {
+      this.renderRevealDelay(
+        containerEl,
+        classic.autoRevealDelayMs,
+        "How long to wait after the last edit in a burst before revealing the panel, so a multi-file turn doesn't pop it up repeatedly.",
+        (v3) => classic.autoRevealDelayMs = v3
+      );
+    }
+    this.renderConfirmBulkActions(containerEl);
+  }
+  renderMultiAgentSection(containerEl) {
+    const multiAgent = this.plugin.settings.multiAgent;
+    new import_obsidian15.Setting(containerEl).setName("Agents and review").setHeading();
+    new import_obsidian15.Setting(containerEl).setName("Automatically reveal Agent inbox").setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs you.").addToggle(
+      (toggle) => toggle.setValue(multiAgent.autoRevealInbox).onChange(async (value) => {
+        multiAgent.autoRevealInbox = value;
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+    if (multiAgent.autoRevealInbox) {
+      this.renderRevealDelay(
+        containerEl,
+        multiAgent.autoRevealDelayMs,
+        "How long to wait after the last edit in a burst before revealing the inbox, so a multi-file turn doesn't pop it up repeatedly.",
+        (v3) => multiAgent.autoRevealDelayMs = v3
+      );
+    }
+    this.renderConfirmBulkActions(containerEl);
+    new import_obsidian15.Setting(containerEl).setName("Track subagents").setDesc(
+      "Show each subagent Claude starts as a row on its session's card, with the changes it made. Turning this off removes the subagent hooks from .claude/settings.local.json and credits every change to the main session."
+    ).addToggle(
+      (toggle) => toggle.setValue(multiAgent.trackSubagents).onChange(async (value) => {
+        multiAgent.trackSubagents = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Show estimated cost").setDesc(
+      'Show an approximate cost ("\u2248 $0.42") from a built-in price table that is updated with each release. Off leaves tokens and context only.'
+    ).addToggle(
+      (toggle) => toggle.setValue(multiAgent.showEstimatedCost).onChange(async (value) => {
+        multiAgent.showEstimatedCost = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Show git branch on cards").setDesc("When a session's folder is a git repository, show its current branch on the session's card.").addToggle(
+      (toggle) => toggle.setValue(multiAgent.showGitBranch).onChange(async (value) => {
+        multiAgent.showGitBranch = value;
+        await this.plugin.saveSettings();
+      })
+    );
+  }
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    if (MULTI_AGENT_AVAILABLE) {
+      new import_obsidian15.Setting(containerEl).setName("Experience").setDesc(
+        "Classic reviews every terminal's changes in one Pending Changes panel. Multi-agent adds an Agent inbox with a card per Claude session, and groups for your terminals. Each keeps its own review settings below; the rest are shared."
+      ).addDropdown(
+        (dropdown) => dropdown.addOptions(EXPERIENCE_LABELS).setValue(this.plugin.settings.experience).onChange(async (value) => {
+          await this.plugin.setExperience(value);
+          this.display();
+        })
+      );
+    }
+    new import_obsidian15.Setting(containerEl).setName("New terminal placement").setDesc(
+      'Where the ribbon icon and "Open Terminus" command open a new terminal. "Always ask" shows a quick menu at the click; any other choice opens directly there every time.'
+    ).addDropdown(
+      (dropdown) => dropdown.addOptions(TERMINAL_PLACEMENT_LABELS).setValue(this.plugin.settings.terminalPlacement).onChange(async (value) => {
+        this.plugin.settings.terminalPlacement = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Terminal appearance").setHeading();
+    new import_obsidian15.Setting(containerEl).setName("Terminal font size").setDesc(
+      `Applies to all open terminal panels. Also adjustable via the "Increase/Decrease terminal font size" commands (${MIN_FONT_SIZE}-${MAX_FONT_SIZE}px).`
+    ).addSlider(
+      (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
+        await this.plugin.setFontSize(value);
+      })
+    );
+    this.displayFontFamilySetting(containerEl);
+    new import_obsidian15.Setting(containerEl).setName("Cursor style").addDropdown(
+      (dropdown) => dropdown.addOptions(CURSOR_STYLE_LABELS).setValue(this.plugin.settings.cursorStyle).onChange(async (value) => {
+        await this.plugin.setCursorStyle(value);
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Cursor blink").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.cursorBlink).onChange(async (value) => {
+        await this.plugin.setCursorBlink(value);
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Scrollback").setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`).addSlider(
+      (slider) => slider.setLimits(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, 100).setValue(this.plugin.settings.scrollbackLines).setDynamicTooltip().onChange(async (value) => {
+        this.plugin.settings.scrollbackLines = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Auto theme").setDesc("Terminal colors follow Obsidian's light/dark toggle. Turn off to use xterm.js's own default palette instead.").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.autoThemeTerminal).onChange(async (value) => {
+        await this.plugin.setAutoThemeTerminal(value);
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Startup command").setDesc('Runs automatically in every new terminal once the shell is ready (e.g. "claude"). Leave blank for none.').addText(
+      (text) => text.setPlaceholder("e.g. claude").setValue(this.plugin.settings.startupCommand).onChange(async (value) => {
+        this.plugin.settings.startupCommand = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Wiki-link autocomplete format").setDesc('Format inserted when picking a note after typing "[[" in a terminal.').addDropdown(
+      (dropdown) => dropdown.addOptions(WIKI_LINK_INSERT_FORMAT_LABELS).setValue(this.plugin.settings.wikiLinkInsertFormat).onChange(async (value) => {
+        this.plugin.settings.wikiLinkInsertFormat = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian15.Setting(containerEl).setName("Ribbon icon").setDesc(`Any Lucide icon name (e.g. "square-terminal", "terminal"). Invalid names fall back to Obsidian's default icon silently.`).addText(
+      (text) => text.setPlaceholder("square-terminal").setValue(this.plugin.settings.ribbonIcon).onChange(async (value) => {
+        await this.plugin.setRibbonIcon(value.trim() || DEFAULT_SETTINGS.ribbonIcon);
+      })
+    );
+    if (this.plugin.experience === "multi-agent") {
+      this.renderMultiAgentSection(containerEl);
+    } else {
+      this.renderClassicSection(containerEl);
+    }
+    new import_obsidian15.Setting(containerEl).setName("Advanced").setHeading();
+    new import_obsidian15.Setting(containerEl).setName("Shell binary override").setDesc(
       `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge22.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
     ).addText(
       (text) => text.setPlaceholder("e.g. /bin/zsh").setValue(this.plugin.settings.shellBinOverride).onChange(async (value) => {
@@ -19298,7 +19247,7 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian17.Setting(containerEl).setName("Python 3 binary override").setDesc(
+    new import_obsidian15.Setting(containerEl).setName("Python 3 binary override").setDesc(
       "Leave blank to auto-detect. Only needed if the plugin can't find python3 on its own (used to allocate the terminal's pseudo-terminal)."
     ).addText(
       (text) => text.setPlaceholder("e.g. /usr/local/bin/python3").setValue(this.plugin.settings.python3BinOverride).onChange(async (value) => {
@@ -19316,7 +19265,7 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
    *  need a full `display()` re-render, which would drop input focus. */
   displayClaudeAuthTokenSetting(containerEl) {
     let statusEl;
-    const setting = new import_obsidian17.Setting(containerEl).setName("Claude Code auth token").setDesc(
+    const setting = new import_obsidian15.Setting(containerEl).setName("Claude Code auth token").setDesc(
       `Only needed for "Explain this" / "Suggest a fix" on failed commands, and only if those hang or fail outright -- some machines can't read Claude Code's normal Keychain-based login from a spawned background process. Run "claude setup-token" in a real terminal and paste the result here. Leave blank to keep using your regular Claude Code login. Stored as plain text in this vault's plugin data, same as any other API key field.`
     ).addText((text) => {
       text.inputEl.type = "password";
@@ -19366,7 +19315,7 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
     for (const font of availableFonts)
       options[font] = font;
     options[CUSTOM_FONT_VALUE] = "Custom\u2026";
-    new import_obsidian17.Setting(containerEl).setName("Font family").setDesc(
+    new import_obsidian15.Setting(containerEl).setName("Font family").setDesc(
       "Monospace fonts detected on this system. Applies to all open terminal panels. Proportional fonts aren't listed -- a terminal aligns text to a fixed character grid, which only a monospace font can sit in evenly."
     ).addDropdown(
       (dropdown) => dropdown.addOptions(options).setValue(isCustom ? CUSTOM_FONT_VALUE : current).onChange(async (value) => {
@@ -19382,7 +19331,7 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
     );
     if (!isCustom)
       return;
-    const customSetting = new import_obsidian17.Setting(containerEl).setName("Custom font family").setDesc("Any font installed on this system, by its exact name.");
+    const customSetting = new import_obsidian15.Setting(containerEl).setName("Custom font family").setDesc("Any font installed on this system, by its exact name.");
     const warningEl = customSetting.descEl.createDiv({ cls: "terminus-setting-warning" });
     const refreshWarning = (value) => {
       warningEl.setText(this.describeCustomFontProblem(value));
@@ -19411,8 +19360,212 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
   }
 };
 
+// src/onboarding/gettingStarted.ts
+function keys() {
+  const mac = import_obsidian16.Platform.isMacOS;
+  return {
+    mod: mac ? "Cmd" : "Ctrl",
+    alt: mac ? "Opt" : "Alt",
+    backspace: mac ? "\u232B" : "Backspace"
+  };
+}
+function buildWelcomeMarkdown() {
+  const k3 = keys();
+  return `Terminus is a real terminal, inside Obsidian. Run Claude Code alongside your notes, and every file it edits comes back to you, so you can keep the change or undo it.
+
+#### Nothing Claude writes is final
+
+No more hunting for "where did that change happen." Each file it edits shows up in one Pending Changes panel (what changed, where, and by how much), with a real line-numbered diff per file and Accept / Reject / Open right there.
+
+#### Typing shortcuts
+
+| Shortcut | Does |
+| --- | --- |
+| \`Ctrl\` \`U\` | Clear the whole line |
+| \`${k3.alt}\` \`${k3.backspace}\` | Delete the previous word |
+| \`${k3.alt}\` \`\u2190\` / \`\u2192\` | Jump a word at a time |
+| \`Ctrl\` \`A\` / \`Ctrl\` \`E\` | Jump to the start / end of the line |
+| \`Shift\` \`Enter\` | New line without submitting |
+
+#### Your vault, from the prompt
+
+| Action | Does |
+| --- | --- |
+| \`${k3.mod}\` + click | Open a file path or URL from the output |
+| Type \`[[\` | Autocomplete a note from your vault |
+| Drag a file in | Inserts its path, ready to run |
+
+${MULTI_AGENT_AVAILABLE ? `#### Running Claude in several terminals?
+
+Try the Multi-agent experience in Settings \u2192 Terminus \u2192 Experience: an Agent inbox with a card per Claude session, and groups for your terminals.
+
+` : ""}Everything else \u2014 reviewing diffs, colored terminals, settings \u2014 is in the full guide.`;
+}
+function buildGettingStartedMarkdown() {
+  const k3 = keys();
+  return `Terminus is a real terminal, inside Obsidian. Run Claude Code alongside your notes and every file it edits comes back to you, so you can keep the change or undo it.
+
+## Keyboard
+
+Terminus passes these straight through to your shell, so they work at a plain prompt and inside Claude Code alike.
+
+| Shortcut | Does |
+| --- | --- |
+| \`Ctrl\` \`U\` | Clear the whole line |
+| \`Ctrl\` \`W\` | Delete the previous word |
+| \`${k3.alt}\` \`${k3.backspace}\` | Delete the previous word |
+| \`${k3.alt}\` \`\u2190\` / \`\u2192\` | Jump a word at a time |
+| \`Ctrl\` \`A\` / \`Ctrl\` \`E\` | Jump to start / end of line |
+| \`Ctrl\` \`C\` | Cancel what's running |
+| \`Shift\` \`Enter\` | New line without submitting, for multi-line prompts to Claude |
+| \`${k3.mod}\` + click | Open a file path or URL printed in the output |
+
+Font size has its own commands: **Increase / Decrease / Reset terminal font size**.
+
+## Reviewing Claude's changes
+
+This is what Terminus is really for.
+
+When Claude edits a file, the edit goes through immediately. Nothing is blocked, so a long multi-file turn never stalls waiting on you. What Terminus captures is the *before* state, so every change stays reversible.
+
+1. A live **"editing\u2026"** chip appears in the bottom-right of the terminal, naming the file being written, for as long as the turn runs.
+2. Once the burst settles, the **Pending Changes** panel comes to front.
+3. Review each file, then **Keep** or **Revert** it.
+
+Two ways to read a diff:
+
+- **Inline.** **Open** opens the file, landing on the first changed hunk. On a note the change is marked up in the editor, so you can accept or reject in place; anything else \u2014 a code file another plugin opens, an image, a PDF \u2014 just opens normally.
+- **Split Diff.** A side-by-side view, with its own Accept/Reject on each changed block. It renders from the text the hook captured rather than the file, so it works even for dot-files and paths outside the vault.
+
+Bulk actions (**Keep all** / **Reject all**) are available per-terminal or globally, and every one of them is undoable from the **Recently resolved** list. If you'd rather be asked first, turn on *Confirm before bulk actions* in settings.
+
+The **Action Log** command shows every change you've kept or reverted, with line counts.
+
+### Broken links
+
+If Claude renames or moves a note, Terminus checks whether anything in your vault linked to it and flags the breakage on the pending change, so a tidy-up doesn't quietly sever your backlinks.
+
+## Working with your vault
+
+- **Type \`[[\`** in the terminal to autocomplete a note name from your vault. Choose the format it inserts (wiki-link, vault-relative path, or absolute path) in settings.
+- **Drag a file in** from Obsidian's file explorer or from Finder. Its path is typed into the input line, not run, so you can finish the command yourself.
+- **\`${k3.mod}\` + click a path** in the output to open that file. A trailing \`:42\` jumps to the line. Anything Obsidian can't open \u2014 a dot-file, a path outside the vault \u2014 opens in your system's default app instead.
+- **\`${k3.mod}\` + click a URL** to open it in your browser.
+
+## Managing terminals
+
+Open as many as you like. Each runs its own \`claude\` session, and their reviews stay separate.
+
+- **Rename** a terminal with the pencil icon in its pane header \u2014 the bar with the terminal's name, above the terminal itself.
+- **Color** it with the palette icon next to it. The color carries through to the tab, the activity chip, and its group in Pending Changes \u2014 useful once several are running.
+- **Rescue closed terminal** brings back one you closed by mistake, with its scrollback and working directory.
+- Terminals **survive a restart**: scrollback and working directory are restored, with a fresh shell.
+
+## When a command fails
+
+A failed command gets a **\u26A0** badge next to it. Click it and Claude reads the surrounding commands, not just the failed one, and proposes a fix.
+
+The suggestion is typed into your input line. It never runs on its own; you read it and press Enter.
+
+## Settings worth a look
+
+- **Startup command.** Run something in every new terminal automatically. Set it to \`claude\` to skip a step every time.
+- **New terminal placement.** New tab, split, or window, instead of being asked each time.
+- **Font family.** Monospace fonts detected on your system.
+- **Scrollback.** How much history each terminal keeps.
+- **Automatically reveal Pending Changes.** Plus how long to wait after a burst of edits before it comes forward.
+
+---
+
+Reopen this any time with the **Terminus: Getting started** command.`;
+}
+
+// src/modals/GettingStartedModal.ts
+var GettingStartedModal = class extends import_obsidian17.Modal {
+  constructor(app, full) {
+    super(app);
+    this.full = full;
+    /** MarkdownRenderer.render() attaches child components (callouts,
+     *  embeds, internal-link hover) to a parent whose lifecycle it inherits.
+     *  Modal isn't a Component, so this owns them and is unloaded on close --
+     *  without it those children would leak past the modal. */
+    this.renderHost = new import_obsidian17.Component();
+  }
+  /** Short version, shown once on first load. */
+  static openWelcome(app) {
+    new GettingStartedModal(app, false).open();
+  }
+  /** Full reference, from the command palette. */
+  static openGuide(app) {
+    new GettingStartedModal(app, true).open();
+  }
+  onOpen() {
+    const { contentEl, modalEl } = this;
+    modalEl.addClass("terminus-getting-started-modal");
+    this.renderHost.load();
+    contentEl.createEl("h2", { text: this.full ? "Terminus \u2014 getting started" : "Welcome to Terminus" });
+    const body = contentEl.createDiv({ cls: "terminus-getting-started-body" });
+    const markdown = this.full ? buildGettingStartedMarkdown() : buildWelcomeMarkdown();
+    void import_obsidian17.MarkdownRenderer.render(this.app, markdown, body, "", this.renderHost);
+    const actions = contentEl.createDiv({ cls: "terminus-getting-started-actions" });
+    if (!this.full) {
+      actions.createEl("button", { text: "Full guide" }).addEventListener("click", () => {
+        this.close();
+        GettingStartedModal.openGuide(this.app);
+      });
+    }
+    actions.createEl("button", { text: this.full ? "Done" : "Got it", cls: "mod-cta" }).addEventListener("click", () => this.close());
+  }
+  onClose() {
+    this.renderHost.unload();
+    this.contentEl.empty();
+  }
+};
+
+// src/modals/MultiAgentInviteModal.ts
+var import_obsidian18 = require("obsidian");
+var MultiAgentInviteModal = class extends import_obsidian18.Modal {
+  constructor() {
+    super(...arguments);
+    this.resolvePromise = null;
+  }
+  static ask(app) {
+    return new Promise((resolve) => {
+      const modal = new MultiAgentInviteModal(app);
+      modal.resolvePromise = resolve;
+      modal.open();
+    });
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: "Running Claude in more than one terminal?" });
+    contentEl.createEl("p", {
+      text: "Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs you, plus groups to keep related terminals together."
+    });
+    contentEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "You can switch back any time under Settings \u2192 Terminus \u2192 Experience. This won't be shown again."
+    });
+    const buttonRow = contentEl.createDiv({ cls: "terminus-confirm-modal-actions" });
+    buttonRow.createEl("button", { text: "Not now" }).addEventListener("click", () => this.finish(false));
+    buttonRow.createEl("button", { text: "Try multi-agent", cls: "mod-cta" }).addEventListener("click", () => this.finish(true));
+  }
+  onClose() {
+    this.contentEl.empty();
+    this.finish(false);
+  }
+  finish(accepted) {
+    const resolve = this.resolvePromise;
+    if (!resolve)
+      return;
+    this.resolvePromise = null;
+    resolve(accepted);
+    this.close();
+  }
+};
+
 // src/main.ts
-var TerminusPlugin = class extends import_obsidian18.Plugin {
+var TerminusPlugin = class extends import_obsidian19.Plugin {
   constructor() {
     super(...arguments);
     this.reviewServer = new ReviewServer();
@@ -19444,21 +19597,25 @@ var TerminusPlugin = class extends import_obsidian18.Plugin {
       });
     });
     this.pendingChangesStore.on("recorded", () => {
-      if (!this.settings.autoRevealPendingChanges)
+      const reveal = this.autoRevealSettings();
+      if (!reveal.enabled && !this.shouldInviteToMultiAgent())
         return;
       if (this.revealPendingChangesTimer)
         window.clearTimeout(this.revealPendingChangesTimer);
       this.revealPendingChangesTimer = window.setTimeout(() => {
         this.revealPendingChangesTimer = null;
-        void this.revealPendingChangesView();
-      }, this.settings.autoRevealDelayMs);
+        if (reveal.enabled)
+          void this.revealPendingChangesView();
+        if (this.shouldInviteToMultiAgent())
+          void this.showMultiAgentInvite();
+      }, reveal.delayMs);
     });
     await this.reviewServer.start();
     try {
       await provisionClaudeSettings(this.app, this.manifest);
     } catch (err) {
       console.error("Terminus: failed to provision .claude/settings.local.json", err);
-      new import_obsidian18.Notice(
+      new import_obsidian19.Notice(
         "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
       );
     }
@@ -19566,8 +19723,47 @@ var TerminusPlugin = class extends import_obsidian18.Plugin {
     void this.reviewServer.stop();
   }
   async loadSettings() {
-    const saved = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    this.settings = resolveSettings(await this.loadData());
+  }
+  /** The experience actually in effect: always Classic until Multi-agent
+   *  ships (see MULTI_AGENT_AVAILABLE), whatever the saved setting says. */
+  get experience() {
+    return MULTI_AGENT_AVAILABLE ? this.settings.experience : "classic";
+  }
+  async setExperience(experience) {
+    if (experience === this.settings.experience)
+      return;
+    this.settings.experience = experience;
+    await this.saveSettings();
+  }
+  /** The active mode's auto-reveal settings. Until the Agent inbox exists,
+   *  Multi-agent's reveal brings up Pending Changes like Classic's does. */
+  autoRevealSettings() {
+    if (this.experience === "multi-agent") {
+      const { autoRevealInbox, autoRevealDelayMs: autoRevealDelayMs2 } = this.settings.multiAgent;
+      return { enabled: autoRevealInbox, delayMs: autoRevealDelayMs2 };
+    }
+    const { autoRevealPendingChanges, autoRevealDelayMs } = this.settings.classic;
+    return { enabled: autoRevealPendingChanges, delayMs: autoRevealDelayMs };
+  }
+  /** True the first time pending changes come from two different terminals
+   *  at once while in Classic: the moment Multi-agent's per-session inbox
+   *  helps. Counted by terminal token, so a renamed terminal is still one. */
+  shouldInviteToMultiAgent() {
+    if (!MULTI_AGENT_AVAILABLE || this.settings.hasSeenMultiAgentInvite || this.experience !== "classic")
+      return false;
+    const tokens = new Set(this.pendingChangesStore.list().flatMap((c) => c.contributors.map((x) => x.token)));
+    return tokens.size > 1;
+  }
+  /** Persisted before the modal opens, like showWelcomeIfFirstRun, so a
+   *  crash while it's on screen can't make it come back. */
+  async showMultiAgentInvite() {
+    this.settings.hasSeenMultiAgentInvite = true;
+    await this.saveSettings();
+    if (await MultiAgentInviteModal.ask(this.app)) {
+      await this.setExperience("multi-agent");
+      new import_obsidian19.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
+    }
   }
   async saveSettings() {
     await this.saveData(this.settings);
@@ -19607,7 +19803,7 @@ var TerminusPlugin = class extends import_obsidian18.Plugin {
     this.settings.ribbonIcon = iconName;
     await this.saveSettings();
     if (this.ribbonIconEl)
-      (0, import_obsidian18.setIcon)(this.ribbonIconEl, iconName);
+      (0, import_obsidian19.setIcon)(this.ribbonIconEl, iconName);
   }
   forEachTerminalView(fn3) {
     for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
@@ -19623,7 +19819,7 @@ var TerminusPlugin = class extends import_obsidian18.Plugin {
     const changes = this.pendingChangesStore.list();
     const count = changes.length;
     if (count === 0) {
-      new import_obsidian18.Notice("Terminus: no pending changes");
+      new import_obsidian19.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && changes.some(hasCollision)) {
@@ -19643,22 +19839,22 @@ var TerminusPlugin = class extends import_obsidian18.Plugin {
     try {
       await this.pendingChangesStore.resolveAll(accepted);
     } catch (err) {
-      new import_obsidian18.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
+      new import_obsidian19.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
     }
   }
   async resolveOldestPendingChange(accepted) {
     const oldest = this.pendingChangesStore.list()[0];
     if (!oldest) {
-      new import_obsidian18.Notice("Terminus: no pending changes");
+      new import_obsidian19.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && !await confirmCollisionReject(this.app, [oldest]))
       return;
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian18.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge23.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian19.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge23.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian18.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge23.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian19.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge23.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -19712,7 +19908,7 @@ var TerminusPlugin = class extends import_obsidian18.Plugin {
     await this.openTerminalAt(placement === "ask" ? "tab" : placement);
   }
   showTerminalPlacementMenu(evt) {
-    const menu = new import_obsidian18.Menu();
+    const menu = new import_obsidian19.Menu();
     for (const placement of TERMINAL_OPEN_PLACEMENTS) {
       menu.addItem(
         (item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => void this.openTerminalAt(placement))

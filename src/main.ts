@@ -16,11 +16,15 @@ import { ConfirmModal } from "./modals/ConfirmModal";
 import { confirmCollisionReject, hasCollision } from "./modals/collisions";
 import { RescueClosedTerminalModal } from "./modals/RescueClosedTerminalModal";
 import { GettingStartedModal } from "./modals/GettingStartedModal";
+import { MultiAgentInviteModal } from "./modals/MultiAgentInviteModal";
 import { computeDiffStats } from "./diff/renderDiff";
 import { inlineDiffDecorations, inlineDiffField } from "./editor/inlineDiff";
 import { errorMessage } from "./util/errors";
 import {
   DEFAULT_SETTINGS,
+  Experience,
+  MULTI_AGENT_AVAILABLE,
+  resolveSettings,
   MAX_FONT_SIZE,
   MIN_FONT_SIZE,
   TerminusSettingTab,
@@ -76,13 +80,17 @@ export default class TerminusPlugin extends Plugin {
     // per file touched); debounce so the panel comes to front once, shortly
     // after the last edit in that burst settles, rather than repeatedly
     // stealing focus mid-turn.
+    // The invite to try Multi-agent rides the same debounce, so it never
+    // interrupts a turn mid-burst either.
     this.pendingChangesStore.on("recorded", () => {
-      if (!this.settings.autoRevealPendingChanges) return;
+      const reveal = this.autoRevealSettings();
+      if (!reveal.enabled && !this.shouldInviteToMultiAgent()) return;
       if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
       this.revealPendingChangesTimer = window.setTimeout(() => {
         this.revealPendingChangesTimer = null;
-        void this.revealPendingChangesView();
-      }, this.settings.autoRevealDelayMs);
+        if (reveal.enabled) void this.revealPendingChangesView();
+        if (this.shouldInviteToMultiAgent()) void this.showMultiAgentInvite();
+      }, reveal.delayMs);
     });
 
     await this.reviewServer.start();
@@ -213,8 +221,50 @@ export default class TerminusPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const saved = (await this.loadData()) as Partial<TerminusSettings> | null;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    this.settings = resolveSettings(await this.loadData());
+  }
+
+  /** The experience actually in effect: always Classic until Multi-agent
+   *  ships (see MULTI_AGENT_AVAILABLE), whatever the saved setting says. */
+  get experience(): Experience {
+    return MULTI_AGENT_AVAILABLE ? this.settings.experience : "classic";
+  }
+
+  async setExperience(experience: Experience): Promise<void> {
+    if (experience === this.settings.experience) return;
+    this.settings.experience = experience;
+    await this.saveSettings();
+  }
+
+  /** The active mode's auto-reveal settings. Until the Agent inbox exists,
+   *  Multi-agent's reveal brings up Pending Changes like Classic's does. */
+  private autoRevealSettings(): { enabled: boolean; delayMs: number } {
+    if (this.experience === "multi-agent") {
+      const { autoRevealInbox, autoRevealDelayMs } = this.settings.multiAgent;
+      return { enabled: autoRevealInbox, delayMs: autoRevealDelayMs };
+    }
+    const { autoRevealPendingChanges, autoRevealDelayMs } = this.settings.classic;
+    return { enabled: autoRevealPendingChanges, delayMs: autoRevealDelayMs };
+  }
+
+  /** True the first time pending changes come from two different terminals
+   *  at once while in Classic: the moment Multi-agent's per-session inbox
+   *  helps. Counted by terminal token, so a renamed terminal is still one. */
+  private shouldInviteToMultiAgent(): boolean {
+    if (!MULTI_AGENT_AVAILABLE || this.settings.hasSeenMultiAgentInvite || this.experience !== "classic") return false;
+    const tokens = new Set(this.pendingChangesStore.list().flatMap((c) => c.contributors.map((x) => x.token)));
+    return tokens.size > 1;
+  }
+
+  /** Persisted before the modal opens, like showWelcomeIfFirstRun, so a
+   *  crash while it's on screen can't make it come back. */
+  private async showMultiAgentInvite(): Promise<void> {
+    this.settings.hasSeenMultiAgentInvite = true;
+    await this.saveSettings();
+    if (await MultiAgentInviteModal.ask(this.app)) {
+      await this.setExperience("multi-agent");
+      new Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
+    }
   }
 
   async saveSettings(): Promise<void> {

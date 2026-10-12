@@ -1,4 +1,5 @@
 import { Platform } from "obsidian";
+import { MULTI_AGENT_AVAILABLE } from "../settings";
 
 /**
  * Onboarding copy, bundled rather than fetched.
@@ -55,7 +56,15 @@ No more hunting for "where did that change happen." Each file it edits shows up 
 | Type \`[[\` | Autocomplete a note from your vault |
 | Drag a file in | Inserts its path, ready to run |
 
-Everything else — reviewing diffs, colored terminals, settings — is in the full guide.`;
+${
+    MULTI_AGENT_AVAILABLE
+      ? `#### Running Claude in several terminals?
+
+Try the Multi-agent experience in Settings → Terminus → Experience: an Agent inbox with a card per Claude session, and groups for your terminals.
+
+`
+      : ""
+  }Everything else — reviewing diffs, colored terminals, settings — is in the full guide.`;
 }
 
 /** The full reference, reachable any time from the command palette. */
