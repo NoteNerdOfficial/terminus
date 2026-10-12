@@ -38,7 +38,7 @@ Edits land on disk immediately; you review what changed afterwards, with the opt
 - **A real PTY-backed terminal.** Full interactive shell (zsh/bash), not a fake console. Run anything, not just `claude`.
 - **Multiple concurrent terminals.** Open as many as you want; each runs its own session, defaulting to a numbered label ("Terminus 1", "Terminus 2", ...).
 - **Rename and color-code terminals.** A pencil and palette icon in each terminal's own header let you give it a custom name and a color tag. Both show on the terminal's native tab, carry through into its Pending Changes group so you can tell at a glance which session made which edits, and survive an Obsidian restart (or a "Rescue closed terminal", below).
-- **Choose where a new terminal opens.** Clicking the ribbon icon (or running "Open Terminus") shows a quick menu: new tab, split right, split down, or new window. Set a fixed default in Settings to skip the menu entirely.
+- **Choose where a new terminal opens.** Clicking the ribbon icon shows a quick menu: new tab, split right, split down, or new window. Set a fixed default in Settings to skip the menu entirely, or use the "Open in new tab" / "Open in split right" / "Open in split down" / "Open in new window" commands to go straight to a placement (each can take its own hotkey).
 - **Clickable paths and URLs.** `Cmd/Ctrl` + click a file path or link in terminal output to open it. Files in your vault open in a new tab — notes as notes, and anything else in whichever editor has claimed that extension — with a trailing `:42` (the form compilers, linters and Claude all print) landing on that line; URLs open in your browser; anything Obsidian can't open at all, including dot-files and paths outside the vault, goes to your system's default app. Paths are checked against disk before being linkified, so prose and version numbers don't turn into false links.
 - **Drag-and-drop path insertion.** Drag a note from Obsidian's file explorer, or a file from Finder/Explorer, onto a terminal to insert its absolute path into the input line (quoted if it has spaces), unexecuted.
 - **Wiki-link autocomplete.** Type `[[` in a terminal to fuzzy-search your vault's notes and insert one as a wiki-link, a vault-relative path, or an absolute path, configurable in Settings.
@@ -79,6 +79,10 @@ All of these appear in the command palette under `Terminus:`. None ship with a d
 | Command |
 | --- |
 | Open |
+| Open in new tab |
+| Open in split right |
+| Open in split down |
+| Open in new window |
 | Open Pending Changes |
 | Open Action Log |
 | Getting started |
