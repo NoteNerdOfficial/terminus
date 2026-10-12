@@ -5,6 +5,14 @@ import { DiffResult } from "../server/diff";
 import type { BrokenBacklink } from "../backlinks/breakage";
 import { computeHunks } from "../diff/hunks";
 
+/** A terminal that edited a pending change's file. `token` is the terminal's
+ *  hook/review token, which (unlike its label) is unique per terminal. */
+export interface ChangeContributor {
+  token: string;
+  label: string;
+  color: string | null;
+}
+
 export interface PendingChange {
   /** Always the file's absolute path -- edits to the same file within one
    *  review window coalesce into a single row (see recordChange), so this
@@ -17,6 +25,11 @@ export interface PendingChange {
   createdAt: number;
   /** How many tool calls have been coalesced into this row. */
   editCount: number;
+  /** Every terminal whose edits were coalesced into this row, in the order
+   *  they first edited it. The first is the one panelLabel/panelColor came
+   *  from. More than one means rejecting reverts to the snapshot taken before
+   *  the first terminal's edit, undoing the later terminals' work too. */
+  contributors: ChangeContributor[];
   /** Populated separately via setBrokenBacklinks (computation needs the
    *  Obsidian App instance, which this store deliberately doesn't depend
    *  on -- keeps this class's core logic plain and independently testable). */
@@ -32,6 +45,8 @@ export interface ResolvedChange extends PendingChange {
 export interface RecordChangeInput {
   payload: PreToolUseHookPayload;
   diff: DiffResult;
+  /** The editing terminal's hook/review token. */
+  token: string;
   panelLabel: string;
   panelColor: string | null;
 }
@@ -70,6 +85,10 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
    * pre-turn snapshot) while newText/payload advance to the latest edit.
    * Without this, rejecting an earlier edit after a later one landed would
    * silently discard the later edit too, with no way to reason about it.
+   *
+   * The same holds when the later edit comes from a different terminal: its
+   * work lands in the first terminal's row, so it's added to `contributors`
+   * and the UI warns before a reject undoes it.
    */
   recordChange(input: RecordChangeInput): void {
     const key = input.diff.filePath;
@@ -81,6 +100,9 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
           payload: input.payload,
           diff: { ...input.diff, oldText: existing.change.diff.oldText, revertText: existing.change.diff.revertText },
           editCount: existing.change.editCount + 1,
+          contributors: existing.change.contributors.some((c) => c.token === input.token)
+            ? existing.change.contributors
+            : [...existing.change.contributors, { token: input.token, label: input.panelLabel, color: input.panelColor }],
         }
       : {
           id: key,
@@ -90,6 +112,7 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
           panelColor: input.panelColor,
           createdAt: Date.now(),
           editCount: 1,
+          contributors: [{ token: input.token, label: input.panelLabel, color: input.panelColor }],
           brokenBacklinks: [],
         };
 

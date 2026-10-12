@@ -923,6 +923,7 @@ export class TerminalView extends ItemView {
     this.plugin.pendingChangesStore.recordChange({
       payload,
       diff,
+      token: this.token,
       panelLabel: this.getDisplayText(),
       panelColor: this.color,
     });

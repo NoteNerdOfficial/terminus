@@ -1,6 +1,7 @@
 import { ItemView, ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { pathBasename } from "terminus-node-bridge";
 import { renderSplitDiffBody } from "../diff/renderSplitDiff";
+import { collisionLabel } from "../modals/collisions";
 import type TerminusPlugin from "../main";
 
 export const DIFF_SPLIT_VIEW_TYPE = "terminus-diff-split";
@@ -77,8 +78,16 @@ export class DiffSplitView extends ItemView {
     if (change.editCount > 1) {
       header.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
     }
+    const collision = collisionLabel(change);
+    if (collision) {
+      const first = change.contributors[0]?.label ?? change.panelLabel;
+      container.createDiv({
+        cls: "terminus-collision-warning-detail",
+        text: `⚠ ${collision} after ${first}. Rejecting goes back to how the file was before ${first}'s first edit, so it can undo their work too.`,
+      });
+    }
 
-    renderSplitDiffBody(container, this.plugin.pendingChangesStore, change);
+    renderSplitDiffBody(container, this.app, this.plugin.pendingChangesStore, change);
   };
 }
 

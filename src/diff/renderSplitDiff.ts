@@ -1,4 +1,4 @@
-import { Notice } from "obsidian";
+import { App, Notice } from "obsidian";
 import { pathBasename } from "terminus-node-bridge";
 import { diffWordsWithSpace } from "diff";
 import { buildDiffLines, buildSegments, DiffLineSegment, splitLines } from "./buildDiffLines";
@@ -6,6 +6,7 @@ import { renderMinimap } from "./renderDiff";
 import { computeSplitParts, HunkPart } from "./hunks";
 import { PendingChange, PendingChangesStore } from "../state/PendingChangesStore";
 import { errorMessage } from "../util/errors";
+import { confirmCollisionReject } from "../modals/collisions";
 
 interface CellLine {
   text: string;
@@ -29,7 +30,7 @@ const MIN_HIDDEN_TO_TRUNCATE = 4;
  * viewport styling as the unified diff view sits along the edge as a scroll
  * marker.
  */
-export function renderSplitDiffBody(container: HTMLElement, store: PendingChangesStore, change: PendingChange): void {
+export function renderSplitDiffBody(container: HTMLElement, app: App, store: PendingChangesStore, change: PendingChange): void {
   const { diff } = change;
 
   const wrapper = container.createDiv({ cls: "terminus-split-diff-wrapper terminus-diff-body-wrapper" });
@@ -53,7 +54,7 @@ export function renderSplitDiffBody(container: HTMLElement, store: PendingChange
       continue;
     }
 
-    renderHunkControls(scrollBody, part, change, store);
+    renderHunkControls(scrollBody, part, change, app, store);
     const { oldLines, newLines } = buildHunkSides(part.oldValue, part.newValue);
     const rowCount = Math.max(oldLines.length, newLines.length);
     for (let k = 0; k < rowCount; k++) {
@@ -145,18 +146,19 @@ function renderContextBlock(container: HTMLElement, lines: string[], oldStart: n
  *  (see editor/inlineDiff.ts's DiffControlsWidget) -- reuses its exact CSS
  *  classes so per-hunk controls here read as the same control, just placed
  *  inline in a scrollable panel instead of floating over live editor text. */
-function renderHunkControls(container: HTMLElement, hunk: HunkPart, change: PendingChange, store: PendingChangesStore): void {
+function renderHunkControls(container: HTMLElement, hunk: HunkPart, change: PendingChange, app: App, store: PendingChangesStore): void {
   const bar = container.createDiv({ cls: "terminus-inline-diff-controls terminus-split-diff-hunk-controls" });
   bar.createSpan({ cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
 
-  const resolve = (accepted: boolean) => {
+  const resolve = async (accepted: boolean) => {
+    if (!accepted && !(await confirmCollisionReject(app, [store.get(change.id) ?? change], "hunk"))) return;
     store.resolveHunk(change.id, hunk.index, accepted).catch((err: unknown) => {
       new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${pathBasename(change.diff.filePath)}: ${errorMessage(err)}`);
     });
   };
 
-  bar.createEl("button", { text: "Reject", cls: "terminus-inline-diff-reject" }).addEventListener("click", () => resolve(false));
-  bar.createEl("button", { text: "Accept", cls: "terminus-inline-diff-accept mod-cta" }).addEventListener("click", () => resolve(true));
+  bar.createEl("button", { text: "Reject", cls: "terminus-inline-diff-reject" }).addEventListener("click", () => void resolve(false));
+  bar.createEl("button", { text: "Accept", cls: "terminus-inline-diff-accept mod-cta" }).addEventListener("click", () => void resolve(true));
 }
 
 interface SplitRowSpec {

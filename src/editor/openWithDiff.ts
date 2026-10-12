@@ -6,6 +6,7 @@ import { computeHunks } from "../diff/hunks";
 import { PendingChange } from "../state/PendingChangesStore";
 import { openWithSystemDefaultApp } from "../util/systemOpen";
 import { errorMessage } from "../util/errors";
+import { confirmCollisionReject } from "../modals/collisions";
 import type TerminusPlugin from "../main";
 
 /**
@@ -62,7 +63,11 @@ export async function openChangedFile(plugin: TerminusPlugin, change: PendingCha
     cm.dispatch({ effects: setInlineDiff.of(null) });
   });
 
-  const resolve = (accepted: boolean) => {
+  const resolve = async (accepted: boolean) => {
+    // Re-read: more edits (possibly from another terminal) may have
+    // coalesced in since this overlay opened.
+    const current = store.get(change.id) ?? change;
+    if (!accepted && !(await confirmCollisionReject(plugin.app, [current]))) return;
     store.resolveItem(change.id, accepted).catch((err: unknown) => {
       new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(change.diff.filePath)}: ${errorMessage(err)}`);
     });
@@ -73,8 +78,8 @@ export async function openChangedFile(plugin: TerminusPlugin, change: PendingCha
       id: change.id,
       oldText: change.diff.oldText,
       newText: change.diff.newText,
-      onAccept: () => resolve(true),
-      onReject: () => resolve(false),
+      onAccept: () => void resolve(true),
+      onReject: () => void resolve(false),
     }),
   });
 }

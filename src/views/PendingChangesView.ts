@@ -6,6 +6,7 @@ import { openChangedFile } from "../editor/openWithDiff";
 import { openDiffSplitView } from "./DiffSplitView";
 import { ActionLogModal } from "../modals/ActionLogModal";
 import { ConfirmModal } from "../modals/ConfirmModal";
+import { collisionLabel, confirmCollisionReject, hasCollision } from "../modals/collisions";
 import { getGitHeadContent } from "../git/gitDiff";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
@@ -98,11 +99,11 @@ export class PendingChangesView extends ItemView {
     const bulkRow = headerBar.createDiv({ cls: "terminus-pending-bulk-actions" });
     bulkRow.createEl("button", { text: "Reject all", cls: "terminus-btn-outline" }).addEventListener(
       "click",
-      () => void this.runBulkAction(false, changes.length, () => this.plugin.pendingChangesStore.resolveAll(false))
+      () => void this.runBulkAction(false, changes, () => this.plugin.pendingChangesStore.resolveAll(false))
     );
     bulkRow.createEl("button", { text: "Keep all", cls: "terminus-btn-solid" }).addEventListener(
       "click",
-      () => void this.runBulkAction(true, changes.length, () => this.plugin.pendingChangesStore.resolveAll(true))
+      () => void this.runBulkAction(true, changes, () => this.plugin.pendingChangesStore.resolveAll(true))
     );
 
     const groupsContainer = container.createDiv({ cls: "terminus-pending-groups" });
@@ -116,14 +117,19 @@ export class PendingChangesView extends ItemView {
    *  buttons, which scopes the confirmation/error wording to "all" instead
    *  of naming a specific terminal. Confirmation itself is opt-in (see
    *  settings.confirmBulkActions) -- every bulk action is already
-   *  reversible via "Recently resolved", so it's off by default. */
+   *  reversible via "Recently resolved", so it's off by default. A reject
+   *  that would undo another terminal's edits always asks, and that one
+   *  confirmation replaces the generic one. */
   private async runBulkAction(
     accepted: boolean,
-    count: number,
+    changes: PendingChange[],
     action: () => Promise<void>,
     scopeLabel?: string
   ): Promise<void> {
-    if (this.plugin.settings.confirmBulkActions) {
+    const count = changes.length;
+    if (!accepted && changes.some(hasCollision)) {
+      if (!(await confirmCollisionReject(this.app, changes))) return;
+    } else if (this.plugin.settings.confirmBulkActions) {
       const verb = accepted ? "Keep" : "Reject";
       const scope = scopeLabel ? `${scopeLabel}'s` : "all";
       const confirmed = await ConfirmModal.confirm(
@@ -195,14 +201,14 @@ export class PendingChangesView extends ItemView {
       "click",
       (e) => {
         e.stopPropagation();
-        void this.runBulkAction(false, changes.length, () => this.plugin.pendingChangesStore.resolveAll(false, inGroup), panelLabel);
+        void this.runBulkAction(false, changes, () => this.plugin.pendingChangesStore.resolveAll(false, inGroup), panelLabel);
       }
     );
     groupBulk.createEl("button", { text: "Keep all", cls: "terminus-btn-ghost-accent" }).addEventListener(
       "click",
       (e) => {
         e.stopPropagation();
-        void this.runBulkAction(true, changes.length, () => this.plugin.pendingChangesStore.resolveAll(true, inGroup), panelLabel);
+        void this.runBulkAction(true, changes, () => this.plugin.pendingChangesStore.resolveAll(true, inGroup), panelLabel);
       }
     );
 
@@ -243,6 +249,10 @@ export class PendingChangesView extends ItemView {
     const vaultName = pathBasename(this.plugin.getVaultBasePath());
     const relativePath = pathRelative(this.plugin.getVaultBasePath(), change.diff.filePath);
     info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
+    const collision = collisionLabel(change);
+    if (collision) {
+      info.createDiv({ cls: "terminus-collision-warning", text: `⚠ ${collision}` });
+    }
     if (change.brokenBacklinks.length > 0) {
       const count = change.brokenBacklinks.length;
       info.createDiv({
@@ -255,7 +265,8 @@ export class PendingChangesView extends ItemView {
       e.stopPropagation();
       fn();
     };
-    const resolve = (accepted: boolean) => {
+    const resolve = async (accepted: boolean) => {
+      if (!accepted && !(await confirmCollisionReject(this.app, [change]))) return;
       this.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err: unknown) => {
         new Notice(
           `Terminus: failed to ${accepted ? "keep" : "revert"} ${pathBasename(change.diff.filePath)}: ${errorMessage(err)}`
@@ -281,10 +292,10 @@ export class PendingChangesView extends ItemView {
     }
     actions
       .createEl("button", { text: "✕", cls: "terminus-icon-btn terminus-icon-btn-reject", attr: { "aria-label": "Reject" } })
-      .addEventListener("click", (e) => stop(e, () => resolve(false)));
+      .addEventListener("click", (e) => stop(e, () => void resolve(false)));
     actions
       .createEl("button", { text: "✓", cls: "terminus-icon-btn terminus-icon-btn-accept", attr: { "aria-label": "Accept" } })
-      .addEventListener("click", (e) => stop(e, () => resolve(true)));
+      .addEventListener("click", (e) => stop(e, () => void resolve(true)));
 
     const body = row.createDiv({ cls: "terminus-pending-row-body" });
     body.hide();

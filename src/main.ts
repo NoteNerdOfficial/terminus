@@ -13,6 +13,7 @@ import { ActionLog } from "./state/ActionLog";
 import { ClosedTerminalBuffer, ClosedTerminalEntry } from "./state/ClosedTerminalBuffer";
 import { ActionLogModal } from "./modals/ActionLogModal";
 import { ConfirmModal } from "./modals/ConfirmModal";
+import { confirmCollisionReject, hasCollision } from "./modals/collisions";
 import { RescueClosedTerminalModal } from "./modals/RescueClosedTerminalModal";
 import { GettingStartedModal } from "./modals/GettingStartedModal";
 import { computeDiffStats } from "./diff/renderDiff";
@@ -276,12 +277,15 @@ export default class TerminusPlugin extends Plugin {
    *  palette/hotkey entries are just as consequential, so they shouldn't
    *  bypass the setting just because they're triggered a different way. */
   private async runBulkPendingChangesCommand(accepted: boolean): Promise<void> {
-    const count = this.pendingChangesStore.list().length;
+    const changes = this.pendingChangesStore.list();
+    const count = changes.length;
     if (count === 0) {
       new Notice("Terminus: no pending changes");
       return;
     }
-    if (this.settings.confirmBulkActions) {
+    if (!accepted && changes.some(hasCollision)) {
+      if (!(await confirmCollisionReject(this.app, changes))) return;
+    } else if (this.settings.confirmBulkActions) {
       const verb = accepted ? "Keep" : "Reject";
       const confirmed = await ConfirmModal.confirm(
         this.app,
@@ -304,6 +308,7 @@ export default class TerminusPlugin extends Plugin {
       new Notice("Terminus: no pending changes");
       return;
     }
+    if (!accepted && !(await confirmCollisionReject(this.app, [oldest]))) return;
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
       new Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${pathBasename(oldest.diff.filePath)}`);
