@@ -1,5 +1,5 @@
 import { createHttpServer, bufferLength, concatBuffersToString, type SimpleHttpRequest, type SimpleHttpResponse, type SimpleHttpServer } from "terminus-node-bridge";
-import { PreToolUseHookPayload } from "../hooks/types";
+import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload, StopHookPayload } from "../hooks/types";
 
 export interface RegisteredPanel {
   /** Called synchronously within the PreToolUse hook's request/response
@@ -12,19 +12,34 @@ export interface RegisteredPanel {
 
   /** Called from the Stop hook when Claude finishes a turn in this panel --
    *  the one signal that says "no more writes are coming", which nothing in
-   *  the PreToolUse stream can express. Bodyless: the fact that it fired,
-   *  with this panel's token, is the whole message. */
-  onTurnEnd(): void;
+   *  the PreToolUse stream can express. The payload (for the closing
+   *  message) is undefined when the bridge sent no body, as bridges from
+   *  before 1.0.36 don't: the fact that it fired is still the message. */
+  onTurnEnd(payload: StopHookPayload | undefined): void;
 
   /** Called from the Notification hook, which Claude Code fires both when
    *  it needs the user's permission to use a tool and when it's been idle
    *  waiting on input -- both are "this panel needs attention" moments, so
-   *  any firing is treated the same regardless of the message text.
-   *  Bodyless like onTurnEnd, for the same reason. */
-  onNeedsAttention(): void;
+   *  any firing raises attention. The payload, when present, says which of
+   *  the two it was; undefined for a bodyless call, like onTurnEnd. */
+  onNeedsAttention(payload: NotificationHookPayload | undefined): void;
+
+  /** SessionStart, SessionEnd and UserPromptSubmit, from the session-event
+   *  bridge -- installed only in the Multi-agent experience. */
+  onSessionEvent(payload: SessionEventHookPayload): void;
 }
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024; // generous cap for a Write tool's full file content
+// Status payloads are small; Stop's closing message is the largest field.
+const STATUS_BODY_MAX_BYTES = 1024 * 1024;
+
+const SESSION_EVENTS = new Set(["SessionStart", "SessionEnd", "UserPromptSubmit"]);
+
+function isSessionEvent(value: unknown): value is SessionEventHookPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const name = (value as { hook_event_name?: unknown }).hook_event_name;
+  return typeof name === "string" && SESSION_EVENTS.has(name);
+}
 
 /**
  * Single 127.0.0.1-only HTTP server shared by all Terminus panels.
@@ -78,7 +93,7 @@ export class ReviewServer {
   private async handleRequest(req: SimpleHttpRequest, res: SimpleHttpResponse): Promise<void> {
     if (
       req.method !== "POST" ||
-      (req.url !== "/review" && req.url !== "/turn-end" && req.url !== "/notification")
+      (req.url !== "/review" && req.url !== "/turn-end" && req.url !== "/notification" && req.url !== "/session-event")
     ) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
@@ -94,16 +109,18 @@ export class ReviewServer {
       return;
     }
 
-    // Answered before the body is read at all: the Stop and Notification
-    // bridges both send none, and there's nothing in one we'd want if they did.
-    if (req.url === "/turn-end") {
-      panel.onTurnEnd();
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("");
-      return;
-    }
-    if (req.url === "/notification") {
-      panel.onNeedsAttention();
+    // The status routes never fail the hook over their body: a missing or
+    // unreadable one (an older bridge that discards stdin, or a payload
+    // shape we don't expect) still delivers the signal itself.
+    if (req.url === "/turn-end" || req.url === "/notification" || req.url === "/session-event") {
+      const parsed = await readOptionalJson(req, STATUS_BODY_MAX_BYTES);
+      if (req.url === "/turn-end") {
+        panel.onTurnEnd(parsed as StopHookPayload | undefined);
+      } else if (req.url === "/notification") {
+        panel.onNeedsAttention(parsed as NotificationHookPayload | undefined);
+      } else if (isSessionEvent(parsed)) {
+        panel.onSessionEvent(parsed);
+      }
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("");
       return;
@@ -135,6 +152,17 @@ export class ReviewServer {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** The body parsed as JSON, or undefined when it's empty, too large or not
+ *  JSON. Never rejects. */
+async function readOptionalJson(req: SimpleHttpRequest, maxBytes: number): Promise<unknown> {
+  try {
+    const body = await readBody(req, maxBytes);
+    return body.trim() ? (JSON.parse(body) as unknown) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function readBody(req: SimpleHttpRequest, maxBytes: number): Promise<string> {

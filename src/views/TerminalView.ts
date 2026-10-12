@@ -25,7 +25,7 @@ import { openTerminalColorPicker } from "../terminal/TerminalColorPicker";
 import { refreshTabHeader, refreshPaneTitle, refreshTabPendingDot } from "../terminal/tabHeaderColor";
 import { CommandHelpModal } from "../modals/CommandHelpModal";
 import { RenameTerminalModal } from "../modals/RenameTerminalModal";
-import { PreToolUseHookPayload } from "../hooks/types";
+import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload, StopHookPayload } from "../hooks/types";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
 
@@ -300,6 +300,7 @@ export class TerminalView extends ItemView {
         if (leaf !== this.leaf) return;
         this.term?.focus();
         this.clearPendingAttention();
+        this.plugin.agentSessionStore.seen(this.token);
       })
     );
 
@@ -322,8 +323,9 @@ export class TerminalView extends ItemView {
 
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload),
-      onTurnEnd: () => this.onTurnEnd(),
-      onNeedsAttention: () => this.onNeedsAttention(),
+      onTurnEnd: (payload) => this.onTurnEnd(payload),
+      onNeedsAttention: (payload) => this.onNeedsAttention(payload),
+      onSessionEvent: (payload) => this.onSessionEvent(payload),
     });
 
     await this.startPty();
@@ -482,18 +484,38 @@ export class TerminalView extends ItemView {
    *  lands only once Claude has written its closing message, which is well
    *  past the debounced Pending Changes reveal the chip needs to outlast
    *  (see main.ts), so there's nothing left to stay up for. */
-  private onTurnEnd(): void {
+  private onTurnEnd(payload: StopHookPayload | undefined): void {
     this.clearActivity();
     this.clearPendingAttention();
+    this.plugin.agentSessionStore.turnEnded(this.token, payload?.last_assistant_message, sessionIdentity(payload));
   }
 
   /** Fires from the Notification hook -- Claude needs this terminal's
    *  permission, or has been sitting idle waiting on input. Either way,
    *  this is the one signal that says "a human needs to look here", so any
    *  firing raises the dot regardless of which of the two it was. */
-  private onNeedsAttention(): void {
+  private onNeedsAttention(payload: NotificationHookPayload | undefined): void {
     this.isPendingAttention = true;
     this.refreshPendingDot();
+    this.plugin.agentSessionStore.needsAttention(this.token, payload?.notification_type, sessionIdentity(payload));
+  }
+
+  /** SessionStart / SessionEnd / UserPromptSubmit -- only sent while the
+   *  Multi-agent experience has those hooks installed. */
+  private onSessionEvent(payload: SessionEventHookPayload): void {
+    const store = this.plugin.agentSessionStore;
+    const identity = sessionIdentity(payload);
+    switch (payload.hook_event_name) {
+      case "SessionStart":
+        store.sessionStarted(this.token, identity);
+        break;
+      case "UserPromptSubmit":
+        store.promptSubmitted(this.token, identity);
+        break;
+      case "SessionEnd":
+        store.sessionEnded(this.token);
+        break;
+    }
   }
 
   private clearPendingAttention(): void {
@@ -610,6 +632,8 @@ export class TerminalView extends ItemView {
     this.webglAddon?.dispose();
     this.webglAddon = null;
     this.plugin.reviewServer.unregister(this.token);
+    // Closing the terminal ends its session even if SessionEnd never comes.
+    this.plugin.agentSessionStore.sessionEnded(this.token);
     this.pty?.kill();
     this.commandTracker?.dispose();
 
@@ -829,6 +853,7 @@ export class TerminalView extends ItemView {
     this.pty.on("error", (err) => new Notice(`Terminus: PTY error: ${errorMessage(err)}`));
     this.pty.on("exit", ({ code }: { code: number | null }) => {
       this.writeToTerminal(`\r\n[process exited${code !== null ? ` with code ${code}` : ""}]\r\n`);
+      this.plugin.agentSessionStore.sessionEnded(this.token);
     });
     this.pty.on("ready", () => {
       const command = this.plugin.settings.startupCommand.trim();
@@ -920,6 +945,7 @@ export class TerminalView extends ItemView {
   private async onChangeApplied(payload: PreToolUseHookPayload): Promise<void> {
     const diff = await buildDiff(payload);
     this.noteActivity(diff.filePath);
+    this.plugin.agentSessionStore.fileEdited(this.token, diff.filePath, sessionIdentity(payload));
     this.plugin.pendingChangesStore.recordChange({
       payload,
       diff,
@@ -951,4 +977,15 @@ export class TerminalView extends ItemView {
     const broken = detectBacklinkBreakage(this.app, file, merged.diff.oldText, merged.diff.newText);
     this.plugin.pendingChangesStore.setBrokenBacklinks(absoluteFilePath, broken);
   }
+}
+
+/** The session fields every hook payload carries, for AgentSessionStore.
+ *  Empty for a bodyless call from an older bridge. */
+function sessionIdentity(payload: { session_id?: string; transcript_path?: string; cwd?: string } | undefined): {
+  sessionId?: string;
+  transcriptPath?: string;
+  cwd?: string;
+} {
+  if (!payload) return {};
+  return { sessionId: payload.session_id, transcriptPath: payload.transcript_path, cwd: payload.cwd };
 }

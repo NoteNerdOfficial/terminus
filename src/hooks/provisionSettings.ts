@@ -1,5 +1,6 @@
 import { App, FileSystemAdapter, PluginManifest } from "obsidian";
 import { appendTextFile, makeDirRecursive, pathJoin, readTextFileIfExists, writeTextFile } from "terminus-node-bridge";
+import type { Experience } from "../settings";
 
 interface HookCommandEntry {
   type: "command";
@@ -14,18 +15,20 @@ interface HookMatcherEntry {
 }
 
 interface ClaudeSettingsFile {
-  hooks?: {
-    PreToolUse?: HookMatcherEntry[];
-    Stop?: HookMatcherEntry[];
-    Notification?: HookMatcherEntry[];
-    [key: string]: unknown;
-  };
+  hooks?: Partial<Record<HookEvent, HookMatcherEntry[]>> & { [key: string]: unknown };
   [key: string]: unknown;
 }
 
 function isClaudeSettingsFile(value: unknown): value is ClaudeSettingsFile {
   return typeof value === "object" && value !== null;
 }
+
+type HookEvent = "PreToolUse" | "Stop" | "Notification" | "SessionStart" | "SessionEnd" | "UserPromptSubmit";
+
+/** Hooks only the Multi-agent experience installs, all through the one
+ *  session-event bridge. Switching back to Classic removes them again, so a
+ *  Classic vault's settings file looks exactly as it did before. */
+const MULTI_AGENT_ONLY_EVENTS: HookEvent[] = ["SessionStart", "SessionEnd", "UserPromptSubmit"];
 
 const MATCHER = "Edit|Write|NotebookEdit";
 // Short: the hook no longer waits on a human decision (see ReviewServer),
@@ -39,6 +42,9 @@ const TURN_END_TIMEOUT_SECONDS = 10;
 // Same bodyless-ping shape as Stop, and same reasoning: nothing here should
 // ever be slow enough to need more than a few seconds.
 const NOTIFICATION_TIMEOUT_SECONDS = 5;
+// Same again: one small POST, and SessionStart/UserPromptSubmit run while
+// the user is waiting for Claude to start.
+const SESSION_EVENT_TIMEOUT_SECONDS = 5;
 const GITIGNORE_LINE = ".claude/settings.local.json";
 
 export function getVaultBasePath(app: App): string {
@@ -66,14 +72,19 @@ export function getNotificationBridgePath(app: App, manifest: PluginManifest): s
   return resourcePath(app, manifest, "notification-bridge.sh");
 }
 
+export function getSessionEventBridgePath(app: App, manifest: PluginManifest): string {
+  return resourcePath(app, manifest, "session-event-bridge.sh");
+}
+
 /**
  * Idempotently ensures the vault's project-scoped .claude/settings.local.json
- * wires all three of our hooks -- PreToolUse (record each write for review),
- * Stop (turn is over), and Notification (Claude needs permission or is
- * waiting on the user) -- without clobbering any hooks or settings the user
- * already has there.
+ * wires our hooks for `experience` -- always PreToolUse (record each write
+ * for review), Stop (turn is over), and Notification (Claude needs
+ * permission or is waiting on the user); in Multi-agent also SessionStart,
+ * SessionEnd and UserPromptSubmit, which Classic removes -- without
+ * clobbering any hooks or settings the user already has there.
  */
-export async function provisionClaudeSettings(app: App, manifest: PluginManifest): Promise<void> {
+export async function provisionClaudeSettings(app: App, manifest: PluginManifest, experience: Experience): Promise<void> {
   const basePath = getVaultBasePath(app);
   const claudeDir = pathJoin(basePath, ".claude");
   const settingsPath = pathJoin(claudeDir, "settings.local.json");
@@ -107,7 +118,17 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
     timeout: NOTIFICATION_TIMEOUT_SECONDS,
   });
 
-  if (preToolUseChanged || stopChanged || notificationChanged) {
+  const sessionEventBridge = getSessionEventBridgePath(app, manifest);
+  let sessionHooksChanged = false;
+  for (const event of MULTI_AGENT_ONLY_EVENTS) {
+    const changed =
+      experience === "multi-agent"
+        ? ensureHook(hooks, event, { command: sessionEventBridge, timeout: SESSION_EVENT_TIMEOUT_SECONDS })
+        : removeHook(hooks, event, sessionEventBridge);
+    sessionHooksChanged ||= changed;
+  }
+
+  if (preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged) {
     await writeTextFile(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
 
@@ -124,7 +145,7 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
  */
 function ensureHook(
   hooks: NonNullable<ClaudeSettingsFile["hooks"]>,
-  event: "PreToolUse" | "Stop" | "Notification",
+  event: HookEvent,
   spec: { matcher?: string; command: string; timeout: number }
 ): boolean {
   const entries = (hooks[event] ??= []);
@@ -146,6 +167,33 @@ function ensureHook(
     return true;
   }
   return false;
+}
+
+/**
+ * Removes our entry for `event` (matched on the command path, like
+ * ensureHook) and tidies up after it: a matcher group left with no hooks is
+ * dropped, and so is the event itself once nothing else is under it. Any
+ * hook the user added under the same event stays. Returns whether anything
+ * changed.
+ */
+function removeHook(hooks: NonNullable<ClaudeSettingsFile["hooks"]>, event: HookEvent, command: string): boolean {
+  const entries = hooks[event];
+  if (!entries) return false;
+
+  let changed = false;
+  for (const entry of entries) {
+    const kept = (entry.hooks ?? []).filter((h) => h.command !== command);
+    if (kept.length !== (entry.hooks ?? []).length) {
+      entry.hooks = kept;
+      changed = true;
+    }
+  }
+  if (!changed) return false;
+
+  const remaining = entries.filter((entry) => (entry.hooks ?? []).length > 0);
+  if (remaining.length > 0) hooks[event] = remaining;
+  else delete hooks[event];
+  return true;
 }
 
 async function ensureGitignoreEntry(basePath: string): Promise<void> {

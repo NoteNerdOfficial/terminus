@@ -397,6 +397,14 @@ var import_terminus_node_bridge23 = __toESM(require_dist());
 // src/server/ReviewServer.ts
 var import_terminus_node_bridge = __toESM(require_dist());
 var MAX_BODY_BYTES = 5 * 1024 * 1024;
+var STATUS_BODY_MAX_BYTES = 1024 * 1024;
+var SESSION_EVENTS = /* @__PURE__ */ new Set(["SessionStart", "SessionEnd", "UserPromptSubmit"]);
+function isSessionEvent(value) {
+  if (typeof value !== "object" || value === null)
+    return false;
+  const name = value.hook_event_name;
+  return typeof name === "string" && SESSION_EVENTS.has(name);
+}
 var ReviewServer = class {
   constructor() {
     this.server = null;
@@ -442,7 +450,7 @@ var ReviewServer = class {
   }
   async handleRequest(req, res) {
     var _a8;
-    if (req.method !== "POST" || req.url !== "/review" && req.url !== "/turn-end" && req.url !== "/notification") {
+    if (req.method !== "POST" || req.url !== "/review" && req.url !== "/turn-end" && req.url !== "/notification" && req.url !== "/session-event") {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
@@ -455,14 +463,15 @@ var ReviewServer = class {
       res.end("unknown or expired session token");
       return;
     }
-    if (req.url === "/turn-end") {
-      panel.onTurnEnd();
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      res.end("");
-      return;
-    }
-    if (req.url === "/notification") {
-      panel.onNeedsAttention();
+    if (req.url === "/turn-end" || req.url === "/notification" || req.url === "/session-event") {
+      const parsed = await readOptionalJson(req, STATUS_BODY_MAX_BYTES);
+      if (req.url === "/turn-end") {
+        panel.onTurnEnd(parsed);
+      } else if (req.url === "/notification") {
+        panel.onNeedsAttention(parsed);
+      } else if (isSessionEvent(parsed)) {
+        panel.onSessionEvent(parsed);
+      }
       res.writeHead(200, { "Content-Type": "text/plain" });
       res.end("");
       return;
@@ -491,6 +500,14 @@ var ReviewServer = class {
 function errorMessage(err) {
   return err instanceof Error ? err.message : String(err);
 }
+async function readOptionalJson(req, maxBytes) {
+  try {
+    const body = await readBody(req, maxBytes);
+    return body.trim() ? JSON.parse(body) : void 0;
+  } catch (e) {
+    return void 0;
+  }
+}
 function readBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -515,10 +532,12 @@ var import_terminus_node_bridge2 = __toESM(require_dist());
 function isClaudeSettingsFile(value) {
   return typeof value === "object" && value !== null;
 }
+var MULTI_AGENT_ONLY_EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit"];
 var MATCHER = "Edit|Write|NotebookEdit";
 var DEFAULT_TIMEOUT_SECONDS = 15;
 var TURN_END_TIMEOUT_SECONDS = 10;
 var NOTIFICATION_TIMEOUT_SECONDS = 5;
+var SESSION_EVENT_TIMEOUT_SECONDS = 5;
 var GITIGNORE_LINE = ".claude/settings.local.json";
 function getVaultBasePath(app) {
   const adapter = app.vault.adapter;
@@ -540,7 +559,10 @@ function getTurnEndBridgePath(app, manifest) {
 function getNotificationBridgePath(app, manifest) {
   return resourcePath(app, manifest, "notification-bridge.sh");
 }
-async function provisionClaudeSettings(app, manifest) {
+function getSessionEventBridgePath(app, manifest) {
+  return resourcePath(app, manifest, "session-event-bridge.sh");
+}
+async function provisionClaudeSettings(app, manifest, experience) {
   var _a8;
   const basePath = getVaultBasePath(app);
   const claudeDir = (0, import_terminus_node_bridge2.pathJoin)(basePath, ".claude");
@@ -567,7 +589,13 @@ async function provisionClaudeSettings(app, manifest) {
     command: getNotificationBridgePath(app, manifest),
     timeout: NOTIFICATION_TIMEOUT_SECONDS
   });
-  if (preToolUseChanged || stopChanged || notificationChanged) {
+  const sessionEventBridge = getSessionEventBridgePath(app, manifest);
+  let sessionHooksChanged = false;
+  for (const event of MULTI_AGENT_ONLY_EVENTS) {
+    const changed = experience === "multi-agent" ? ensureHook(hooks, event, { command: sessionEventBridge, timeout: SESSION_EVENT_TIMEOUT_SECONDS }) : removeHook(hooks, event, sessionEventBridge);
+    sessionHooksChanged || (sessionHooksChanged = changed);
+  }
+  if (preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged) {
     await (0, import_terminus_node_bridge2.writeTextFile)(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
   await ensureGitignoreEntry(basePath);
@@ -593,6 +621,31 @@ function ensureHook(hooks, event, spec) {
     return true;
   }
   return false;
+}
+function removeHook(hooks, event, command) {
+  var _a8, _b;
+  const entries = hooks[event];
+  if (!entries)
+    return false;
+  let changed = false;
+  for (const entry of entries) {
+    const kept = ((_a8 = entry.hooks) != null ? _a8 : []).filter((h2) => h2.command !== command);
+    if (kept.length !== ((_b = entry.hooks) != null ? _b : []).length) {
+      entry.hooks = kept;
+      changed = true;
+    }
+  }
+  if (!changed)
+    return false;
+  const remaining = entries.filter((entry) => {
+    var _a9;
+    return ((_a9 = entry.hooks) != null ? _a9 : []).length > 0;
+  });
+  if (remaining.length > 0)
+    hooks[event] = remaining;
+  else
+    delete hooks[event];
+  return true;
 }
 async function ensureGitignoreEntry(basePath) {
   var _a8;
@@ -854,8 +907,48 @@ if __name__ == "__main__":
     main()
 `, executable: true },
   { relativePath: "hook-bridge.sh", content: '#!/usr/bin/env bash\n# PreToolUse hook bridge for the Terminus Obsidian plugin.\n#\n# Claude Code invokes this script (via a project-scoped .claude/settings.local.json\n# hooks.PreToolUse entry) as a subprocess of whatever shell is running inside a\n# Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT and\n# TERMINUS_HOOK_TOKEN from that shell\'s environment.\n#\n# This does NOT gate the write on a human decision -- Claude is allowed to\n# complete its whole turn uninterrupted, and review happens afterwards in the\n# Pending Changes panel (Accept = keep, Reject = revert the file). This\n# script\'s only job is to notify the plugin\'s local server of the change\n# (which reads the pre-edit file content for later revert) before the write\n# happens, then always let the write proceed.\n#\n# Always exits 0: a crashed/unreachable review server should never block\n# Claude from working, it just means that edit won\'t show up for review.\nset -u\n\nINPUT="$(cat)"\n\nif [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then\n  exit 0\nfi\n\ncurl -s -m 10 -o /dev/null \\\n  -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/review" \\\n  -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  --data-binary "$INPUT" 2>/dev/null \\\n  || echo "Terminus: could not reach review server -- proceeding without recording this change for review." >&2\n\nexit 0\n', executable: true },
-  { relativePath: "turn-end-bridge.sh", content: '#!/usr/bin/env bash\n# Stop hook bridge for the Terminus Obsidian plugin.\n#\n# Companion to hook-bridge.sh. That one fires per file write (PreToolUse) and\n# is what raises the "Claude is editing X" chip in the terminal\'s header; this\n# one fires once when Claude finishes its turn, and is what lowers it again.\n#\n# Without this, the chip has no end-of-turn signal to wait on and has to guess\n# with a timer -- which either drops it while Claude is still mid-turn (just\n# thinking, or running tools that aren\'t writes) or leaves it up long after the\n# turn is over. The Stop hook is that signal.\n#\n# Same environment contract as hook-bridge.sh: runs as a subprocess of the\n# shell inside a Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT and\n# TERMINUS_HOOK_TOKEN from it, and does nothing at all outside one.\n#\n# Always exits 0, and never writes anything to stdout: a Stop hook\'s stdout is\n# how a hook tells Claude Code to *block* stopping, and a status chip has no\n# business doing that. An unreachable review server just means the chip clears\n# on its own fallback timer instead.\nset -u\n\n# Claude Code writes the hook payload to stdin. Drained and discarded rather\n# than left unread -- nothing here needs it, and not reading it risks handing\n# the writer an EPIPE on a pipe no one ever consumed.\ncat >/dev/null\n\nif [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then\n  exit 0\nfi\n\ncurl -s -m 5 -o /dev/null \\\n  -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/turn-end" \\\n  -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \\\n  2>/dev/null\n\nexit 0\n', executable: true },
-  { relativePath: "notification-bridge.sh", content: '#!/usr/bin/env bash\n# Notification hook bridge for the Terminus Obsidian plugin.\n#\n# Companion to hook-bridge.sh/turn-end-bridge.sh. Claude Code fires its\n# Notification hook when it needs the user\'s permission to use a tool, or\n# when input has sat idle long enough that it\'s waiting on the user -- both\n# are exactly "this terminal needs attention" moments, so any firing of this\n# hook is treated as one, without needing to parse the message text. This is\n# what raises the blinking dot on the terminal\'s tab header; onTurnEnd (via\n# the Stop hook) and focusing the tab are what lower it again.\n#\n# Same environment contract as the other two bridges: runs as a subprocess of\n# the shell inside a Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT\n# and TERMINUS_HOOK_TOKEN from it, and does nothing at all outside one.\n#\n# Always exits 0, and never writes anything to stdout: like the Stop hook, a\n# Notification hook\'s stdout is how it would block Claude, and this has no\n# business doing that. An unreachable review server just means the dot never\n# lights up for this particular prompt.\nset -u\n\n# Claude Code writes the hook payload to stdin. Drained and discarded rather\n# than left unread -- nothing here needs it, and not reading it risks handing\n# the writer an EPIPE on a pipe no one ever consumed.\ncat >/dev/null\n\nif [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then\n  exit 0\nfi\n\ncurl -s -m 5 -o /dev/null \\\n  -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/notification" \\\n  -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \\\n  2>/dev/null\n\nexit 0\n', executable: true },
+  { relativePath: "turn-end-bridge.sh", content: '#!/usr/bin/env bash\n# Stop hook bridge for the Terminus Obsidian plugin.\n#\n# Companion to hook-bridge.sh. That one fires per file write (PreToolUse) and\n# is what raises the "Claude is editing X" chip in the terminal\'s header; this\n# one fires once when Claude finishes its turn, and is what lowers it again.\n#\n# Without this, the chip has no end-of-turn signal to wait on and has to guess\n# with a timer -- which either drops it while Claude is still mid-turn (just\n# thinking, or running tools that aren\'t writes) or leaves it up long after the\n# turn is over. The Stop hook is that signal.\n#\n# Same environment contract as hook-bridge.sh: runs as a subprocess of the\n# shell inside a Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT and\n# TERMINUS_HOOK_TOKEN from it, and does nothing at all outside one.\n#\n# Always exits 0, and never writes anything to stdout: a Stop hook\'s stdout is\n# how a hook tells Claude Code to *block* stopping, and a status chip has no\n# business doing that. An unreachable review server just means the chip clears\n# on its own fallback timer instead.\nset -u\n\n# Claude Code writes the hook payload to stdin. Forwarded as the request body\n# for the session status the Agent inbox shows (Stop\'s last_assistant_message).\n# The server still accepts an empty body, so an older copy of this script\n# that discards stdin keeps working.\nINPUT="$(cat)"\n\nif [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then\n  exit 0\nfi\n\ncurl -s -m 5 -o /dev/null \\\n  -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/turn-end" \\\n  -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  --data-binary "$INPUT" \\\n  2>/dev/null\n\nexit 0\n', executable: true },
+  { relativePath: "notification-bridge.sh", content: `#!/usr/bin/env bash
+# Notification hook bridge for the Terminus Obsidian plugin.
+#
+# Companion to hook-bridge.sh/turn-end-bridge.sh. Claude Code fires its
+# Notification hook when it needs the user's permission to use a tool, or
+# when input has sat idle long enough that it's waiting on the user -- both
+# are exactly "this terminal needs attention" moments, so any firing of this
+# hook is treated as one, without needing to parse the message text. This is
+# what raises the blinking dot on the terminal's tab header; onTurnEnd (via
+# the Stop hook) and focusing the tab are what lower it again.
+#
+# Same environment contract as the other two bridges: runs as a subprocess of
+# the shell inside a Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT
+# and TERMINUS_HOOK_TOKEN from it, and does nothing at all outside one.
+#
+# Always exits 0, and never writes anything to stdout: like the Stop hook, a
+# Notification hook's stdout is how it would block Claude, and this has no
+# business doing that. An unreachable review server just means the dot never
+# lights up for this particular prompt.
+set -u
+
+# Claude Code writes the hook payload to stdin. Forwarded as the request body
+# for the session status the Agent inbox shows (the notification's type (permission prompt vs. idle)).
+# The server still accepts an empty body, so an older copy of this script
+# that discards stdin keeps working.
+INPUT="$(cat)"
+
+if [ -z "\${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "\${TERMINUS_HOOK_PORT:-}" ]; then
+  exit 0
+fi
+
+curl -s -m 5 -o /dev/null \\
+  -X POST "http://127.0.0.1:\${TERMINUS_HOOK_PORT}/notification" \\
+  -H "Authorization: Bearer \${TERMINUS_HOOK_TOKEN}" \\
+  -H "Content-Type: application/json" \\
+  --data-binary "$INPUT" \\
+  2>/dev/null
+
+exit 0
+`, executable: true },
+  { relativePath: "session-event-bridge.sh", content: '#!/usr/bin/env bash\n# Session-event hook bridge for the Terminus Obsidian plugin.\n#\n# One bridge for the hooks the Multi-agent experience adds on top of the\n# three Classic ones: SessionStart, SessionEnd and UserPromptSubmit. Each\n# payload carries its own hook_event_name, so they share a script and a\n# route (/session-event) rather than one of each. Only installed while the\n# Multi-agent experience is selected (see provisionSettings.ts).\n#\n# Same environment contract as the other bridges: runs as a subprocess of\n# the shell inside a Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT\n# and TERMINUS_HOOK_TOKEN from it, and does nothing at all outside one.\n#\n# Always exits 0, and never writes anything to stdout: SessionStart\'s and\n# UserPromptSubmit\'s stdout is added to Claude\'s context, and a status\n# update has no business putting anything there. An unreachable review\n# server just means this one event goes unrecorded.\nset -u\n\nINPUT="$(cat)"\n\nif [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then\n  exit 0\nfi\n\ncurl -s -m 5 -o /dev/null \\\n  -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/session-event" \\\n  -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  --data-binary "$INPUT" \\\n  2>/dev/null\n\nexit 0\n', executable: true },
   { relativePath: "shell-integration/zsh/.zshenv", content: `# Terminus shell integration (zsh).
 #
 # We hijack ZDOTDIR so zsh looks here for .zshenv, which is the ONLY rc file
@@ -16484,6 +16577,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
           return;
         (_a9 = this.term) == null ? void 0 : _a9.focus();
         this.clearPendingAttention();
+        this.plugin.agentSessionStore.seen(this.token);
       })
     );
     this.commandTracker = new CommandTracker(this.term, (cmd) => this.handleCommandFinished(cmd));
@@ -16498,8 +16592,9 @@ var TerminalView = class extends import_obsidian7.ItemView {
     });
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload),
-      onTurnEnd: () => this.onTurnEnd(),
-      onNeedsAttention: () => this.onNeedsAttention()
+      onTurnEnd: (payload) => this.onTurnEnd(payload),
+      onNeedsAttention: (payload) => this.onNeedsAttention(payload),
+      onSessionEvent: (payload) => this.onSessionEvent(payload)
     });
     await this.startPty();
     this.wikiLinkAutocomplete = new WikiLinkAutocomplete({
@@ -16633,17 +16728,36 @@ var TerminalView = class extends import_obsidian7.ItemView {
    *  lands only once Claude has written its closing message, which is well
    *  past the debounced Pending Changes reveal the chip needs to outlast
    *  (see main.ts), so there's nothing left to stay up for. */
-  onTurnEnd() {
+  onTurnEnd(payload) {
     this.clearActivity();
     this.clearPendingAttention();
+    this.plugin.agentSessionStore.turnEnded(this.token, payload == null ? void 0 : payload.last_assistant_message, sessionIdentity(payload));
   }
   /** Fires from the Notification hook -- Claude needs this terminal's
    *  permission, or has been sitting idle waiting on input. Either way,
    *  this is the one signal that says "a human needs to look here", so any
    *  firing raises the dot regardless of which of the two it was. */
-  onNeedsAttention() {
+  onNeedsAttention(payload) {
     this.isPendingAttention = true;
     this.refreshPendingDot();
+    this.plugin.agentSessionStore.needsAttention(this.token, payload == null ? void 0 : payload.notification_type, sessionIdentity(payload));
+  }
+  /** SessionStart / SessionEnd / UserPromptSubmit -- only sent while the
+   *  Multi-agent experience has those hooks installed. */
+  onSessionEvent(payload) {
+    const store = this.plugin.agentSessionStore;
+    const identity = sessionIdentity(payload);
+    switch (payload.hook_event_name) {
+      case "SessionStart":
+        store.sessionStarted(this.token, identity);
+        break;
+      case "UserPromptSubmit":
+        store.promptSubmitted(this.token, identity);
+        break;
+      case "SessionEnd":
+        store.sessionEnded(this.token);
+        break;
+    }
   }
   clearPendingAttention() {
     if (!this.isPendingAttention)
@@ -16738,6 +16852,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     (_c2 = this.webglAddon) == null ? void 0 : _c2.dispose();
     this.webglAddon = null;
     this.plugin.reviewServer.unregister(this.token);
+    this.plugin.agentSessionStore.sessionEnded(this.token);
     (_d = this.pty) == null ? void 0 : _d.kill();
     (_e4 = this.commandTracker) == null ? void 0 : _e4.dispose();
     this.plugin.closedTerminals.push({
@@ -16918,6 +17033,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
       this.writeToTerminal(`\r
 [process exited${code !== null ? ` with code ${code}` : ""}]\r
 `);
+      this.plugin.agentSessionStore.sessionEnded(this.token);
     });
     this.pty.on("ready", () => {
       var _a9;
@@ -16987,6 +17103,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
   async onChangeApplied(payload) {
     const diff = await buildDiff(payload);
     this.noteActivity(diff.filePath);
+    this.plugin.agentSessionStore.fileEdited(this.token, diff.filePath, sessionIdentity(payload));
     this.plugin.pendingChangesStore.recordChange({
       payload,
       diff,
@@ -17012,6 +17129,11 @@ var TerminalView = class extends import_obsidian7.ItemView {
     this.plugin.pendingChangesStore.setBrokenBacklinks(absoluteFilePath, broken);
   }
 };
+function sessionIdentity(payload) {
+  if (!payload)
+    return {};
+  return { sessionId: payload.session_id, transcriptPath: payload.transcript_path, cwd: payload.cwd };
+}
 
 // src/views/PendingChangesView.ts
 var import_obsidian13 = require("obsidian");
@@ -18859,6 +18981,123 @@ var ActionLog = class {
   }
 };
 
+// src/state/AgentSessionStore.ts
+var MAX_MESSAGE_LENGTH = 500;
+var AgentSessionStore = class extends TypedEmitter {
+  constructor() {
+    super(...arguments);
+    this.sessions = /* @__PURE__ */ new Map();
+  }
+  get(token) {
+    return this.sessions.get(token);
+  }
+  list() {
+    return [...this.sessions.values()];
+  }
+  /** SessionStart. A new session id under the same terminal (/clear, or a
+   *  fresh `claude` after the last one exited) starts from a clean slate. */
+  sessionStarted(token, identity) {
+    const existing = this.sessions.get(token);
+    const isNewSession = !existing || !existing.running || identity.sessionId !== void 0 && identity.sessionId !== existing.sessionId;
+    const base = isNewSession ? this.blank(token) : existing;
+    this.update({ ...base, ...this.identityFields(base, identity), running: true, endedAt: null });
+  }
+  /** UserPromptSubmit: a turn starts. */
+  promptSubmitted(token, identity, at3 = Date.now()) {
+    const s15 = this.ensure(token, identity);
+    this.update({ ...s15, status: "working", needs: null, turnStartedAt: at3, currentFile: null });
+  }
+  /** PreToolUse on a file edit: Claude is working, so any permission prompt
+   *  it was waiting on has been answered. */
+  fileEdited(token, filePath, identity) {
+    var _a8;
+    const s15 = this.ensure(token, identity);
+    this.update({ ...s15, status: "working", needs: null, currentFile: filePath, turnStartedAt: (_a8 = s15.turnStartedAt) != null ? _a8 : Date.now() });
+  }
+  /** Stop: the turn is over. */
+  turnEnded(token, lastMessage, identity, at3 = Date.now()) {
+    const s15 = this.ensure(token, identity);
+    this.update({
+      ...s15,
+      status: "finished-unread",
+      needs: null,
+      currentFile: null,
+      lastMessage: lastMessage === void 0 ? s15.lastMessage : truncate(lastMessage),
+      lastTurnMs: s15.turnStartedAt === null ? s15.lastTurnMs : at3 - s15.turnStartedAt,
+      turnStartedAt: null
+    });
+  }
+  /** Notification: Claude needs permission or is waiting on input. */
+  needsAttention(token, notificationType, identity) {
+    const s15 = this.ensure(token, identity);
+    this.update({ ...s15, status: "needs-you", needs: needsKindOf(notificationType) });
+  }
+  /** The user looked at the terminal: a finished turn counts as read. A
+   *  session that needs you still does until Claude moves on. */
+  seen(token) {
+    const s15 = this.sessions.get(token);
+    if (!s15 || s15.status !== "finished-unread")
+      return;
+    this.update({ ...s15, status: "idle" });
+  }
+  /** SessionEnd, the shell exiting, or the terminal closing -- SessionEnd
+   *  alone can't be relied on, since a killed shell never sends it. */
+  sessionEnded(token, at3 = Date.now()) {
+    const s15 = this.sessions.get(token);
+    if (!s15 || !s15.running)
+      return;
+    this.update({ ...s15, running: false, status: "idle", needs: null, currentFile: null, turnStartedAt: null, endedAt: at3 });
+  }
+  /** Forgets a terminal entirely, for when nothing needs its record any more. */
+  remove(token) {
+    this.sessions.delete(token);
+  }
+  ensure(token, identity) {
+    const existing = this.sessions.get(token);
+    const base = existing && existing.running ? existing : this.blank(token);
+    return { ...base, ...this.identityFields(base, identity), running: true, endedAt: null };
+  }
+  identityFields(base, identity) {
+    var _a8, _b, _c2;
+    return {
+      sessionId: (_a8 = identity.sessionId) != null ? _a8 : base.sessionId,
+      transcriptPath: (_b = identity.transcriptPath) != null ? _b : base.transcriptPath,
+      cwd: (_c2 = identity.cwd) != null ? _c2 : base.cwd
+    };
+  }
+  blank(token) {
+    return {
+      token,
+      sessionId: null,
+      running: true,
+      status: "idle",
+      needs: null,
+      lastMessage: null,
+      turnStartedAt: null,
+      lastTurnMs: null,
+      currentFile: null,
+      transcriptPath: null,
+      cwd: null,
+      endedAt: null
+    };
+  }
+  update(session) {
+    this.sessions.set(session.token, session);
+    this.emit("change", session);
+  }
+};
+function needsKindOf(notificationType) {
+  if (notificationType === "permission_prompt")
+    return "permission";
+  if (notificationType === "idle_prompt")
+    return "input";
+  return null;
+}
+function truncate(text) {
+  const trimmed = text.trim();
+  return trimmed.length > MAX_MESSAGE_LENGTH ? `${trimmed.slice(0, MAX_MESSAGE_LENGTH - 1)}\u2026` : trimmed;
+}
+
 // src/state/ClosedTerminalBuffer.ts
 var MAX_CLOSED_TERMINALS = 10;
 var ClosedTerminalBuffer = class {
@@ -19570,6 +19809,8 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     super(...arguments);
     this.reviewServer = new ReviewServer();
     this.pendingChangesStore = new PendingChangesStore();
+    /** Each terminal's Claude session status, for the Agent inbox. */
+    this.agentSessionStore = new AgentSessionStore();
     this.closedTerminals = new ClosedTerminalBuffer();
     this.settings = DEFAULT_SETTINGS;
     this.python3Bin = null;
@@ -19611,14 +19852,7 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
       }, reveal.delayMs);
     });
     await this.reviewServer.start();
-    try {
-      await provisionClaudeSettings(this.app, this.manifest);
-    } catch (err) {
-      console.error("Terminus: failed to provision .claude/settings.local.json", err);
-      new import_obsidian19.Notice(
-        "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
-      );
-    }
+    await this.provisionHooks();
     this.registerEditorExtension([inlineDiffField, inlineDiffDecorations]);
     this.registerView(TERMINUS_VIEW_TYPE, (leaf) => new TerminalView(leaf, this));
     this.registerView(PENDING_CHANGES_VIEW_TYPE, (leaf) => new PendingChangesView(leaf, this));
@@ -19735,6 +19969,19 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
       return;
     this.settings.experience = experience;
     await this.saveSettings();
+    await this.provisionHooks();
+  }
+  /** Writes this experience's hooks into the vault's
+   *  .claude/settings.local.json; see provisionClaudeSettings. */
+  async provisionHooks() {
+    try {
+      await provisionClaudeSettings(this.app, this.manifest, this.experience);
+    } catch (err) {
+      console.error("Terminus: failed to provision .claude/settings.local.json", err);
+      new import_obsidian19.Notice(
+        "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
+      );
+    }
   }
   /** The active mode's auto-reveal settings. Until the Agent inbox exists,
    *  Multi-agent's reveal brings up Pending Changes like Classic's does. */

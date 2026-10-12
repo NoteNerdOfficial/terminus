@@ -10,6 +10,7 @@ import { PENDING_CHANGES_VIEW_TYPE, PendingChangesView } from "./views/PendingCh
 import { DIFF_SPLIT_VIEW_TYPE, DiffSplitView } from "./views/DiffSplitView";
 import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore";
 import { ActionLog } from "./state/ActionLog";
+import { AgentSessionStore } from "./state/AgentSessionStore";
 import { ClosedTerminalBuffer, ClosedTerminalEntry } from "./state/ClosedTerminalBuffer";
 import { ActionLogModal } from "./modals/ActionLogModal";
 import { ConfirmModal } from "./modals/ConfirmModal";
@@ -38,6 +39,8 @@ import {
 export default class TerminusPlugin extends Plugin {
   readonly reviewServer = new ReviewServer();
   readonly pendingChangesStore = new PendingChangesStore();
+  /** Each terminal's Claude session status, for the Agent inbox. */
+  readonly agentSessionStore = new AgentSessionStore();
   readonly closedTerminals = new ClosedTerminalBuffer();
   // Constructed in onload(), not as a field initializer: the log file path
   // depends on the vault base path, which needs `this.app` to be ready --
@@ -95,14 +98,7 @@ export default class TerminusPlugin extends Plugin {
 
     await this.reviewServer.start();
 
-    try {
-      await provisionClaudeSettings(this.app, this.manifest);
-    } catch (err) {
-      console.error("Terminus: failed to provision .claude/settings.local.json", err);
-      new Notice(
-        "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
-      );
-    }
+    await this.provisionHooks();
 
     this.registerEditorExtension([inlineDiffField, inlineDiffDecorations]);
 
@@ -234,6 +230,23 @@ export default class TerminusPlugin extends Plugin {
     if (experience === this.settings.experience) return;
     this.settings.experience = experience;
     await this.saveSettings();
+    // Adds or removes the Multi-agent-only hooks. Claude Code reads hooks
+    // when a session starts, so sessions already running keep the set they
+    // started with.
+    await this.provisionHooks();
+  }
+
+  /** Writes this experience's hooks into the vault's
+   *  .claude/settings.local.json; see provisionClaudeSettings. */
+  private async provisionHooks(): Promise<void> {
+    try {
+      await provisionClaudeSettings(this.app, this.manifest, this.experience);
+    } catch (err) {
+      console.error("Terminus: failed to provision .claude/settings.local.json", err);
+      new Notice(
+        "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
+      );
+    }
   }
 
   /** The active mode's auto-reveal settings. Until the Agent inbox exists,

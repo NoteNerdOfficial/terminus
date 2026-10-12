@@ -20,10 +20,11 @@
 # on its own fallback timer instead.
 set -u
 
-# Claude Code writes the hook payload to stdin. Drained and discarded rather
-# than left unread -- nothing here needs it, and not reading it risks handing
-# the writer an EPIPE on a pipe no one ever consumed.
-cat >/dev/null
+# Claude Code writes the hook payload to stdin. Forwarded as the request body
+# for the session status the Agent inbox shows (Stop's last_assistant_message).
+# The server still accepts an empty body, so an older copy of this script
+# that discards stdin keeps working.
+INPUT="$(cat)"
 
 if [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then
   exit 0
@@ -32,6 +33,8 @@ fi
 curl -s -m 5 -o /dev/null \
   -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/turn-end" \
   -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \
+  -H "Content-Type: application/json" \
+  --data-binary "$INPUT" \
   2>/dev/null
 
 exit 0
