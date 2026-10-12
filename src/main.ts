@@ -26,6 +26,7 @@ import {
   TerminusSettings,
   TerminalPlacement,
   TERMINAL_PLACEMENT_LABELS,
+  TERMINAL_OPEN_PLACEMENTS,
   CursorStyle,
 } from "./settings";
 
@@ -109,6 +110,13 @@ export default class TerminusPlugin extends Plugin {
       name: "Open",
       callback: () => void this.openTerminal(),
     });
+    for (const placement of TERMINAL_OPEN_PLACEMENTS) {
+      this.addCommand({
+        id: `open-${placement}`,
+        name: `Open in ${TERMINAL_PLACEMENT_LABELS[placement].toLowerCase()}`,
+        callback: () => void this.openTerminalAt(placement),
+      });
+    }
 
     this.addCommand({
       id: "open-pending-changes",
@@ -360,8 +368,7 @@ export default class TerminusPlugin extends Plugin {
 
   private showTerminalPlacementMenu(evt: MouseEvent): void {
     const menu = new Menu();
-    const placements: Exclude<TerminalPlacement, "ask">[] = ["tab", "split-right", "split-down", "window"];
-    for (const placement of placements) {
+    for (const placement of TERMINAL_OPEN_PLACEMENTS) {
       menu.addItem((item) =>
         item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => void this.openTerminalAt(placement))
       );

@@ -19079,6 +19079,7 @@ var TERMINAL_PLACEMENT_LABELS = {
   "split-down": "Split down",
   window: "New window"
 };
+var TERMINAL_OPEN_PLACEMENTS = ["tab", "split-right", "split-down", "window"];
 var CURSOR_STYLE_LABELS = {
   block: "Block",
   bar: "Bar",
@@ -19393,6 +19394,13 @@ var TerminusPlugin = class extends import_obsidian18.Plugin {
       name: "Open",
       callback: () => void this.openTerminal()
     });
+    for (const placement of TERMINAL_OPEN_PLACEMENTS) {
+      this.addCommand({
+        id: `open-${placement}`,
+        name: `Open in ${TERMINAL_PLACEMENT_LABELS[placement].toLowerCase()}`,
+        callback: () => void this.openTerminalAt(placement)
+      });
+    }
     this.addCommand({
       id: "open-pending-changes",
       name: "Open Pending Changes",
@@ -19619,8 +19627,7 @@ var TerminusPlugin = class extends import_obsidian18.Plugin {
   }
   showTerminalPlacementMenu(evt) {
     const menu = new import_obsidian18.Menu();
-    const placements = ["tab", "split-right", "split-down", "window"];
-    for (const placement of placements) {
+    for (const placement of TERMINAL_OPEN_PLACEMENTS) {
       menu.addItem(
         (item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => void this.openTerminalAt(placement))
       );

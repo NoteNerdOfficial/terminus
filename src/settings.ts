@@ -19,6 +19,10 @@ export const TERMINAL_PLACEMENT_LABELS: Record<TerminalPlacement, string> = {
   window: "New window",
 };
 
+/** Every concrete placement, in menu order -- shared by the ribbon's
+ *  "Always ask" menu and the per-placement palette commands. */
+export const TERMINAL_OPEN_PLACEMENTS: Exclude<TerminalPlacement, "ask">[] = ["tab", "split-right", "split-down", "window"];
+
 export type CursorStyle = "block" | "bar" | "underline";
 
 export const CURSOR_STYLE_LABELS: Record<CursorStyle, string> = {
