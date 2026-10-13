@@ -16,6 +16,11 @@ export class InboxUiState {
   readonly dismissed = new Set<string>();
   /** Cards whose "nothing to review" agents are unfolded. */
   readonly expandedQuiet = new Set<string>();
+  /** Folders folded in a long change list, by "token|agent|folder". */
+  readonly collapsedFolders = new Set<string>();
+  /** A card to bring into view on the next render: set by the sidebar's
+   *  "to review" counts, consumed by the inbox. */
+  revealToken: string | null = null;
   finishedCollapsed = false;
   elsewhereCollapsed = false;
   /** False: the inbox follows the sidebar's selected group. True: every session. */

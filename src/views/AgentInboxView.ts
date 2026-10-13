@@ -70,6 +70,19 @@ export class AgentInboxView extends ItemView {
     this.render();
   }
 
+  /** Brings the card the sidebar pointed at into view, unfolded, and marks
+   *  it for a moment. */
+  private revealRequested(container: HTMLElement): void {
+    const token = this.ui.revealToken;
+    if (!token) return;
+    this.ui.revealToken = null;
+    const card = container.querySelector<HTMLElement>(`.terminus-inbox-card[data-token="${CSS.escape(token)}"]`);
+    if (!card) return;
+    card.scrollIntoView({ block: "nearest" });
+    card.addClass("is-revealed");
+    window.setTimeout(() => card.removeClass("is-revealed"), 1500);
+  }
+
   private tickElapsed(): void {
     this.contentEl.querySelectorAll<HTMLElement>(".terminus-inbox-live-elapsed").forEach((el) => {
       el.setText(formatDuration(Date.now() - Number(el.dataset.since)));
@@ -180,6 +193,7 @@ export class AgentInboxView extends ItemView {
     }
 
     this.renderElsewhere(body, elsewhere);
+    this.revealRequested(container);
 
     const history = this.plugin.pendingChangesStore.listHistory();
     if (history.length > 0) renderHistorySection(this.rows, body, history);
@@ -379,6 +393,7 @@ export class AgentInboxView extends ItemView {
 
     const el = body.createDiv({ cls: "terminus-inbox-card" });
     el.toggleClass("is-needs-attention", needsAttention);
+    el.dataset.token = card.token;
     el.toggleClass("is-ended", card.ended);
     el.toggleClass("is-focused", card.token === this.focusedToken);
     const head = el.createDiv({ cls: "terminus-inbox-card-head" });
@@ -696,16 +711,77 @@ export class AgentInboxView extends ItemView {
   }
 
   /** `owner` is the agent the rows sit under (null: the lead); a file that
-   *  other agents in this session also edited says which. */
+   *  other agents in this session also edited says which. A long list over
+   *  several folders is grouped by folder, each foldable. */
   private renderChangeList(parent: HTMLElement, changes: PendingChange[], card: InboxCard, owner: string | null): void {
     if (changes.length === 0) return;
     const list = parent.createDiv({ cls: "terminus-pending-list" });
-    for (const change of changes) {
+    const row = (target: HTMLElement, change: PendingChange, hideFolder: boolean) => {
       const others = change.agents.filter((a) => a.token === card.token && a.agentId !== owner).map((a) => agentLabel(card, a.agentId, a.agentType));
-      renderChangeRow(this.rows, list, change, computeDiffStats(change.diff), { alsoEditedBy: others });
+      renderChangeRow(this.rows, target, change, computeDiffStats(change.diff), { alsoEditedBy: others, hideFolder });
+    };
+    const folders = changes.length >= TREE_MIN_FILES ? this.groupByFolder(changes) : null;
+    if (!folders || folders.length < 2) {
+      for (const change of changes) row(list, change, false);
+      return;
+    }
+
+    const keyOf = (folder: string) => `${card.token}|${owner ?? ""}|${folder}`;
+    const { added, removed } = sumStats(changes);
+    const allFolded = folders.every((f) => this.ui.collapsedFolders.has(keyOf(f.folder)));
+    const head = list.createDiv({ cls: "terminus-inbox-tree-head" });
+    head.createSpan({ text: `${changes.length} changed files` });
+    head.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
+    head.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
+    head.createDiv({ cls: "terminus-inbox-spacer" });
+    iconButton(head, allFolded ? "chevrons-up-down" : "chevrons-down-up", allFolded ? "Expand all folders" : "Collapse all folders", () => {
+      this.ui.userAction();
+      for (const f of folders) {
+        if (allFolded) this.ui.collapsedFolders.delete(keyOf(f.folder));
+        else this.ui.collapsedFolders.add(keyOf(f.folder));
+      }
+      this.render();
+    });
+
+    for (const { folder, changes: inFolder } of folders) {
+      const key = keyOf(folder);
+      const folded = this.ui.collapsedFolders.has(key);
+      const heading = list.createDiv({ cls: "terminus-inbox-folder" });
+      setIcon(heading.createSpan({ cls: "terminus-inbox-chevron" }), folded ? "chevron-right" : "chevron-down");
+      iconLabel(heading, "folder", folder || "Vault root", "terminus-inbox-folder-name");
+      heading.createSpan({ cls: "terminus-inbox-folder-count", text: String(inFolder.length) });
+      const toggle = () => {
+        this.ui.userAction();
+        if (folded) this.ui.collapsedFolders.delete(key);
+        else this.ui.collapsedFolders.add(key);
+        this.render();
+      };
+      heading.addEventListener("click", toggle);
+      makeActivatable(heading, toggle, () => undefined);
+      heading.setAttr("aria-expanded", String(!folded));
+      if (!folded) for (const change of inFolder) row(list, change, true);
     }
   }
+
+  /** The changes by folder, vault-relative (a file outside the vault by its
+   *  own folder), in the order each folder first appears. */
+  private groupByFolder(changes: PendingChange[]): Array<{ folder: string; changes: PendingChange[] }> {
+    const base = this.plugin.getVaultBasePath();
+    const byFolder = new Map<string, PendingChange[]>();
+    for (const change of changes) {
+      const relative = pathRelative(base, change.diff.filePath);
+      const path = relative.startsWith("..") ? change.diff.filePath : relative;
+      const folder = path.split("/").slice(0, -1).join("/");
+      const list = byFolder.get(folder) ?? [];
+      list.push(change);
+      byFolder.set(folder, list);
+    }
+    return [...byFolder].map(([folder, list]) => ({ folder, changes: list }));
+  }
 }
+
+/** A list this long, over several folders, is grouped by folder. */
+const TREE_MIN_FILES = 6;
 
 const COST_TITLE =
   "Estimated from Terminus's built-in API price table, not a bill. On a Claude subscription, usage counts against your plan instead.";

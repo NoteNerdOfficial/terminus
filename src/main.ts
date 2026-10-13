@@ -655,6 +655,29 @@ export default class TerminusPlugin extends Plugin {
     await workspace.revealLeaf(leaf);
   }
 
+  /** Shows the inbox with one session's card in view and unfolded, as when
+   *  the sidebar's "to review" count on its terminal is clicked. Selects the
+   *  terminal's group first (without taking the keyboard), since the inbox
+   *  follows it. */
+  async revealInboxCard(token: string): Promise<void> {
+    const groupId = this.findTerminalView(token)?.groupId ?? null;
+    if (groupId && this.groupStore.get(groupId) && groupId !== this.groupStore.activeGroupId) {
+      await this.groups.selectGroup(groupId, false);
+    }
+    this.inboxUi.userAction();
+    this.inboxUi.collapsedCards.delete(token);
+    this.inboxUi.revealToken = token;
+    await this.revealReviewView();
+    this.refreshTerminusViews();
+  }
+
+  /** Shows the inbox for a group, as when its "to review" summary is clicked. */
+  async revealInboxGroup(groupId: string): Promise<void> {
+    if (groupId !== this.groupStore.activeGroupId) await this.groups.selectGroup(groupId, false);
+    this.inboxUi.userAction();
+    await this.revealReviewView();
+  }
+
   /**
    * Re-reads a session's usage from its transcripts: the lead's, and each
    * subagent's that's running or hasn't had a read since it ended. Called

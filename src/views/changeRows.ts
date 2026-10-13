@@ -66,13 +66,14 @@ export async function runBulkAction(
 
 /** `alsoEditedBy`: the other agents in the same session that edited the
  *  file, named; the inbox lists a change under the agent that edited it
- *  first, and this says who else did. */
+ *  first, and this says who else did. `hideFolder`: the row sits under a
+ *  folder heading that already says where it is. */
 export function renderChangeRow(
   ctx: ChangeRowContext,
   list: HTMLElement,
   change: PendingChange,
   stats: { added: number; removed: number },
-  opts: { alsoEditedBy?: string[] } = {}
+  opts: { alsoEditedBy?: string[]; hideFolder?: boolean } = {}
 ): void {
   const row = list.createDiv({ cls: "terminus-pending-row" });
   const summary = row.createDiv({ cls: "terminus-pending-row-summary" });
@@ -106,7 +107,7 @@ export function renderChangeRow(
     // name above says it all), the full path for one outside the vault.
     const outside = relativePath.startsWith("..");
     const folder = outside ? change.diff.filePath : relativePath.split("/").slice(0, -1).join("/");
-    if (folder) info.createDiv({ cls: "terminus-pending-path", text: outside ? folder : `${folder}/`, attr: { title: change.diff.filePath } });
+    if (folder && !opts.hideFolder) info.createDiv({ cls: "terminus-pending-path", text: outside ? folder : `${folder}/`, attr: { title: change.diff.filePath } });
   }
   const warning = (cls: string, text: string) => {
     if (!inbox) {

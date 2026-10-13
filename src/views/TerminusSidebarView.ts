@@ -254,7 +254,7 @@ export class TerminusSidebarView extends ItemView {
     // reads at a glance; the summary after it says it in words.
     const rolled = rollUpStatus(members.map((t) => this.status(t)));
     if (rolled) row.createSpan({ cls: `terminus-sidebar-status terminus-sidebar-group-status is-${rolled}`, attr: { "aria-label": STATUS_LABELS[rolled] } });
-    this.renderGroupSummary(row, members, active);
+    this.renderGroupSummary(row, group.id, members, active);
 
     const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
     iconButton(actions, "plus", "New terminal in this group", () => void this.plugin.groups.newTerminal(group.id));
@@ -405,7 +405,12 @@ export class TerminusSidebarView extends ItemView {
     row.createSpan({ cls: "terminus-sidebar-terminal-name", text: view.getDisplayText() });
     const pending = this.plugin.pendingChangesStore.list().filter((c) => c.contributors[0]?.token === token).length;
     if (pending > 0) {
-      row.createSpan({ cls: "terminus-sidebar-pending", text: String(pending), attr: { "aria-label": `${pending} ${pending === 1 ? "change" : "changes"} to review` } });
+      const badge = row.createSpan({ cls: "terminus-sidebar-pending", text: String(pending), attr: { "aria-label": `${pending} ${pending === 1 ? "change" : "changes"} to review` } });
+      setTooltip(badge, "Review in the Agent inbox");
+      badge.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        void this.plugin.revealInboxCard(token);
+      });
     }
     const status = this.status(view);
     if (status) {
@@ -571,7 +576,7 @@ export class TerminusSidebarView extends ItemView {
    * "4 to review"; with none of those, "Showing" for the group on screen,
    * else when its last turn finished ("finished 5m ago").
    */
-  private renderGroupSummary(row: HTMLElement, members: TerminalView[], active: boolean): void {
+  private renderGroupSummary(row: HTMLElement, groupId: string, members: TerminalView[], active: boolean): void {
     const el = row.createSpan({ cls: "terminus-sidebar-group-state" });
     if (members.length === 0) {
       el.setText("No terminals");
@@ -585,7 +590,14 @@ export class TerminusSidebarView extends ItemView {
     const parts: HTMLElement[] = [];
     if (needs) parts.push(hint(el.createSpan({ cls: "is-needs-attention", text: "Needs attention" }), "A session here is waiting on you in its terminal"));
     if (working > 0) parts.push(hint(el.createSpan({ cls: "is-working", text: `${working} working` }), "Claude is mid-turn"));
-    if (pending > 0) parts.push(hint(el.createSpan({ text: `${pending} to review` }), "Changes waiting for Keep or Reject in the Agent inbox"));
+    if (pending > 0) {
+      const review = hint(el.createSpan({ cls: "is-review-link", text: `${pending} to review` }), "Open the Agent inbox for this group");
+      review.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        void this.plugin.revealInboxGroup(groupId);
+      });
+      parts.push(review);
+    }
     if (parts.length > 0) {
       // " · " between them, as separate nodes so each keeps its colour.
       parts.slice(1).forEach((part) => part.before(" · "));

@@ -2238,6 +2238,71 @@
   color: var(--text-faint);
 }
 
+/* A long change list, grouped by folder. */
+.terminus-inbox-tree-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 8px;
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  color: var(--text-muted);
+  background-color: var(--background-secondary);
+}
+
+.terminus-inbox-folder {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.terminus-inbox-folder:hover,
+.terminus-inbox-folder:focus-visible {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-inbox-folder-name {
+  display: inline-flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-inbox-folder-count {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The card a sidebar count pointed at. */
+.terminus-inbox-card.is-revealed {
+  box-shadow: 0 0 0 2px var(--interactive-accent);
+}
+
+.terminus-sidebar-pending {
+  cursor: pointer;
+}
+
+.terminus-sidebar-pending:hover,
+.terminus-sidebar-group-state .is-review-link:hover {
+  color: var(--text-accent);
+}
+
+.terminus-sidebar-group-state .is-review-link {
+  cursor: pointer;
+}
+
 .terminus-inbox-body {
   padding: 4px 8px 16px;
 }
