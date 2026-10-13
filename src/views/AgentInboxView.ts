@@ -44,6 +44,7 @@ export class AgentInboxView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.plugin.dedupeView(AGENT_INBOX_VIEW_TYPE);
     this.plugin.pendingChangesStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.feedbackStore.on("change", this.render);

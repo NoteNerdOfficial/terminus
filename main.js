@@ -16118,6 +16118,7 @@ function resolveAbsolutePath(ctx, path) {
   return (0, import_terminus_node_bridge11.pathJoin)((_b = ctx.getCwd()) != null ? _b : ctx.getVaultBasePath(), path);
 }
 async function openPathTarget(ctx, raw) {
+  var _a8;
   const { path, line } = parsePathTarget(raw);
   const absolute = resolveAbsolutePath(ctx, path);
   const relative = (0, import_terminus_node_bridge11.pathRelative)(ctx.getVaultBasePath(), absolute).replace(/\\/g, "/");
@@ -16126,6 +16127,7 @@ async function openPathTarget(ctx, raw) {
     if (file instanceof import_obsidian4.TFile) {
       const leaf = ctx.app.workspace.getLeaf("tab");
       await leaf.openFile(file, line === void 0 ? void 0 : { eState: { line: Math.max(0, line - 1) } });
+      (_a8 = ctx.onTabOpened) == null ? void 0 : _a8.call(ctx, leaf);
       return;
     }
   }
@@ -16687,7 +16689,8 @@ var TerminalView = class extends import_obsidian7.ItemView {
         var _a9, _b2;
         return (_b2 = (_a9 = this.cwdTracker) == null ? void 0 : _a9.getCwd()) != null ? _b2 : this.restoredCwd;
       },
-      getVaultBasePath: () => this.plugin.getVaultBasePath()
+      getVaultBasePath: () => this.plugin.getVaultBasePath(),
+      onTabOpened: (leaf) => this.plugin.addTabToGroup(leaf, this.groupIdValue)
     });
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload),
@@ -17004,6 +17007,31 @@ var TerminalView = class extends import_obsidian7.ItemView {
    *  pending changes to this terminal. */
   get hookToken() {
     return this.token;
+  }
+  /** The tab's right-click and ⋯ menus get "Move to group" (Multi-agent). */
+  onPaneMenu(menu, source) {
+    super.onPaneMenu(menu, source);
+    if (this.plugin.experience !== "multi-agent")
+      return;
+    menu.addSeparator();
+    for (const group of this.plugin.groupStore.list()) {
+      menu.addItem(
+        (item) => item.setTitle(`Move to ${group.name}`).setIcon("folder-input").setChecked(this.groupIdValue === group.id).onClick(() => this.plugin.groups.moveTerminals([this], group.id))
+      );
+    }
+    if (this.groupIdValue) {
+      menu.addItem(
+        (item) => item.setTitle("Take out of its group").setIcon("folder-output").onClick(() => this.plugin.groups.moveTerminals([this], null))
+      );
+    }
+    menu.addItem(
+      (item) => item.setTitle("Move to a new group").setIcon("folder-plus").onClick(() => {
+        void this.plugin.groups.createGroup([this]).then(async (group) => {
+          var _a8;
+          return (_a8 = await this.plugin.revealSidebar()) == null ? void 0 : _a8.startRename(group.id);
+        });
+      })
+    );
   }
   /** Its own colour tag, else its group's (Multi-agent). */
   get effectiveColor() {
@@ -18320,6 +18348,7 @@ async function confirmCollisionReject(app, changes, scope = "file") {
 
 // src/editor/openWithDiff.ts
 async function openChangedFile(plugin, change) {
+  var _a8, _b, _c2;
   const { app } = plugin;
   const relPath = (0, import_terminus_node_bridge15.pathRelative)(plugin.getVaultBasePath(), change.diff.filePath);
   const file = relPath.startsWith("..") ? null : app.vault.getAbstractFileByPath(relPath);
@@ -18330,6 +18359,8 @@ async function openChangedFile(plugin, change) {
   const leaf = app.workspace.getLeaf(true);
   const firstHunkLine = findFirstHunkLine(change);
   await leaf.openFile(file, firstHunkLine === null ? void 0 : { eState: { line: firstHunkLine } });
+  const owner = (_a8 = change.contributors[0]) == null ? void 0 : _a8.token;
+  plugin.addTabToGroup(leaf, owner ? (_c2 = (_b = plugin.findTerminalView(owner)) == null ? void 0 : _b.groupId) != null ? _c2 : null : null);
   const view = leaf.view;
   if (!(view instanceof import_obsidian9.MarkdownView))
     return;
@@ -18341,8 +18372,8 @@ async function openChangedFile(plugin, change) {
     cm.dispatch({ effects: setInlineDiff.of(null) });
   });
   const resolve = async (accepted) => {
-    var _a8;
-    const current = (_a8 = store.get(change.id)) != null ? _a8 : change;
+    var _a9;
+    const current = (_a9 = store.get(change.id)) != null ? _a9 : change;
     if (!accepted && !await confirmCollisionReject(plugin.app, [current]))
       return;
     store.resolveItem(change.id, accepted).catch((err) => {
@@ -18531,14 +18562,14 @@ function renderCommentBox(bar, key, hunk, change, comments, lines, resolve) {
     comments.drafts.delete(key);
     box.remove();
   };
-  const queue = (rejected) => comments.feedback.add({
+  const queue = (rejected, comment) => comments.feedback.add({
     token: comments.token,
     terminalLabel: comments.terminalLabel,
     filePath: change.diff.filePath,
     oldLines: lines.oldLines,
     newLines: lines.newLines,
     excerpt: hunk.newValue || hunk.oldValue,
-    comment: input.value.trim(),
+    comment,
     rejected
   });
   const actions = box.createDiv({ cls: "terminus-split-diff-comment-actions" });
@@ -18553,10 +18584,11 @@ function renderCommentBox(bar, key, hunk, change, comments, lines, resolve) {
   input.addEventListener("input", refresh);
   refresh();
   addButton.addEventListener("click", () => {
-    if (input.value.trim() === "")
+    const comment = input.value.trim();
+    if (comment === "")
       return;
-    queue(false);
     close();
+    queue(false, comment);
   });
   rejectButton.addEventListener("click", () => {
     if (input.value.trim() === "")
@@ -18567,8 +18599,9 @@ function renderCommentBox(bar, key, hunk, change, comments, lines, resolve) {
         comments.open.add(key);
         return;
       }
-      queue(true);
+      const comment = input.value.trim();
       close();
+      queue(true, comment);
     })();
   });
   input.focus();
@@ -18664,6 +18697,14 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
   getViewType() {
     return DIFF_SPLIT_VIEW_TYPE;
   }
+  /** The terminal (hook token) that made the change shown here: Split Diff
+   *  belongs to that terminal's group (see TabVisibility). */
+  shownChangeOwner() {
+    var _a8, _b, _c2;
+    if (!this.changeId)
+      return null;
+    return (_c2 = (_b = (_a8 = this.plugin.pendingChangesStore.get(this.changeId)) == null ? void 0 : _a8.contributors[0]) == null ? void 0 : _b.token) != null ? _c2 : null;
+  }
   getDisplayText() {
     return this.changeId ? `Diff: ${(0, import_terminus_node_bridge17.pathBasename)(this.changeId)}` : "Split Diff";
   }
@@ -18675,6 +18716,7 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
     this.changeId = (_a8 = state == null ? void 0 : state.changeId) != null ? _a8 : null;
     await super.setState(state, result);
     this.render();
+    this.plugin.revealGroupOf(this.leaf);
   }
   getState() {
     var _a8;
@@ -18990,6 +19032,7 @@ var PendingChangesView = class extends import_obsidian14.ItemView {
     return "diff";
   }
   async onOpen() {
+    this.plugin.dedupeView(PENDING_CHANGES_VIEW_TYPE);
     this.plugin.pendingChangesStore.on("change", this.render);
     this.render();
   }
@@ -19424,6 +19467,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     return "inbox";
   }
   async onOpen() {
+    this.plugin.dedupeView(AGENT_INBOX_VIEW_TYPE);
     this.plugin.pendingChangesStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.feedbackStore.on("change", this.render);
@@ -19868,22 +19912,25 @@ var TerminusSidebarView = class extends import_obsidian17.ItemView {
     this.renamingGroupId = null;
     /** The terminal token or group id whose × is asking "Close anyway?". */
     this.confirmingClose = null;
+    /** Emptying the view blurs a focused rename field, whose handler renders
+     *  again; a render asked for mid-render waits until this one is done. */
+    this.rendering = false;
+    this.renderQueued = false;
     this.render = () => {
-      const container = this.contentEl;
-      container.empty();
-      container.addClass("terminus-sidebar");
-      const groups = this.plugin.groupStore.list();
-      const terminals = this.plugin.groups.terminals();
-      const live = new Set(terminals.map((t) => t.hookToken));
-      for (const token of this.selected)
-        if (!live.has(token))
-          this.selected.delete(token);
-      this.renderHeader(container, terminals);
-      const list = container.createDiv({ cls: "terminus-sidebar-list" });
-      for (const group of groups)
-        this.renderGroup(list, group, terminals.filter((t) => t.groupId === group.id));
-      this.renderUngrouped(list, terminals.filter((t) => !t.groupId || !this.plugin.groupStore.get(t.groupId)));
-      refreshTabPendingDot(this.leaf, terminals.some((t) => this.status(t) === "needs-attention"));
+      if (this.rendering) {
+        this.renderQueued = true;
+        return;
+      }
+      this.rendering = true;
+      try {
+        this.renderNow();
+      } finally {
+        this.rendering = false;
+      }
+      if (this.renderQueued) {
+        this.renderQueued = false;
+        window.setTimeout(this.render, 0);
+      }
     };
   }
   getViewType() {
@@ -19896,6 +19943,7 @@ var TerminusSidebarView = class extends import_obsidian17.ItemView {
     return this.plugin.settings.ribbonIcon;
   }
   async onOpen() {
+    this.plugin.dedupeView(TERMINUS_SIDEBAR_VIEW_TYPE);
     this.plugin.groupStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.pendingChangesStore.on("change", this.render);
@@ -19912,6 +19960,23 @@ var TerminusSidebarView = class extends import_obsidian17.ItemView {
   startRename(groupId) {
     this.renamingGroupId = groupId;
     this.render();
+  }
+  renderNow() {
+    const container = this.contentEl;
+    container.empty();
+    container.addClass("terminus-sidebar");
+    const groups = this.plugin.groupStore.list();
+    const terminals = this.plugin.groups.terminals();
+    const live = new Set(terminals.map((t) => t.hookToken));
+    for (const token of this.selected)
+      if (!live.has(token))
+        this.selected.delete(token);
+    this.renderHeader(container, terminals);
+    const list = container.createDiv({ cls: "terminus-sidebar-list" });
+    for (const group of groups)
+      this.renderGroup(list, group, terminals.filter((t) => t.groupId === group.id));
+    this.renderUngrouped(list, terminals.filter((t) => !t.groupId || !this.plugin.groupStore.get(t.groupId)));
+    refreshTabPendingDot(this.leaf, terminals.some((t) => this.status(t) === "needs-attention"));
   }
   renderHeader(container, terminals) {
     const header = container.createDiv({ cls: "terminus-sidebar-header" });
@@ -19985,7 +20050,7 @@ var TerminusSidebarView = class extends import_obsidian17.ItemView {
       row.createSpan({ cls: "terminus-sidebar-attention", attr: { "aria-label": "Needs attention" } });
     row.createSpan({
       cls: "terminus-sidebar-group-state",
-      text: active ? "Showing" : `${members.length} in background`
+      text: members.length === 0 ? "No terminals" : active ? "Showing" : `${members.length} in background`
     });
     const add = row.createEl("button", { cls: "terminus-sidebar-icon-btn", text: "\uFF0B" });
     (0, import_obsidian17.setTooltip)(add, "New terminal in this group");
@@ -20020,7 +20085,10 @@ var TerminusSidebarView = class extends import_obsidian17.ItemView {
       else if (evt.key === "Escape")
         finish(false);
     });
-    input.addEventListener("blur", () => finish(true));
+    input.addEventListener("blur", () => {
+      if (!this.rendering && input.isConnected)
+        finish(true);
+    });
     window.setTimeout(() => {
       input.focus();
       input.select();
@@ -20423,21 +20491,22 @@ var GroupController = class {
   /**
    * A new group. With `terminals`, they move into it; without, it starts
    * with a new terminal, since a group is never empty. Either way it becomes
-   * the selected group.
+   * the selected group. Nothing takes the keyboard: the caller usually puts
+   * the group's name into a rename field next.
    */
   async createGroup(terminals = []) {
     const group = this.store.create();
     if (terminals.length > 0) {
       this.moveTerminals(terminals, group.id);
     } else {
-      await this.newTerminal(group.id);
+      await this.newTerminal(group.id, false);
     }
-    await this.selectGroup(group.id);
+    await this.selectGroup(group.id, false);
     return group;
   }
   /** A new terminal in a group (starting in its folder, next to the
    *  terminal last used there) or ungrouped. */
-  async newTerminal(target) {
+  async newTerminal(target, focus = true) {
     var _a8, _b;
     const { workspace } = this.plugin.app;
     const group = this.store.get(target);
@@ -20448,10 +20517,11 @@ var GroupController = class {
     const leaf = workspace.getLeaf("tab");
     await leaf.setViewState({
       type: TERMINUS_VIEW_TYPE,
-      active: true,
+      active: focus,
       state: { groupId: group == null ? void 0 : group.id, cwd: (_b = group == null ? void 0 : group.folder) != null ? _b : void 0 }
     });
     await workspace.revealLeaf(leaf);
+    this.plugin.applyGroupVisibility();
     return leaf.view instanceof TerminalView ? leaf.view : null;
   }
   /** Moves terminals into a group or out of all of them, then removes any
@@ -20460,6 +20530,8 @@ var GroupController = class {
     for (const view of terminals)
       view.setGroup(target);
     this.removeEmptyGroups();
+    this.plugin.applyGroupVisibility();
+    this.plugin.refreshTerminusViews();
   }
   /** Groups with no terminals left go: a group is never empty. */
   removeEmptyGroups() {
@@ -20469,8 +20541,9 @@ var GroupController = class {
         this.store.remove(group.id);
     }
   }
-  /** Selects a group and brings back the terminal last used in it. */
-  async selectGroup(target) {
+  /** Selects a group and brings back the terminal last used in it, giving
+   *  it the keyboard unless `focus` is false. */
+  async selectGroup(target, focus = true) {
     var _a8;
     this.store.setActive(target);
     if (!target)
@@ -20482,7 +20555,8 @@ var GroupController = class {
     if (!leaf)
       return;
     await workspace.revealLeaf(leaf);
-    workspace.setActiveLeaf(leaf, { focus: true });
+    if (focus)
+      workspace.setActiveLeaf(leaf, { focus: true });
   }
   /** Opening a terminal from another group (its row, an inbox card, Next,
    *  or plain tab navigation) switches to that group; and the group
@@ -20545,6 +20619,82 @@ var GroupSuggestModal = class extends import_obsidian18.SuggestModal {
   }
   onChooseSuggestion(option) {
     this.onPick(option.choice);
+  }
+};
+
+// src/groups/TabVisibility.ts
+var HIDDEN_TAB = "terminus-hidden-tab";
+var HIDDEN_PANE = "terminus-hidden-pane";
+var TabVisibility = class {
+  constructor(plugin) {
+    this.plugin = plugin;
+  }
+  /** The group a tab belongs to, or null for a tab shown in every group. */
+  groupOf(leaf) {
+    var _a8;
+    const store = this.plugin.groupStore;
+    const view = leaf.view;
+    if (view instanceof TerminalView)
+      return store.get(view.groupId) ? view.groupId : null;
+    if (view instanceof DiffSplitView) {
+      const owner = view.shownChangeOwner();
+      const terminal = owner ? this.plugin.findTerminalView(owner) : null;
+      if ((terminal == null ? void 0 : terminal.groupId) && store.get(terminal.groupId))
+        return terminal.groupId;
+    }
+    const id = leaf.id;
+    return id ? (_a8 = store.tabGroup(id)) != null ? _a8 : null : null;
+  }
+  apply() {
+    const enabled = this.plugin.experience === "multi-agent";
+    const active = this.plugin.groupStore.activeGroupId;
+    const panes = /* @__PURE__ */ new Set();
+    this.plugin.app.workspace.iterateAllLeaves((leaf) => {
+      var _a8;
+      if (!this.inEditorArea(leaf))
+        return;
+      const group = enabled ? this.groupOf(leaf) : null;
+      const hidden = group !== null && group !== active;
+      (_a8 = leaf.tabHeaderEl) == null ? void 0 : _a8.toggleClass(HIDDEN_TAB, hidden);
+      const parent = leaf.parent;
+      if (parent)
+        panes.add(parent);
+    });
+    for (const pane of panes)
+      this.applyToPane(pane);
+  }
+  /** A tab is hidden when its header carries the class (set by apply). */
+  isHidden(leaf) {
+    var _a8, _b;
+    return (_b = (_a8 = leaf.tabHeaderEl) == null ? void 0 : _a8.hasClass(HIDDEN_TAB)) != null ? _b : false;
+  }
+  /** Collapses a pane with nothing visible, and moves a pane off a tab that
+   *  just got hidden onto one that's showing. */
+  applyToPane(pane) {
+    var _a8, _b;
+    const children = (_a8 = pane.children) != null ? _a8 : [];
+    const visible = children.filter((leaf) => !this.isHidden(leaf));
+    (_b = pane.containerEl) == null ? void 0 : _b.toggleClass(HIDDEN_PANE, children.length > 0 && visible.length === 0);
+    const current = typeof pane.currentTab === "number" ? children[pane.currentTab] : void 0;
+    const next = visible[0];
+    if (!current || !this.isHidden(current) || !next)
+      return;
+    if (pane.selectTab)
+      pane.selectTab(next);
+    else if (pane.selectTabIndex)
+      pane.selectTabIndex(children.indexOf(next));
+  }
+  /** The editor area and pop-out windows, not the sidebars. */
+  inEditorArea(leaf) {
+    const { workspace } = this.plugin.app;
+    const root = leaf.getRoot();
+    return root !== workspace.leftSplit && root !== workspace.rightSplit;
+  }
+  /** How many terminals are in groups other than the selected one, for the
+   *  status bar's "N in other groups". */
+  hiddenTerminalCount() {
+    const active = this.plugin.groupStore.activeGroupId;
+    return this.plugin.groups.terminals().filter((t) => t.groupId && this.plugin.groupStore.get(t.groupId) && t.groupId !== active).length;
   }
 };
 
@@ -21898,6 +22048,8 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
     /** Review comments queued per session (Multi-agent only). */
     this.feedbackStore = new FeedbackStore();
     this.groups = new GroupController(this);
+    this.tabs = new TabVisibility(this);
+    this.groupStatusEl = null;
     /** Latest release on GitHub, once checked (Multi-agent only). */
     this.latestPluginVersion = null;
     /** Set first thing in onunload: views closing then aren't the user
@@ -21965,6 +22117,28 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
           this.groups.onActiveLeaf(leaf);
       })
     );
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        if (this.experience === "multi-agent")
+          void this.groups.loadDeferredTerminals();
+        this.applyGroupVisibility();
+      })
+    );
+    this.groupStore.on("change", () => this.applyGroupVisibility());
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, _file, source, leaf) => {
+        if (source === "tab-header" && leaf)
+          this.addGroupMenuItems(menu, leaf);
+      })
+    );
+    this.groupStatusEl = this.addStatusBarItem();
+    this.groupStatusEl.addClass("terminus-group-status", "mod-clickable");
+    this.groupStatusEl.addEventListener("click", () => {
+      new GroupSuggestModal(this, "Switch to group", false, (choice) => {
+        if (choice.kind === "group")
+          void this.groups.selectGroup(choice.target);
+      }).open();
+    });
     this.registerInterval(window.setInterval(() => void this.checkPluginVersion(), 12 * 60 * 60 * 1e3));
     this.ribbonIconEl = this.addRibbonIcon(this.settings.ribbonIcon, "Open Terminus", (evt) => {
       void this.openTerminal(evt);
@@ -22049,6 +22223,22 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
             } else {
               this.groups.moveTerminals([view], choice.target);
             }
+          }).open();
+        }
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "add-tab-to-group",
+      name: "Add current tab to group\u2026",
+      checkCallback: (checking) => {
+        const leaf = this.app.workspace.getMostRecentLeaf();
+        if (this.experience !== "multi-agent" || !leaf || leaf.view instanceof TerminalView || this.groupStore.list().length === 0)
+          return false;
+        if (!checking) {
+          new GroupSuggestModal(this, "Add this tab to", false, (choice) => {
+            if (choice.kind === "group")
+              this.addTabToGroup(leaf, choice.target, true);
           }).open();
         }
         return true;
@@ -22190,18 +22380,26 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
     if (this.experience === "multi-agent") {
       await this.startMultiAgentViews();
     } else {
-      for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_SIDEBAR_VIEW_TYPE))
+      for (const leaf of this.leavesOfType(TERMINUS_SIDEBAR_VIEW_TYPE))
         leaf.detach();
     }
     for (const view of this.groups.terminals())
       view.refreshGroupColor();
+    this.applyGroupVisibility();
   }
-  /** Multi-agent's left sidebar, with every terminal loaded so its group is
-   *  known, groups emptied while Classic was selected removed, and the
-   *  version check that the sidebar's header shows. */
+  /**
+   * Multi-agent's left sidebar, with every terminal loaded so its group is
+   * known, and the version check that the sidebar's header shows.
+   *
+   * Empty groups aren't tidied here: when the plugin is enabled, Obsidian
+   * re-creates Terminus's views only after this runs, so every group would
+   * look empty (seen in 1.14.4). A group emptied while Classic was selected
+   * stays, shown as having no terminals, until its × removes it.
+   */
   async startMultiAgentViews() {
     await this.groups.loadDeferredTerminals();
-    this.groups.removeEmptyGroups();
+    this.groupStore.pruneTabs(this.liveLeafIds());
+    this.applyGroupVisibility();
     for (const view of this.groups.terminals())
       view.refreshGroupColor();
     await this.revealSidebar(false);
@@ -22209,9 +22407,8 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
   }
   /** Opens the Terminus sidebar in the left sidebar if it isn't open. */
   async revealSidebar(focus = true) {
-    var _a8;
     const { workspace } = this.app;
-    let leaf = (_a8 = workspace.getLeavesOfType(TERMINUS_SIDEBAR_VIEW_TYPE)[0]) != null ? _a8 : null;
+    let leaf = this.singleLeafOfType(TERMINUS_SIDEBAR_VIEW_TYPE);
     if (!leaf) {
       leaf = workspace.getLeftLeaf(false);
       if (!leaf)
@@ -22237,6 +22434,82 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
       this.refreshTerminusViews();
     }
   }
+  /** Shows the selected group's tabs and hides other groups' (or, outside
+   *  Multi-agent, shows everything), and updates the status bar. */
+  applyGroupVisibility() {
+    this.tabs.apply();
+    this.refreshGroupStatus();
+  }
+  /** "⧉ Auth rotation · 4 in other groups" in the status bar; click to
+   *  switch. Empty outside Multi-agent or with no groups. */
+  refreshGroupStatus() {
+    var _a8;
+    const el2 = this.groupStatusEl;
+    if (!el2)
+      return;
+    const groups = this.experience === "multi-agent" ? this.groupStore.list() : [];
+    el2.toggle(groups.length > 0);
+    if (groups.length === 0)
+      return;
+    const active = this.groupStore.get(this.groupStore.activeGroupId);
+    const hidden = this.tabs.hiddenTerminalCount();
+    el2.setText(`\u29C9 ${(_a8 = active == null ? void 0 : active.name) != null ? _a8 : "No group"}${hidden > 0 ? ` \xB7 ${hidden} in other groups` : ""}`);
+    el2.setAttr("aria-label", "Switch group");
+  }
+  /**
+   * Puts a non-terminal tab in a group (null: back in every group). With
+   * `stay` false the tab came from a group's terminal or card, so that
+   * group is selected and the tab the user just opened stays in view.
+   */
+  addTabToGroup(leaf, groupId, stay = false) {
+    if (this.experience !== "multi-agent")
+      return;
+    const leafId = leaf.id;
+    if (!leafId || !groupId && !stay)
+      return;
+    this.groupStore.setTabGroup(leafId, groupId);
+    if (!stay)
+      this.revealGroupOf(leaf);
+  }
+  /** Selects the group a tab belongs to, if it's another one. */
+  revealGroupOf(leaf) {
+    if (this.experience !== "multi-agent")
+      return;
+    const group = this.tabs.groupOf(leaf);
+    if (group && group !== this.groupStore.activeGroupId)
+      this.groupStore.setActive(group);
+    else
+      this.applyGroupVisibility();
+  }
+  /** "Add to group" / "Show in every group" for a tab's right-click menu. */
+  addGroupMenuItems(menu, leaf) {
+    if (this.experience !== "multi-agent")
+      return;
+    const leafId = leaf.id;
+    if (!leafId)
+      return;
+    const current = this.groupStore.tabGroup(leafId);
+    menu.addSeparator();
+    for (const group of this.groupStore.list()) {
+      menu.addItem(
+        (item) => item.setTitle(`Add to ${group.name}`).setIcon("folder-plus").setChecked(current === group.id).onClick(() => this.addTabToGroup(leaf, group.id, true))
+      );
+    }
+    if (current) {
+      menu.addItem(
+        (item) => item.setTitle("Show in every group").setIcon("folder-minus").onClick(() => this.addTabToGroup(leaf, null, true))
+      );
+    }
+  }
+  liveLeafIds() {
+    const ids = /* @__PURE__ */ new Set();
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const id = leaf.id;
+      if (id)
+        ids.add(id);
+    });
+    return ids;
+  }
   setGroupColor(groupId, color) {
     this.groupStore.setColor(groupId, color);
     for (const view of this.groups.terminalsIn(groupId))
@@ -22258,7 +22531,7 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
    *  nothing is lost either way. */
   async swapReviewView() {
     const stale = this.experience === "multi-agent" ? PENDING_CHANGES_VIEW_TYPE : AGENT_INBOX_VIEW_TYPE;
-    const [first, ...rest] = this.app.workspace.getLeavesOfType(stale);
+    const [first, ...rest] = this.leavesOfType(stale);
     if (!first)
       return;
     for (const leaf of rest)
@@ -22426,6 +22699,34 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
   getPluginDir() {
     return (0, import_terminus_node_bridge27.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
+  /**
+   * Every leaf of a view type, including ones Obsidian hasn't loaded yet
+   * (background sidebar tabs restored at startup), which getLeavesOfType
+   * leaves out -- missing those made each startup open another copy of
+   * the sidebar views. Compares the view's type rather than calling
+   * getViewState(), which on a terminal serializes its whole scrollback.
+   */
+  leavesOfType(type) {
+    const leaves = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf.view.getViewType() === type)
+        leaves.push(leaf);
+    });
+    return leaves;
+  }
+  /** Called by each sidebar view as it opens: when the plugin is enabled
+   *  (or updated), Obsidian restores its views only after onload, so the
+   *  startup reveal can't see them and opens another; this closes it. */
+  dedupeView(type) {
+    window.setTimeout(() => this.singleLeafOfType(type), 0);
+  }
+  /** The one leaf of a sidebar view type, closing any duplicates. */
+  singleLeafOfType(type) {
+    const [first, ...duplicates] = this.leavesOfType(type);
+    for (const leaf of duplicates)
+      leaf.detach();
+    return first != null ? first : null;
+  }
   /** Pending Changes in Classic, the Agent inbox in Multi-agent. */
   get reviewViewType() {
     return this.experience === "multi-agent" ? AGENT_INBOX_VIEW_TYPE : PENDING_CHANGES_VIEW_TYPE;
@@ -22433,12 +22734,12 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
   /** Reveals the active experience's review view, opening it in the right
    *  sidebar if it isn't open. */
   async revealReviewView() {
-    var _a8, _b;
+    var _a8;
     const { workspace } = this.app;
     const type = this.reviewViewType;
-    let leaf = (_a8 = workspace.getLeavesOfType(type)[0]) != null ? _a8 : null;
+    let leaf = this.singleLeafOfType(type);
     if (!leaf) {
-      leaf = (_b = workspace.getRightLeaf(false)) != null ? _b : workspace.getLeaf("tab");
+      leaf = (_a8 = workspace.getRightLeaf(false)) != null ? _a8 : workspace.getLeaf("tab");
       await leaf.setViewState({ type, active: true });
     }
     await workspace.revealLeaf(leaf);

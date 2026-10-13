@@ -238,7 +238,9 @@ function renderCommentBox(
     comments.drafts.delete(key);
     box.remove();
   };
-  const queue = (rejected: boolean) =>
+  // Queuing re-renders the view, which rebuilds any box still marked open:
+  // callers close() first, so the comment text is read here, not from it.
+  const queue = (rejected: boolean, comment: string) =>
     comments.feedback.add({
       token: comments.token,
       terminalLabel: comments.terminalLabel,
@@ -246,7 +248,7 @@ function renderCommentBox(
       oldLines: lines.oldLines,
       newLines: lines.newLines,
       excerpt: hunk.newValue || hunk.oldValue,
-      comment: input.value.trim(),
+      comment,
       rejected,
     });
 
@@ -263,9 +265,10 @@ function renderCommentBox(
   refresh();
 
   addButton.addEventListener("click", () => {
-    if (input.value.trim() === "") return;
-    queue(false);
+    const comment = input.value.trim();
+    if (comment === "") return;
     close();
+    queue(false, comment);
   });
   rejectButton.addEventListener("click", () => {
     if (input.value.trim() === "") return;
@@ -279,8 +282,9 @@ function renderCommentBox(
         comments.open.add(key);
         return;
       }
-      queue(true);
+      const comment = input.value.trim();
       close();
+      queue(true, comment);
     })();
   });
   input.focus();

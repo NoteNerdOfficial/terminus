@@ -1,4 +1,4 @@
-import { App, Notice, Platform, TFile } from "obsidian";
+import { App, Notice, Platform, TFile, WorkspaceLeaf } from "obsidian";
 import { IBufferRange, IDisposable, ILink, Terminal } from "@xterm/xterm";
 import { fileExistsSync, getEnvVar, pathJoin, pathRelative } from "terminus-node-bridge";
 import { openWithSystemDefaultApp } from "../util/systemOpen";
@@ -9,6 +9,9 @@ export interface TerminalLinkContext {
    *  arrives -- relative paths fall back to the vault root in that case. */
   getCwd(): string | null;
   getVaultBasePath(): string;
+  /** A note tab this terminal just opened, so it can join the terminal's
+   *  group (Multi-agent). */
+  onTabOpened?: (leaf: WorkspaceLeaf) => void;
 }
 
 /**
@@ -178,6 +181,7 @@ async function openPathTarget(ctx: TerminalLinkContext, raw: string): Promise<vo
       // The `:42` suffix is 1-based (compilers, linters and Claude all
       // count from one); eState.line is 0-based.
       await leaf.openFile(file, line === undefined ? undefined : { eState: { line: Math.max(0, line - 1) } });
+      ctx.onTabOpened?.(leaf);
       return;
     }
   }

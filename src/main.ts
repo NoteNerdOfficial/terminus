@@ -13,6 +13,7 @@ import { TERMINUS_SIDEBAR_VIEW_TYPE, TerminusSidebarView } from "./views/Terminu
 import { GroupStore } from "./state/GroupStore";
 import { GroupController } from "./groups/GroupController";
 import { GroupSuggestModal } from "./groups/GroupSuggestModal";
+import { TabVisibility } from "./groups/TabVisibility";
 import { TERMINAL_COLOR_PALETTE } from "./terminal/colorPalette";
 import { fetchLatestPluginVersion, PluginVersionStatus, versionStatus } from "./pluginVersion";
 import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore";
@@ -56,6 +57,8 @@ export default class TerminusPlugin extends Plugin {
   /** Multi-agent's terminal groups; created once settings are loaded. */
   groupStore!: GroupStore;
   readonly groups = new GroupController(this);
+  readonly tabs = new TabVisibility(this);
+  private groupStatusEl: HTMLElement | null = null;
   /** Latest release on GitHub, once checked (Multi-agent only). */
   private latestPluginVersion: string | null = null;
   /** Set first thing in onunload: views closing then aren't the user
@@ -142,6 +145,29 @@ export default class TerminusPlugin extends Plugin {
         if (this.experience === "multi-agent") this.groups.onActiveLeaf(leaf);
       })
     );
+    // New tabs, moved panes and closed tabs: re-apply which tabs show. Also
+    // where terminals restored after startup get loaded (see
+    // startMultiAgentViews).
+    this.registerEvent(
+      this.app.workspace.on("layout-change", () => {
+        if (this.experience === "multi-agent") void this.groups.loadDeferredTerminals();
+        this.applyGroupVisibility();
+      })
+    );
+    this.groupStore.on("change", () => this.applyGroupVisibility());
+    // A note tab's right-click menu: put it in a group, or back in every group.
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, _file, source, leaf) => {
+        if (source === "tab-header" && leaf) this.addGroupMenuItems(menu, leaf);
+      })
+    );
+    this.groupStatusEl = this.addStatusBarItem();
+    this.groupStatusEl.addClass("terminus-group-status", "mod-clickable");
+    this.groupStatusEl.addEventListener("click", () => {
+      new GroupSuggestModal(this, "Switch to group", false, (choice) => {
+        if (choice.kind === "group") void this.groups.selectGroup(choice.target);
+      }).open();
+    });
     // Twice a day, while the sidebar that shows it is in use.
     this.registerInterval(window.setInterval(() => void this.checkPluginVersion(), 12 * 60 * 60 * 1000));
 
@@ -216,6 +242,20 @@ export default class TerminusPlugin extends Plugin {
             } else {
               this.groups.moveTerminals([view], choice.target);
             }
+          }).open();
+        }
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "add-tab-to-group",
+      name: "Add current tab to group…",
+      checkCallback: (checking) => {
+        const leaf = this.app.workspace.getMostRecentLeaf();
+        if (this.experience !== "multi-agent" || !leaf || leaf.view instanceof TerminalView || this.groupStore.list().length === 0) return false;
+        if (!checking) {
+          new GroupSuggestModal(this, "Add this tab to", false, (choice) => {
+            if (choice.kind === "group") this.addTabToGroup(leaf, choice.target, true);
           }).open();
         }
         return true;
@@ -365,18 +405,26 @@ export default class TerminusPlugin extends Plugin {
     if (this.experience === "multi-agent") {
       await this.startMultiAgentViews();
     } else {
-      for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_SIDEBAR_VIEW_TYPE)) leaf.detach();
+      for (const leaf of this.leavesOfType(TERMINUS_SIDEBAR_VIEW_TYPE)) leaf.detach();
     }
-    // Group colours apply only in Multi-agent.
+    // Group colours and hidden tabs apply only in Multi-agent.
     for (const view of this.groups.terminals()) view.refreshGroupColor();
+    this.applyGroupVisibility();
   }
 
-  /** Multi-agent's left sidebar, with every terminal loaded so its group is
-   *  known, groups emptied while Classic was selected removed, and the
-   *  version check that the sidebar's header shows. */
+  /**
+   * Multi-agent's left sidebar, with every terminal loaded so its group is
+   * known, and the version check that the sidebar's header shows.
+   *
+   * Empty groups aren't tidied here: when the plugin is enabled, Obsidian
+   * re-creates Terminus's views only after this runs, so every group would
+   * look empty (seen in 1.14.4). A group emptied while Classic was selected
+   * stays, shown as having no terminals, until its × removes it.
+   */
   private async startMultiAgentViews(): Promise<void> {
     await this.groups.loadDeferredTerminals();
-    this.groups.removeEmptyGroups();
+    this.groupStore.pruneTabs(this.liveLeafIds());
+    this.applyGroupVisibility();
     for (const view of this.groups.terminals()) view.refreshGroupColor();
     await this.revealSidebar(false);
     void this.checkPluginVersion();
@@ -385,7 +433,7 @@ export default class TerminusPlugin extends Plugin {
   /** Opens the Terminus sidebar in the left sidebar if it isn't open. */
   async revealSidebar(focus = true): Promise<TerminusSidebarView | null> {
     const { workspace } = this.app;
-    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(TERMINUS_SIDEBAR_VIEW_TYPE)[0] ?? null;
+    let leaf: WorkspaceLeaf | null = this.singleLeafOfType(TERMINUS_SIDEBAR_VIEW_TYPE);
     if (!leaf) {
       leaf = workspace.getLeftLeaf(false);
       if (!leaf) return null;
@@ -411,6 +459,83 @@ export default class TerminusPlugin extends Plugin {
     }
   }
 
+  /** Shows the selected group's tabs and hides other groups' (or, outside
+   *  Multi-agent, shows everything), and updates the status bar. */
+  applyGroupVisibility(): void {
+    this.tabs.apply();
+    this.refreshGroupStatus();
+  }
+
+  /** "⧉ Auth rotation · 4 in other groups" in the status bar; click to
+   *  switch. Empty outside Multi-agent or with no groups. */
+  private refreshGroupStatus(): void {
+    const el = this.groupStatusEl;
+    if (!el) return;
+    const groups = this.experience === "multi-agent" ? this.groupStore.list() : [];
+    el.toggle(groups.length > 0);
+    if (groups.length === 0) return;
+    const active = this.groupStore.get(this.groupStore.activeGroupId);
+    const hidden = this.tabs.hiddenTerminalCount();
+    el.setText(`⧉ ${active?.name ?? "No group"}${hidden > 0 ? ` · ${hidden} in other groups` : ""}`);
+    el.setAttr("aria-label", "Switch group");
+  }
+
+  /**
+   * Puts a non-terminal tab in a group (null: back in every group). With
+   * `stay` false the tab came from a group's terminal or card, so that
+   * group is selected and the tab the user just opened stays in view.
+   */
+  addTabToGroup(leaf: WorkspaceLeaf, groupId: string | null, stay = false): void {
+    if (this.experience !== "multi-agent") return;
+    const leafId = (leaf as WorkspaceLeaf & { id?: string }).id;
+    if (!leafId || (!groupId && !stay)) return;
+    this.groupStore.setTabGroup(leafId, groupId);
+    if (!stay) this.revealGroupOf(leaf);
+  }
+
+  /** Selects the group a tab belongs to, if it's another one. */
+  revealGroupOf(leaf: WorkspaceLeaf): void {
+    if (this.experience !== "multi-agent") return;
+    const group = this.tabs.groupOf(leaf);
+    if (group && group !== this.groupStore.activeGroupId) this.groupStore.setActive(group);
+    else this.applyGroupVisibility();
+  }
+
+  /** "Add to group" / "Show in every group" for a tab's right-click menu. */
+  addGroupMenuItems(menu: Menu, leaf: WorkspaceLeaf): void {
+    if (this.experience !== "multi-agent") return;
+    const leafId = (leaf as WorkspaceLeaf & { id?: string }).id;
+    if (!leafId) return;
+    const current = this.groupStore.tabGroup(leafId);
+    menu.addSeparator();
+    for (const group of this.groupStore.list()) {
+      menu.addItem((item) =>
+        item
+          .setTitle(`Add to ${group.name}`)
+          .setIcon("folder-plus")
+          .setChecked(current === group.id)
+          .onClick(() => this.addTabToGroup(leaf, group.id, true))
+      );
+    }
+    if (current) {
+      menu.addItem((item) =>
+        item
+          .setTitle("Show in every group")
+          .setIcon("folder-minus")
+          .onClick(() => this.addTabToGroup(leaf, null, true))
+      );
+    }
+  }
+
+  private liveLeafIds(): Set<string> {
+    const ids = new Set<string>();
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const id = (leaf as WorkspaceLeaf & { id?: string }).id;
+      if (id) ids.add(id);
+    });
+    return ids;
+  }
+
   setGroupColor(groupId: string, color: string): void {
     this.groupStore.setColor(groupId, color);
     for (const view of this.groups.terminalsIn(groupId)) view.refreshGroupColor();
@@ -432,7 +557,7 @@ export default class TerminusPlugin extends Plugin {
    *  nothing is lost either way. */
   private async swapReviewView(): Promise<void> {
     const stale = this.experience === "multi-agent" ? PENDING_CHANGES_VIEW_TYPE : AGENT_INBOX_VIEW_TYPE;
-    const [first, ...rest] = this.app.workspace.getLeavesOfType(stale);
+    const [first, ...rest] = this.leavesOfType(stale);
     if (!first) return;
     for (const leaf of rest) leaf.detach();
     // Reuses the leaf so the new view lands where the old one was.
@@ -614,6 +739,35 @@ export default class TerminusPlugin extends Plugin {
     return pathJoin(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
 
+  /**
+   * Every leaf of a view type, including ones Obsidian hasn't loaded yet
+   * (background sidebar tabs restored at startup), which getLeavesOfType
+   * leaves out -- missing those made each startup open another copy of
+   * the sidebar views. Compares the view's type rather than calling
+   * getViewState(), which on a terminal serializes its whole scrollback.
+   */
+  leavesOfType(type: string): WorkspaceLeaf[] {
+    const leaves: WorkspaceLeaf[] = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf.view.getViewType() === type) leaves.push(leaf);
+    });
+    return leaves;
+  }
+
+  /** Called by each sidebar view as it opens: when the plugin is enabled
+   *  (or updated), Obsidian restores its views only after onload, so the
+   *  startup reveal can't see them and opens another; this closes it. */
+  dedupeView(type: string): void {
+    window.setTimeout(() => this.singleLeafOfType(type), 0);
+  }
+
+  /** The one leaf of a sidebar view type, closing any duplicates. */
+  private singleLeafOfType(type: string): WorkspaceLeaf | null {
+    const [first, ...duplicates] = this.leavesOfType(type);
+    for (const leaf of duplicates) leaf.detach();
+    return first ?? null;
+  }
+
   /** Pending Changes in Classic, the Agent inbox in Multi-agent. */
   private get reviewViewType(): string {
     return this.experience === "multi-agent" ? AGENT_INBOX_VIEW_TYPE : PENDING_CHANGES_VIEW_TYPE;
@@ -624,7 +778,7 @@ export default class TerminusPlugin extends Plugin {
   async revealReviewView(): Promise<void> {
     const { workspace } = this.app;
     const type = this.reviewViewType;
-    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(type)[0] ?? null;
+    let leaf: WorkspaceLeaf | null = this.singleLeafOfType(type);
     if (!leaf) {
       leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf("tab");
       await leaf.setViewState({ type, active: true });

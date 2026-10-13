@@ -1,4 +1,4 @@
-import { ItemView, Notice, Platform, TFile, ViewStateResult, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, Platform, TFile, ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { webUtils } from "electron";
 import { IDecoration, ITheme, Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -324,6 +324,7 @@ export class TerminalView extends ItemView {
       app: this.app,
       getCwd: () => this.cwdTracker?.getCwd() ?? this.restoredCwd,
       getVaultBasePath: () => this.plugin.getVaultBasePath(),
+      onTabOpened: (leaf) => this.plugin.addTabToGroup(leaf, this.groupIdValue),
     });
 
     this.plugin.reviewServer.register(this.token, {
@@ -673,6 +674,38 @@ export class TerminalView extends ItemView {
    *  pending changes to this terminal. */
   get hookToken(): string {
     return this.token;
+  }
+
+  /** The tab's right-click and ⋯ menus get "Move to group" (Multi-agent). */
+  onPaneMenu(menu: Menu, source: string): void {
+    super.onPaneMenu(menu, source);
+    if (this.plugin.experience !== "multi-agent") return;
+    menu.addSeparator();
+    for (const group of this.plugin.groupStore.list()) {
+      menu.addItem((item) =>
+        item
+          .setTitle(`Move to ${group.name}`)
+          .setIcon("folder-input")
+          .setChecked(this.groupIdValue === group.id)
+          .onClick(() => this.plugin.groups.moveTerminals([this], group.id))
+      );
+    }
+    if (this.groupIdValue) {
+      menu.addItem((item) =>
+        item
+          .setTitle("Take out of its group")
+          .setIcon("folder-output")
+          .onClick(() => this.plugin.groups.moveTerminals([this], null))
+      );
+    }
+    menu.addItem((item) =>
+      item
+        .setTitle("Move to a new group")
+        .setIcon("folder-plus")
+        .onClick(() => {
+          void this.plugin.groups.createGroup([this]).then(async (group) => (await this.plugin.revealSidebar())?.startRename(group.id));
+        })
+    );
   }
 
   /** Its own colour tag, else its group's (Multi-agent). */

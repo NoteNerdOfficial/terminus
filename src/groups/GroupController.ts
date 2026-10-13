@@ -47,22 +47,23 @@ export class GroupController {
   /**
    * A new group. With `terminals`, they move into it; without, it starts
    * with a new terminal, since a group is never empty. Either way it becomes
-   * the selected group.
+   * the selected group. Nothing takes the keyboard: the caller usually puts
+   * the group's name into a rename field next.
    */
   async createGroup(terminals: TerminalView[] = []): Promise<TerminalGroup> {
     const group = this.store.create();
     if (terminals.length > 0) {
       this.moveTerminals(terminals, group.id);
     } else {
-      await this.newTerminal(group.id);
+      await this.newTerminal(group.id, false);
     }
-    await this.selectGroup(group.id);
+    await this.selectGroup(group.id, false);
     return group;
   }
 
   /** A new terminal in a group (starting in its folder, next to the
    *  terminal last used there) or ungrouped. */
-  async newTerminal(target: GroupTarget): Promise<TerminalView | null> {
+  async newTerminal(target: GroupTarget, focus = true): Promise<TerminalView | null> {
     const { workspace } = this.plugin.app;
     const group = this.store.get(target);
     const anchorId = group ? this.store.lastLeaf(group.id) : undefined;
@@ -71,10 +72,11 @@ export class GroupController {
     const leaf = workspace.getLeaf("tab");
     await leaf.setViewState({
       type: TERMINUS_VIEW_TYPE,
-      active: true,
+      active: focus,
       state: { groupId: group?.id, cwd: group?.folder ?? undefined },
     });
     await workspace.revealLeaf(leaf);
+    this.plugin.applyGroupVisibility();
     return leaf.view instanceof TerminalView ? leaf.view : null;
   }
 
@@ -83,6 +85,9 @@ export class GroupController {
   moveTerminals(terminals: TerminalView[], target: GroupTarget): void {
     for (const view of terminals) view.setGroup(target);
     this.removeEmptyGroups();
+    // Membership lives on the terminals, so the store may not have changed.
+    this.plugin.applyGroupVisibility();
+    this.plugin.refreshTerminusViews();
   }
 
   /** Groups with no terminals left go: a group is never empty. */
@@ -93,8 +98,9 @@ export class GroupController {
     }
   }
 
-  /** Selects a group and brings back the terminal last used in it. */
-  async selectGroup(target: GroupTarget): Promise<void> {
+  /** Selects a group and brings back the terminal last used in it, giving
+   *  it the keyboard unless `focus` is false. */
+  async selectGroup(target: GroupTarget, focus = true): Promise<void> {
     this.store.setActive(target);
     if (!target) return;
     const { workspace } = this.plugin.app;
@@ -103,7 +109,7 @@ export class GroupController {
     const leaf = last && last.view instanceof TerminalView && last.view.groupId === target ? last : this.terminalsIn(target)[0]?.leaf;
     if (!leaf) return;
     await workspace.revealLeaf(leaf);
-    workspace.setActiveLeaf(leaf, { focus: true });
+    if (focus) workspace.setActiveLeaf(leaf, { focus: true });
   }
 
   /** Opening a terminal from another group (its row, an inbox card, Next,

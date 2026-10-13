@@ -28,6 +28,7 @@ export class PendingChangesView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.plugin.dedupeView(PENDING_CHANGES_VIEW_TYPE);
     this.plugin.pendingChangesStore.on("change", this.render);
     this.render();
   }

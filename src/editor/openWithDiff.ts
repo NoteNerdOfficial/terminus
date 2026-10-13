@@ -44,6 +44,9 @@ export async function openChangedFile(plugin: TerminusPlugin, change: PendingCha
   // afterwards is simply overwritten and the file sits at the top.
   const firstHunkLine = findFirstHunkLine(change);
   await leaf.openFile(file, firstHunkLine === null ? undefined : { eState: { line: firstHunkLine } });
+  // Joins the group of the session that made the change (Multi-agent).
+  const owner = change.contributors[0]?.token;
+  plugin.addTabToGroup(leaf, owner ? (plugin.findTerminalView(owner)?.groupId ?? null) : null);
 
   // Everything past this point is the inline-diff overlay, which is a bonus
   // on top of the open rather than the reason for it -- so each of these

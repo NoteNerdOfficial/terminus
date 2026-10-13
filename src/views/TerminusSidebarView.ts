@@ -25,6 +25,10 @@ export class TerminusSidebarView extends ItemView {
   private renamingGroupId: string | null = null;
   /** The terminal token or group id whose × is asking "Close anyway?". */
   private confirmingClose: string | null = null;
+  /** Emptying the view blurs a focused rename field, whose handler renders
+   *  again; a render asked for mid-render waits until this one is done. */
+  private rendering = false;
+  private renderQueued = false;
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -43,6 +47,7 @@ export class TerminusSidebarView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.plugin.dedupeView(TERMINUS_SIDEBAR_VIEW_TYPE);
     this.plugin.groupStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.pendingChangesStore.on("change", this.render);
@@ -64,6 +69,23 @@ export class TerminusSidebarView extends ItemView {
   }
 
   render = (): void => {
+    if (this.rendering) {
+      this.renderQueued = true;
+      return;
+    }
+    this.rendering = true;
+    try {
+      this.renderNow();
+    } finally {
+      this.rendering = false;
+    }
+    if (this.renderQueued) {
+      this.renderQueued = false;
+      window.setTimeout(this.render, 0);
+    }
+  };
+
+  private renderNow(): void {
     const container = this.contentEl;
     container.empty();
     container.addClass("terminus-sidebar");
@@ -80,7 +102,7 @@ export class TerminusSidebarView extends ItemView {
     this.renderUngrouped(list, terminals.filter((t) => !t.groupId || !this.plugin.groupStore.get(t.groupId)));
 
     refreshTabPendingDot(this.leaf, terminals.some((t) => this.status(t) === "needs-attention"));
-  };
+  }
 
   private renderHeader(container: HTMLElement, terminals: TerminalView[]): void {
     const header = container.createDiv({ cls: "terminus-sidebar-header" });
@@ -161,7 +183,7 @@ export class TerminusSidebarView extends ItemView {
     if (needsAttention && !active) row.createSpan({ cls: "terminus-sidebar-attention", attr: { "aria-label": "Needs attention" } });
     row.createSpan({
       cls: "terminus-sidebar-group-state",
-      text: active ? "Showing" : `${members.length} in background`,
+      text: members.length === 0 ? "No terminals" : active ? "Showing" : `${members.length} in background`,
     });
 
     const add = row.createEl("button", { cls: "terminus-sidebar-icon-btn", text: "＋" });
@@ -196,7 +218,11 @@ export class TerminusSidebarView extends ItemView {
       if (evt.key === "Enter") finish(true);
       else if (evt.key === "Escape") finish(false);
     });
-    input.addEventListener("blur", () => finish(true));
+    // A re-render removes this field, which blurs it: that's not the user
+    // leaving it, and the next render brings a fresh one back.
+    input.addEventListener("blur", () => {
+      if (!this.rendering && input.isConnected) finish(true);
+    });
     window.setTimeout(() => {
       input.focus();
       input.select();

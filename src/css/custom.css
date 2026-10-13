@@ -2105,3 +2105,24 @@
   width: 14px;
   height: 14px;
 }
+
+/* Groups (Multi-agent): another group's tabs are hidden, not closed, and a
+   pane left with nothing showing collapses. The split rule counts panes
+   hidden by Working tabs too, so the two plugins' hiding adds up instead of
+   leaving an empty split behind; it's specific enough to win over Working
+   tabs' own "show a split with a visible pane" rule. */
+.workspace-tab-header.terminus-hidden-tab {
+  display: none;
+}
+
+body:not(.is-phone) .workspace-split.mod-root .workspace-tabs.terminus-hidden-pane {
+  display: none;
+}
+
+body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-tabs):not(:has(.workspace-tabs:not(.terminus-hidden-pane):not(.working-tabs-hidden-pane))) {
+  display: none;
+}
+
+.terminus-group-status {
+  cursor: pointer;
+}

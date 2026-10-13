@@ -30,6 +30,13 @@ export class DiffSplitView extends ItemView {
     return DIFF_SPLIT_VIEW_TYPE;
   }
 
+  /** The terminal (hook token) that made the change shown here: Split Diff
+   *  belongs to that terminal's group (see TabVisibility). */
+  shownChangeOwner(): string | null {
+    if (!this.changeId) return null;
+    return this.plugin.pendingChangesStore.get(this.changeId)?.contributors[0]?.token ?? null;
+  }
+
   getDisplayText(): string {
     return this.changeId ? `Diff: ${pathBasename(this.changeId)}` : "Split Diff";
   }
@@ -42,6 +49,9 @@ export class DiffSplitView extends ItemView {
     this.changeId = (state as DiffSplitViewState | undefined)?.changeId ?? null;
     await super.setState(state, result);
     this.render();
+    // Showing another group's change switches to that group, so the tab
+    // that was just asked for doesn't vanish.
+    this.plugin.revealGroupOf(this.leaf);
   }
 
   getState(): Record<string, unknown> {
