@@ -1,3 +1,5 @@
+> ⭐ **New feature: Multi-agent.** Run several Claude sessions side by side with an Agent inbox and groups for your terminals. **To turn it on:** open **Settings → Terminus → Experience** and choose **Multi-agent** (switch back to Classic any time). [See what it does](#multi-agent).
+
 # Terminus
 
 <p align="center">
