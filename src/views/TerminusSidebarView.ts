@@ -18,6 +18,8 @@ export const TERMINUS_SIDEBAR_VIEW_TYPE = "terminus-sidebar";
 
 /** Drag payload: the hook tokens of the terminals being moved. */
 const DRAG_TYPE = "application/x-terminus-terminals";
+/** Drag payload when reordering: the id of the group being moved. */
+const GROUP_DRAG_TYPE = "application/x-terminus-group";
 
 /**
  * The Multi-agent experience's left sidebar: every terminal, under its group
@@ -242,6 +244,7 @@ export class TerminusSidebarView extends ItemView {
     const row = section.createDiv({ cls: "terminus-sidebar-group-row" });
     row.toggleClass("is-active", active);
     this.makeDropTarget(row, group.id);
+    this.makeReorderable(section, row, group.id);
     makeActivatable(row, () => void this.plugin.groups.selectGroup(group.id), (evt) => this.showGroupMenu(evt, group));
     row.setAttr("aria-current", active ? "true" : "false");
     this.renderFoldChevron(row, group.id, group.collapsed);
@@ -533,6 +536,48 @@ export class TerminusSidebarView extends ItemView {
     confirm.createEl("button", { text: "Cancel" }).addEventListener("click", () => {
       this.confirmingClose = null;
       this.render();
+    });
+  }
+
+  /**
+   * Dragging a group by its row reorders the groups: the card under the
+   * pointer shows a line above or below it for where the group will go. Not
+   * while its name is being typed, where a drag would select text instead.
+   * (Menu items "Move up" / "Move down" do the same from the keyboard.)
+   */
+  private makeReorderable(section: HTMLElement, row: HTMLElement, groupId: string): void {
+    row.draggable = this.renamingGroupId !== groupId;
+    row.addEventListener("dragstart", (evt) => {
+      if (!evt.dataTransfer) return;
+      evt.dataTransfer.setData(GROUP_DRAG_TYPE, groupId);
+      evt.dataTransfer.effectAllowed = "move";
+      section.addClass("is-dragging");
+    });
+    row.addEventListener("dragend", () => {
+      section.removeClass("is-dragging");
+      this.contentEl.querySelectorAll(".is-drop-before, .is-drop-after").forEach((el) => el.removeClasses(["is-drop-before", "is-drop-after"]));
+    });
+    const where = (evt: DragEvent): "before" | "after" => {
+      const rect = section.getBoundingClientRect();
+      return evt.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    };
+    section.addEventListener("dragover", (evt) => {
+      if (!evt.dataTransfer?.types.includes(GROUP_DRAG_TYPE)) return;
+      evt.preventDefault();
+      const side = where(evt);
+      section.toggleClass("is-drop-before", side === "before");
+      section.toggleClass("is-drop-after", side === "after");
+    });
+    section.addEventListener("dragleave", (evt) => {
+      if (evt.relatedTarget instanceof Node && section.contains(evt.relatedTarget)) return;
+      section.removeClasses(["is-drop-before", "is-drop-after"]);
+    });
+    section.addEventListener("drop", (evt) => {
+      const movedId = evt.dataTransfer?.getData(GROUP_DRAG_TYPE);
+      section.removeClasses(["is-drop-before", "is-drop-after"]);
+      if (!movedId) return;
+      evt.preventDefault();
+      this.plugin.groupStore.moveGroup(movedId, groupId, where(evt));
     });
   }
 

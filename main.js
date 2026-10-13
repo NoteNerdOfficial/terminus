@@ -16832,6 +16832,17 @@ function showGroupMenu(evt, plugin, group, actions) {
     );
   }
   menu.addSeparator();
+  if (group.settledAt === null) {
+    const open = plugin.groupStore.list().filter((g2) => g2.settledAt === null);
+    const index = open.findIndex((g2) => g2.id === group.id);
+    menu.addItem(
+      (item) => item.setTitle("Move up").setIcon("arrow-up").setDisabled(index <= 0).onClick(() => plugin.groupStore.shiftGroup(group.id, -1))
+    );
+    menu.addItem(
+      (item) => item.setTitle("Move down").setIcon("arrow-down").setDisabled(index === open.length - 1).onClick(() => plugin.groupStore.shiftGroup(group.id, 1))
+    );
+    menu.addSeparator();
+  }
   if (group.settledAt !== null) {
     menu.addItem((item) => item.setTitle("Move out of Done").setIcon("undo-2").onClick(() => plugin.groups.unsettleGroup(group.id)));
   } else {
@@ -20923,6 +20934,7 @@ function versionStatus(installed, latest) {
 // src/views/TerminusSidebarView.ts
 var TERMINUS_SIDEBAR_VIEW_TYPE = "terminus-sidebar";
 var DRAG_TYPE = "application/x-terminus-terminals";
+var GROUP_DRAG_TYPE = "application/x-terminus-group";
 var TerminusSidebarView = class extends import_obsidian21.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -21118,6 +21130,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     const row = section.createDiv({ cls: "terminus-sidebar-group-row" });
     row.toggleClass("is-active", active);
     this.makeDropTarget(row, group.id);
+    this.makeReorderable(section, row, group.id);
     makeActivatable(row, () => void this.plugin.groups.selectGroup(group.id), (evt) => this.showGroupMenu(evt, group));
     row.setAttr("aria-current", active ? "true" : "false");
     this.renderFoldChevron(row, group.id, group.collapsed);
@@ -21405,6 +21418,53 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     confirm2.createEl("button", { text: "Cancel" }).addEventListener("click", () => {
       this.confirmingClose = null;
       this.render();
+    });
+  }
+  /**
+   * Dragging a group by its row reorders the groups: the card under the
+   * pointer shows a line above or below it for where the group will go. Not
+   * while its name is being typed, where a drag would select text instead.
+   * (Menu items "Move up" / "Move down" do the same from the keyboard.)
+   */
+  makeReorderable(section, row, groupId) {
+    row.draggable = this.renamingGroupId !== groupId;
+    row.addEventListener("dragstart", (evt) => {
+      if (!evt.dataTransfer)
+        return;
+      evt.dataTransfer.setData(GROUP_DRAG_TYPE, groupId);
+      evt.dataTransfer.effectAllowed = "move";
+      section.addClass("is-dragging");
+    });
+    row.addEventListener("dragend", () => {
+      section.removeClass("is-dragging");
+      this.contentEl.querySelectorAll(".is-drop-before, .is-drop-after").forEach((el2) => el2.removeClasses(["is-drop-before", "is-drop-after"]));
+    });
+    const where = (evt) => {
+      const rect = section.getBoundingClientRect();
+      return evt.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    };
+    section.addEventListener("dragover", (evt) => {
+      var _a8;
+      if (!((_a8 = evt.dataTransfer) == null ? void 0 : _a8.types.includes(GROUP_DRAG_TYPE)))
+        return;
+      evt.preventDefault();
+      const side = where(evt);
+      section.toggleClass("is-drop-before", side === "before");
+      section.toggleClass("is-drop-after", side === "after");
+    });
+    section.addEventListener("dragleave", (evt) => {
+      if (evt.relatedTarget instanceof Node && section.contains(evt.relatedTarget))
+        return;
+      section.removeClasses(["is-drop-before", "is-drop-after"]);
+    });
+    section.addEventListener("drop", (evt) => {
+      var _a8;
+      const movedId = (_a8 = evt.dataTransfer) == null ? void 0 : _a8.getData(GROUP_DRAG_TYPE);
+      section.removeClasses(["is-drop-before", "is-drop-after"]);
+      if (!movedId)
+        return;
+      evt.preventDefault();
+      this.plugin.groupStore.moveGroup(movedId, groupId, where(evt));
     });
   }
   /** The terminals a drag or ⇄ acts on: the whole selection when the row is
@@ -21766,6 +21826,31 @@ var GroupStore = class extends TypedEmitter {
       return;
     group.collapsed = collapsed;
     this.changed();
+  }
+  /** Moves a group to just before or after another, for the sidebar's
+   *  order. Settled groups keep their places in the list; they show on the
+   *  Done shelf, so only the open ones' relative order is visible. */
+  moveGroup(id, targetId, where) {
+    if (id === targetId)
+      return;
+    const from = this.data.groups.findIndex((g2) => g2.id === id);
+    if (from === -1 || !this.get(targetId))
+      return;
+    const [group] = this.data.groups.splice(from, 1);
+    const to = this.data.groups.findIndex((g2) => g2.id === targetId);
+    this.data.groups.splice(where === "before" ? to : to + 1, 0, group);
+    this.changed();
+  }
+  /** One step up (-1) or down (+1) among the groups the sidebar shows
+   *  (the open ones). False when it's already at that end. */
+  shiftGroup(id, delta) {
+    const open = this.data.groups.filter((g2) => g2.settledAt === null);
+    const index = open.findIndex((g2) => g2.id === id);
+    const neighbour = open[index + delta];
+    if (index === -1 || !neighbour)
+      return false;
+    this.moveGroup(id, neighbour.id, delta < 0 ? "before" : "after");
+    return true;
   }
   /** Puts a group away as done, or (false) back among the open ones. */
   setSettled(id, settled) {

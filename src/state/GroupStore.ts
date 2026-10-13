@@ -175,6 +175,30 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
     this.changed();
   }
 
+  /** Moves a group to just before or after another, for the sidebar's
+   *  order. Settled groups keep their places in the list; they show on the
+   *  Done shelf, so only the open ones' relative order is visible. */
+  moveGroup(id: string, targetId: string, where: "before" | "after"): void {
+    if (id === targetId) return;
+    const from = this.data.groups.findIndex((g) => g.id === id);
+    if (from === -1 || !this.get(targetId)) return;
+    const [group] = this.data.groups.splice(from, 1);
+    const to = this.data.groups.findIndex((g) => g.id === targetId);
+    this.data.groups.splice(where === "before" ? to : to + 1, 0, group!);
+    this.changed();
+  }
+
+  /** One step up (-1) or down (+1) among the groups the sidebar shows
+   *  (the open ones). False when it's already at that end. */
+  shiftGroup(id: string, delta: -1 | 1): boolean {
+    const open = this.data.groups.filter((g) => g.settledAt === null);
+    const index = open.findIndex((g) => g.id === id);
+    const neighbour = open[index + delta];
+    if (index === -1 || !neighbour) return false;
+    this.moveGroup(id, neighbour.id, delta < 0 ? "before" : "after");
+    return true;
+  }
+
   /** Puts a group away as done, or (false) back among the open ones. */
   setSettled(id: string, settled: boolean): void {
     const group = this.get(id);

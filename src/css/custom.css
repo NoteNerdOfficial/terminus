@@ -1973,6 +1973,19 @@
   box-shadow: inset 0 0 0 1.5px var(--text-faint);
 }
 
+/* Reordering groups: a line where the dragged one will land. */
+.terminus-sidebar-group-card.is-dragging {
+  opacity: 0.5;
+}
+
+.terminus-sidebar-group-card.is-drop-before {
+  box-shadow: 0 -2px 0 0 var(--interactive-accent);
+}
+
+.terminus-sidebar-group-card.is-drop-after {
+  box-shadow: 0 2px 0 0 var(--interactive-accent);
+}
+
 /* "Go to terminal or group…": name, where it is, what it's doing. */
 .suggestion-item.terminus-switcher-item {
   display: flex;
