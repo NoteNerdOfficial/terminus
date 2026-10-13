@@ -313,7 +313,7 @@ export class GroupController {
 
   /**
    * A new group. With `terminals`, they move into it; without, it starts
-   * with a new terminal, since a group is never empty. Either way it becomes
+   * with a new terminal, so it starts with something in it. Either way it becomes
    * the selected group. Nothing takes the keyboard: the caller usually puts
    * the group's name into a rename field next.
    */
@@ -357,11 +357,15 @@ export class GroupController {
     this.plugin.refreshTerminusViews();
   }
 
-  /** Groups with no terminals left go: a group is never empty. */
+  /** Groups with nothing left in them go. One whose last terminal moved
+   *  out or closed but that still has notes (open in it, or linked) stays,
+   *  showing "No terminals", so reorganising terminals never silently
+   *  ungroups the user's notes; its × closes it. */
   removeEmptyGroups(): void {
     const used = new Set(this.terminals().map((view) => view.groupId));
     for (const group of this.store.list()) {
-      if (!used.has(group.id)) this.store.remove(group.id);
+      if (used.has(group.id) || group.note || this.tabsIn(group.id).length > 0) continue;
+      this.store.remove(group.id);
     }
   }
 

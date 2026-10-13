@@ -68,7 +68,8 @@ export class TerminusSidebarView extends ItemView {
     // the row under the pointer when a click is what made this pane
     // active, losing that click.
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshFocus()));
-    this.focusedToken = this.app.workspace.getActiveViewOfType(TerminalView)?.hookToken ?? null;
+    const front = this.app.workspace.getMostRecentLeaf()?.view;
+    this.focusedToken = front instanceof TerminalView ? front.hookToken : null;
     this.registerInterval(window.setInterval(() => this.refreshAges(), 60_000));
     this.render();
   }
@@ -88,11 +89,15 @@ export class TerminusSidebarView extends ItemView {
   /** Every re-render goes through here (see renderGuard.ts). */
   render = (): void => this.guardedRender();
 
+  /** Bold marks the one tab in front: a terminal, or a group's note. The
+   *  main area's most recent leaf, so clicking into this sidebar (or any
+   *  other side pane) doesn't clear it. */
   private refreshFocus(): void {
     this.refreshTabFocus();
-    const view = this.app.workspace.getActiveViewOfType(TerminalView);
-    if (!view || view.hookToken === this.focusedToken) return;
-    this.focusedToken = view.hookToken;
+    const front = this.app.workspace.getMostRecentLeaf()?.view;
+    const token = front instanceof TerminalView ? front.hookToken : null;
+    if (token === this.focusedToken) return;
+    this.focusedToken = token;
     this.contentEl.querySelectorAll<HTMLElement>(".terminus-sidebar-terminal:not(.terminus-sidebar-tab)").forEach((row) => {
       row.toggleClass("is-focused", row.dataset.token === this.focusedToken);
     });
@@ -396,7 +401,7 @@ export class TerminusSidebarView extends ItemView {
     row.createSpan({ cls: "terminus-sidebar-terminal-name", text: view.getDisplayText() });
     const pending = this.plugin.pendingChangesStore.list().filter((c) => c.contributors[0]?.token === token).length;
     if (pending > 0) {
-      row.createSpan({ cls: "terminus-sidebar-pending", text: String(pending), attr: { "aria-label": `${pending} pending ${pending === 1 ? "change" : "changes"}` } });
+      row.createSpan({ cls: "terminus-sidebar-pending", text: String(pending), attr: { "aria-label": `${pending} ${pending === 1 ? "change" : "changes"} to review` } });
     }
     const status = this.status(view);
     if (status) {
@@ -559,7 +564,7 @@ export class TerminusSidebarView extends ItemView {
   /**
    * What's happening in a group, at the end of its row, so a group says
    * whether it needs you even folded: "Needs attention", "1 working",
-   * "4 pending"; with none of those, "Showing" for the group on screen,
+   * "4 to review"; with none of those, "Showing" for the group on screen,
    * else when its last turn finished ("finished 5m ago").
    */
   private renderGroupSummary(row: HTMLElement, members: TerminalView[], active: boolean): void {
@@ -574,9 +579,9 @@ export class TerminusSidebarView extends ItemView {
     const needs = sessions.some((s) => s?.status === "needs-attention");
     const working = sessions.filter((s) => s?.status === "working").length;
     const parts: HTMLElement[] = [];
-    if (needs) parts.push(el.createSpan({ cls: "is-needs-attention", text: "Needs attention" }));
-    if (working > 0) parts.push(el.createSpan({ cls: "is-working", text: `${working} working` }));
-    if (pending > 0) parts.push(el.createSpan({ text: `${pending} pending` }));
+    if (needs) parts.push(hint(el.createSpan({ cls: "is-needs-attention", text: "Needs attention" }), "A session here is waiting on you in its terminal"));
+    if (working > 0) parts.push(hint(el.createSpan({ cls: "is-working", text: `${working} working` }), "Claude is mid-turn"));
+    if (pending > 0) parts.push(hint(el.createSpan({ text: `${pending} to review` }), "Changes waiting for Keep or Reject in the Agent inbox"));
     if (parts.length > 0) {
       // " · " between them, as separate nodes so each keeps its colour.
       parts.slice(1).forEach((part) => part.before(" · "));
@@ -641,6 +646,11 @@ export class TerminusSidebarView extends ItemView {
 type SidebarStatus = "working" | "needs-attention" | "finished-unread" | "idle";
 
 const BRANCH_TTL_MS = 60_000;
+
+function hint(el: HTMLElement, tooltip: string): HTMLElement {
+  setTooltip(el, tooltip);
+  return el;
+}
 
 /** "just now", "5m ago", "2h ago", "3d ago". */
 function timeAgo(at: number): string {

@@ -17288,7 +17288,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
     const identity = sessionIdentity(payload);
     switch (payload.hook_event_name) {
       case "SessionStart":
-        store.sessionStarted(this.token, identity);
+        store.sessionStarted(this.token, identity, payload.agent_type);
         this.typePendingPrompt();
         void this.readGitBranch();
         void this.plugin.refreshUsage(this.token);
@@ -17303,8 +17303,9 @@ var TerminalView = class extends import_obsidian10.ItemView {
         store.sessionEnded(this.token);
         break;
       case "PreToolUse":
-        if (this.plugin.tracksSubagents)
-          store.agentLaunched(this.token, payload.tool_input.description, payload.tool_input.subagent_type);
+        if (this.plugin.tracksSubagents) {
+          store.agentLaunched(this.token, payload.tool_input.description, payload.tool_input.subagent_type, payload.tool_input.name);
+        }
         break;
       case "SubagentStart":
         if (this.plugin.tracksSubagents)
@@ -19301,7 +19302,14 @@ function renderChangeRow(ctx, list, change, stats, opts = {}) {
   statsEl.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
   const vaultName = (0, import_terminus_node_bridge21.pathBasename)(ctx.plugin.getVaultBasePath());
   const relativePath = (0, import_terminus_node_bridge21.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
-  info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
+  if (!inbox) {
+    info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
+  } else {
+    const outside = relativePath.startsWith("..");
+    const folder = outside ? change.diff.filePath : relativePath.split("/").slice(0, -1).join("/");
+    if (folder)
+      info.createDiv({ cls: "terminus-pending-path", text: outside ? folder : `${folder}/`, attr: { title: change.diff.filePath } });
+  }
   const warning = (cls, text) => {
     if (!inbox) {
       info.createDiv({ cls, text: `\u26A0 ${text}` });
@@ -20068,6 +20076,11 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       if (!this.finishedCollapsed)
         for (const card of finished)
           this.renderCard(body, card, true);
+    } else if (cardCount > 0 && inbox.needsAttention.length === 0 && inbox.working.length === 0) {
+      const empty = body.createDiv({ cls: "terminus-inbox-empty" });
+      (0, import_obsidian19.setIcon)(empty.createDiv({ cls: "terminus-inbox-empty-icon" }), "check-circle");
+      empty.createDiv({ cls: "terminus-inbox-empty-title", text: "All caught up" });
+      empty.createDiv({ cls: "terminus-inbox-empty-text", text: "A dismissed session comes back here on its next turn." });
     }
     const history = this.plugin.pendingChangesStore.listHistory();
     if (history.length > 0)
@@ -20168,7 +20181,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       swatch.style.setProperty("--terminus-terminal-color", color);
     head.createSpan({ cls: "terminus-inbox-card-name", text: name });
     const pill = statusPill(card);
-    head.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label });
+    (0, import_obsidian19.setTooltip)(head.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label }), pill.hint);
     (0, import_obsidian19.setIcon)(head.createSpan({ cls: "terminus-inbox-chevron" }), collapsed ? "chevron-right" : "chevron-down");
     const toggle = () => {
       if (collapsed)
@@ -20182,11 +20195,14 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     head.setAttr("aria-expanded", String(!collapsed));
     const meta = el2.createDiv({ cls: "terminus-inbox-card-meta" });
     const group = this.plugin.groupStore.get(terminal == null ? void 0 : terminal.groupId);
-    if (group) {
+    if (group && group.name !== name) {
       const groupLabel = meta.createSpan({ cls: "terminus-inbox-group" });
       groupLabel.createSpan({ cls: "terminus-group-dot" }).style.setProperty("--terminus-group-color", group.color);
       groupLabel.createSpan({ text: group.name });
       (0, import_obsidian19.setTooltip)(groupLabel, "This terminal's group");
+    }
+    if (session == null ? void 0 : session.agentName) {
+      (0, import_obsidian19.setTooltip)(iconLabel(meta, "bot", session.agentName, "terminus-inbox-agent-name-meta"), `Runs as the ${session.agentName} agent`);
     }
     if ((session == null ? void 0 : session.branch) && this.plugin.settings.multiAgent.showGitBranch) {
       (0, import_obsidian19.setTooltip)(iconLabel(meta, "git-branch", session.branch, "terminus-inbox-branch"), "Git branch of this session's folder");
@@ -20198,7 +20214,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     if (card.changes.length > 0) {
       const { added, removed } = sumStats(card.changes);
       const pending = meta.createSpan({ cls: "terminus-inbox-pending" });
-      pending.createSpan({ text: `${card.changes.length} pending` });
+      pending.createSpan({ text: `${card.changes.length} to review` });
       pending.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
       pending.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
     }
@@ -20254,7 +20270,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       (0, import_obsidian19.setTooltip)(dismiss, "Hide this card until the session's next turn");
       dismiss.addEventListener("click", () => this.dismiss([card]));
     } else {
-      foot.createSpan({ cls: "terminus-inbox-foot-note", text: "No pending changes" });
+      foot.createSpan({ cls: "terminus-inbox-foot-note", text: "Nothing to review" });
     }
     foot.createDiv({ cls: "terminus-inbox-spacer" });
     if (terminal) {
@@ -20384,7 +20400,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
   }
   renderSubagent(el2, card, sub, compact) {
-    var _a8, _b, _c2, _d, _e4, _f, _g, _h;
+    var _a8, _b, _c2, _d, _e4, _f, _g, _h, _i3;
     const running = (_b = (_a8 = sub.run) == null ? void 0 : _a8.running) != null ? _b : false;
     const details = [];
     const time = subagentTime(sub.run);
@@ -20396,12 +20412,13 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       agentId: sub.agentId,
       mark: subagentMark(sub.run),
       name: task != null ? task : sub.agentType,
-      secondary: task ? sub.agentType : null,
+      // A teammate's type is its name in the team.
+      secondary: ((_f = sub.run) == null ? void 0 : _f.teammate) ? `teammate ${sub.agentType}` : task ? sub.agentType : null,
       details: compact ? [] : details,
-      usage: compact ? null : (_g = (_f = sub.run) == null ? void 0 : _f.usage) != null ? _g : null,
+      usage: compact ? null : (_h = (_g = sub.run) == null ? void 0 : _g.usage) != null ? _h : null,
       changes: sub.changes,
       error: failed,
-      title: !failed && ((_h = sub.run) == null ? void 0 : _h.lastMessage) && !running ? sub.run.lastMessage : null,
+      title: !failed && ((_i3 = sub.run) == null ? void 0 : _i3.lastMessage) && !running ? sub.run.lastMessage : null,
       compact
     });
   }
@@ -20487,16 +20504,20 @@ function formatCost(usd) {
 function statusPill(card) {
   const session = card.session;
   if (card.ended || !session)
-    return { kind: "ended", label: "Session ended" };
+    return { kind: "ended", label: "Session ended", hint: "Claude has exited. The card stays until its changes are reviewed." };
   switch (session.status) {
     case "needs-attention":
-      return { kind: "needs-attention", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" || session.needs === "unread-turn" ? "Waiting for you" : "Needs attention" };
+      return {
+        kind: "needs-attention",
+        label: session.needs === "permission" ? "Needs permission" : session.needs === "input" || session.needs === "unread-turn" ? "Waiting for you" : "Needs attention",
+        hint: "Claude is waiting on you in the terminal"
+      };
     case "working":
-      return { kind: "working", label: "Working" };
+      return { kind: "working", label: "Working", hint: "Claude is mid-turn" };
     case "finished-unread":
-      return { kind: "finished", label: "Finished" };
+      return { kind: "finished", label: "Finished", hint: "The turn ended and you haven't looked at it yet" };
     case "idle":
-      return { kind: "idle", label: "Idle" };
+      return session.lastTurnEndedAt === null ? { kind: "idle", label: "Ready", hint: "Claude is running and waiting for a first prompt" } : { kind: "idle", label: "Idle", hint: "Claude is waiting for your next prompt" };
   }
 }
 function plainPreview(markdown) {
@@ -20648,7 +20669,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     return this.plugin.settings.ribbonIcon;
   }
   async onOpen() {
-    var _a8, _b;
+    var _a8;
     this.plugin.dedupeView(TERMINUS_SIDEBAR_VIEW_TYPE);
     this.plugin.groupStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
@@ -20656,7 +20677,8 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     this.guardedRender = guardRenderDuringPress(this, this.contentEl, () => this.renderSafely());
     this.registerEvent(this.app.workspace.on("layout-change", this.render));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshFocus()));
-    this.focusedToken = (_b = (_a8 = this.app.workspace.getActiveViewOfType(TerminalView)) == null ? void 0 : _a8.hookToken) != null ? _b : null;
+    const front = (_a8 = this.app.workspace.getMostRecentLeaf()) == null ? void 0 : _a8.view;
+    this.focusedToken = front instanceof TerminalView ? front.hookToken : null;
     this.registerInterval(window.setInterval(() => this.refreshAges(), 6e4));
     this.render();
   }
@@ -20670,12 +20692,17 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     this.renamingGroupId = groupId;
     this.render();
   }
+  /** Bold marks the one tab in front: a terminal, or a group's note. The
+   *  main area's most recent leaf, so clicking into this sidebar (or any
+   *  other side pane) doesn't clear it. */
   refreshFocus() {
+    var _a8;
     this.refreshTabFocus();
-    const view = this.app.workspace.getActiveViewOfType(TerminalView);
-    if (!view || view.hookToken === this.focusedToken)
+    const front = (_a8 = this.app.workspace.getMostRecentLeaf()) == null ? void 0 : _a8.view;
+    const token = front instanceof TerminalView ? front.hookToken : null;
+    if (token === this.focusedToken)
       return;
-    this.focusedToken = view.hookToken;
+    this.focusedToken = token;
     this.contentEl.querySelectorAll(".terminus-sidebar-terminal:not(.terminus-sidebar-tab)").forEach((row) => {
       row.toggleClass("is-focused", row.dataset.token === this.focusedToken);
     });
@@ -20961,7 +20988,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       return ((_a8 = c.contributors[0]) == null ? void 0 : _a8.token) === token;
     }).length;
     if (pending > 0) {
-      row.createSpan({ cls: "terminus-sidebar-pending", text: String(pending), attr: { "aria-label": `${pending} pending ${pending === 1 ? "change" : "changes"}` } });
+      row.createSpan({ cls: "terminus-sidebar-pending", text: String(pending), attr: { "aria-label": `${pending} ${pending === 1 ? "change" : "changes"} to review` } });
     }
     const status = this.status(view);
     if (status) {
@@ -21120,7 +21147,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
   /**
    * What's happening in a group, at the end of its row, so a group says
    * whether it needs you even folded: "Needs attention", "1 working",
-   * "4 pending"; with none of those, "Showing" for the group on screen,
+   * "4 to review"; with none of those, "Showing" for the group on screen,
    * else when its last turn finished ("finished 5m ago").
    */
   renderGroupSummary(row, members, active) {
@@ -21139,11 +21166,11 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     const working = sessions.filter((s15) => (s15 == null ? void 0 : s15.status) === "working").length;
     const parts = [];
     if (needs)
-      parts.push(el2.createSpan({ cls: "is-needs-attention", text: "Needs attention" }));
+      parts.push(hint(el2.createSpan({ cls: "is-needs-attention", text: "Needs attention" }), "A session here is waiting on you in its terminal"));
     if (working > 0)
-      parts.push(el2.createSpan({ cls: "is-working", text: `${working} working` }));
+      parts.push(hint(el2.createSpan({ cls: "is-working", text: `${working} working` }), "Claude is mid-turn"));
     if (pending > 0)
-      parts.push(el2.createSpan({ text: `${pending} pending` }));
+      parts.push(hint(el2.createSpan({ text: `${pending} to review` }), "Changes waiting for Keep or Reject in the Agent inbox"));
     if (parts.length > 0) {
       parts.slice(1).forEach((part) => part.before(" \xB7 "));
       return;
@@ -21213,6 +21240,10 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
   }
 };
 var BRANCH_TTL_MS = 6e4;
+function hint(el2, tooltip) {
+  (0, import_obsidian21.setTooltip)(el2, tooltip);
+  return el2;
+}
 function timeAgo(at3) {
   const minutes = Math.floor((Date.now() - at3) / 6e4);
   if (minutes < 1)
@@ -21808,7 +21839,7 @@ var GroupController = class {
   }
   /**
    * A new group. With `terminals`, they move into it; without, it starts
-   * with a new terminal, since a group is never empty. Either way it becomes
+   * with a new terminal, so it starts with something in it. Either way it becomes
    * the selected group. Nothing takes the keyboard: the caller usually puts
    * the group's name into a rename field next.
    */
@@ -21851,12 +21882,16 @@ var GroupController = class {
     this.applyVisibility();
     this.plugin.refreshTerminusViews();
   }
-  /** Groups with no terminals left go: a group is never empty. */
+  /** Groups with nothing left in them go. One whose last terminal moved
+   *  out or closed but that still has notes (open in it, or linked) stays,
+   *  showing "No terminals", so reorganising terminals never silently
+   *  ungroups the user's notes; its × closes it. */
   removeEmptyGroups() {
     const used = new Set(this.terminals().map((view) => view.groupId));
     for (const group of this.store.list()) {
-      if (!used.has(group.id))
-        this.store.remove(group.id);
+      if (used.has(group.id) || group.note || this.tabsIn(group.id).length > 0)
+        continue;
+      this.store.remove(group.id);
     }
   }
   /** Selects a group and brings back the terminal last used in it, giving
@@ -21943,7 +21978,17 @@ var PendingChangesStore = class extends TypedEmitter {
     const change = existing ? {
       ...existing.change,
       payload: input.payload,
-      diff: { ...input.diff, oldText: existing.change.diff.oldText, revertText: existing.change.diff.revertText },
+      // The baseline is the first edit's: what the file was before any
+      // of them, including whether it existed at all. A later edit sees
+      // the file the first one created, so taking its existedBefore
+      // made rejecting a created-then-edited file leave it empty on
+      // disk instead of deleting it.
+      diff: {
+        ...input.diff,
+        oldText: existing.change.diff.oldText,
+        revertText: existing.change.diff.revertText,
+        existedBefore: existing.change.diff.existedBefore
+      },
       editCount: existing.change.editCount + 1,
       contributors: existing.change.contributors.some((c) => c.token === input.token) ? existing.change.contributors : [...existing.change.contributors, { token: input.token, label: input.panelLabel, color: input.panelColor }],
       agents: existing.change.agents.some((a) => a.token === agent.token && a.agentId === agent.agentId) ? existing.change.agents : [...existing.change.agents, agent]
@@ -22165,13 +22210,13 @@ var AgentSessionStore = class extends TypedEmitter {
   }
   /** SessionStart. A new session id under the same terminal (/clear, or a
    *  fresh `claude` after the last one exited) starts from a clean slate. */
-  sessionStarted(token, identity) {
+  sessionStarted(token, identity, agentName) {
     const existing = this.sessions.get(token);
     const isNewSession = !existing || !existing.running || identity.sessionId !== void 0 && identity.sessionId !== existing.sessionId;
     const base = isNewSession ? this.blank(token) : existing;
     if (isNewSession)
       this.launches.delete(token);
-    this.update({ ...base, ...this.identityFields(base, identity), running: true, endedAt: null });
+    this.update({ ...base, ...this.identityFields(base, identity), running: true, endedAt: null, agentName: (agentName == null ? void 0 : agentName.trim()) || base.agentName });
   }
   /** UserPromptSubmit: a turn starts. */
   promptSubmitted(token, identity, at3 = Date.now()) {
@@ -22187,10 +22232,10 @@ var AgentSessionStore = class extends TypedEmitter {
   }
   /** The lead called the Agent tool. SubagentStart doesn't carry the task
    *  description, so this is queued for the start it's about to cause. */
-  agentLaunched(token, description, agentType) {
+  agentLaunched(token, description, agentType, name) {
     var _a8;
     const queue = (_a8 = this.launches.get(token)) != null ? _a8 : [];
-    queue.push({ description: (description == null ? void 0 : description.trim()) || null, agentType: agentType != null ? agentType : null });
+    queue.push({ description: (description == null ? void 0 : description.trim()) || null, agentType: agentType != null ? agentType : null, name: (name == null ? void 0 : name.trim()) || null });
     this.launches.set(token, queue);
   }
   /** SubagentStart. In captured runs it lands right after the Agent call
@@ -22199,14 +22244,16 @@ var AgentSessionStore = class extends TypedEmitter {
    *  named no type (the Agent call can omit subagent_type). With neither,
    *  the run shows its type alone. */
   subagentStarted(token, agentId, agentType, identity, at3 = Date.now()) {
-    var _a8, _b;
+    var _a8;
     const s15 = this.ensure(token, identity);
     if (s15.subagents.some((run2) => run2.agentId === agentId))
       return;
+    const launch = this.takeLaunch(token, agentType);
     const run = {
       agentId,
       agentType,
-      description: (_b = (_a8 = this.takeLaunch(token, agentType)) == null ? void 0 : _a8.description) != null ? _b : null,
+      teammate: (launch == null ? void 0 : launch.name) === agentType,
+      description: (_a8 = launch == null ? void 0 : launch.description) != null ? _a8 : null,
       running: true,
       outcome: null,
       error: null,
@@ -22228,11 +22275,12 @@ var AgentSessionStore = class extends TypedEmitter {
     var _a8, _b;
     const s15 = this.ensure(token, identity);
     const existing = s15.subagents.find((run2) => run2.agentId === end.agentId);
-    if (!existing && !end.agentType.trim())
+    if (!existing && (!end.agentType.trim() || end.agentType === s15.agentName))
       return;
     const base = existing != null ? existing : {
       agentId: end.agentId,
       agentType: end.agentType,
+      teammate: false,
       description: null,
       running: true,
       outcome: null,
@@ -22283,7 +22331,7 @@ var AgentSessionStore = class extends TypedEmitter {
         changed = true;
         return { ...run, seenInBackground: true, description };
       }
-      if (!run.running || !(atTurnEnd || run.seenInBackground))
+      if (!run.running || run.teammate || !(atTurnEnd || run.seenInBackground))
         return run;
       changed = true;
       return { ...run, running: false, outcome: "stopped", endedAt: at3 };
@@ -22405,7 +22453,9 @@ var AgentSessionStore = class extends TypedEmitter {
     const queue = this.launches.get(token);
     if (!queue || queue.length === 0)
       return void 0;
-    let index = queue.findIndex((launch2) => launch2.agentType === agentType);
+    let index = queue.findIndex((launch2) => launch2.name === agentType);
+    if (index === -1)
+      index = queue.findIndex((launch2) => launch2.agentType === agentType);
     if (index === -1)
       index = queue.findIndex((launch2) => launch2.agentType === null);
     if (index === -1)
@@ -22439,6 +22489,7 @@ var AgentSessionStore = class extends TypedEmitter {
       turnStartedAt: null,
       lastTurnMs: null,
       lastTurnEndedAt: null,
+      agentName: null,
       currentFile: null,
       transcriptPath: null,
       cwd: null,

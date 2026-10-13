@@ -126,6 +126,13 @@ export class AgentInboxView extends ItemView {
         clear.addEventListener("keydown", (evt) => evt.stopPropagation());
       }
       if (!this.finishedCollapsed) for (const card of finished) this.renderCard(body, card, true);
+    } else if (cardCount > 0 && inbox.needsAttention.length === 0 && inbox.working.length === 0) {
+      // Every card dismissed: say so, rather than leave an inbox that
+      // looks broken under "N sessions running".
+      const empty = body.createDiv({ cls: "terminus-inbox-empty" });
+      setIcon(empty.createDiv({ cls: "terminus-inbox-empty-icon" }), "check-circle");
+      empty.createDiv({ cls: "terminus-inbox-empty-title", text: "All caught up" });
+      empty.createDiv({ cls: "terminus-inbox-empty-text", text: "A dismissed session comes back here on its next turn." });
     }
 
     const history = this.plugin.pendingChangesStore.listHistory();
@@ -237,7 +244,7 @@ export class AgentInboxView extends ItemView {
     if (color) swatch.style.setProperty("--terminus-terminal-color", color);
     head.createSpan({ cls: "terminus-inbox-card-name", text: name });
     const pill = statusPill(card);
-    head.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label });
+    setTooltip(head.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label }), pill.hint);
     setIcon(head.createSpan({ cls: "terminus-inbox-chevron" }), collapsed ? "chevron-right" : "chevron-down");
     const toggle = () => {
       if (collapsed) this.collapsedCards.delete(card.token);
@@ -250,11 +257,18 @@ export class AgentInboxView extends ItemView {
 
     const meta = el.createDiv({ cls: "terminus-inbox-card-meta" });
     const group = this.plugin.groupStore.get(terminal?.groupId);
-    if (group) {
+    // A terminal and its group often share a name (both taken from Claude's
+    // title); the group's then adds nothing but a repeat.
+    if (group && group.name !== name) {
       const groupLabel = meta.createSpan({ cls: "terminus-inbox-group" });
       groupLabel.createSpan({ cls: "terminus-group-dot" }).style.setProperty("--terminus-group-color", group.color);
       groupLabel.createSpan({ text: group.name });
       setTooltip(groupLabel, "This terminal's group");
+    }
+    // `claude --agent reviewer`: the session itself is one of the user's
+    // agents, so the card says which.
+    if (session?.agentName) {
+      setTooltip(iconLabel(meta, "bot", session.agentName, "terminus-inbox-agent-name-meta"), `Runs as the ${session.agentName} agent`);
     }
     if (session?.branch && this.plugin.settings.multiAgent.showGitBranch) {
       setTooltip(iconLabel(meta, "git-branch", session.branch, "terminus-inbox-branch"), "Git branch of this session's folder");
@@ -267,7 +281,7 @@ export class AgentInboxView extends ItemView {
       const { added, removed } = sumStats(card.changes);
       // One unit, so a narrow card wraps before it rather than inside it.
       const pending = meta.createSpan({ cls: "terminus-inbox-pending" });
-      pending.createSpan({ text: `${card.changes.length} pending` });
+      pending.createSpan({ text: `${card.changes.length} to review` });
       pending.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
       pending.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
     }
@@ -326,7 +340,7 @@ export class AgentInboxView extends ItemView {
       setTooltip(dismiss, "Hide this card until the session's next turn");
       dismiss.addEventListener("click", () => this.dismiss([card]));
     } else {
-      foot.createSpan({ cls: "terminus-inbox-foot-note", text: "No pending changes" });
+      foot.createSpan({ cls: "terminus-inbox-foot-note", text: "Nothing to review" });
     }
     foot.createDiv({ cls: "terminus-inbox-spacer" });
     if (terminal) {
@@ -462,7 +476,8 @@ export class AgentInboxView extends ItemView {
       agentId: sub.agentId,
       mark: subagentMark(sub.run),
       name: task ?? sub.agentType,
-      secondary: task ? sub.agentType : null,
+      // A teammate's type is its name in the team.
+      secondary: sub.run?.teammate ? `teammate ${sub.agentType}` : task ? sub.agentType : null,
       details: compact ? [] : details,
       usage: compact ? null : (sub.run?.usage ?? null),
       changes: sub.changes,
@@ -570,18 +585,26 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
-function statusPill(card: InboxCard): { kind: string; label: string } {
+/** The card's pill, and what it means on hover. */
+function statusPill(card: InboxCard): { kind: string; label: string; hint: string } {
   const session = card.session;
-  if (card.ended || !session) return { kind: "ended", label: "Session ended" };
+  if (card.ended || !session) return { kind: "ended", label: "Session ended", hint: "Claude has exited. The card stays until its changes are reviewed." };
   switch (session.status) {
     case "needs-attention":
-      return { kind: "needs-attention", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" || session.needs === "unread-turn" ? "Waiting for you" : "Needs attention" };
+      return {
+        kind: "needs-attention",
+        label: session.needs === "permission" ? "Needs permission" : session.needs === "input" || session.needs === "unread-turn" ? "Waiting for you" : "Needs attention",
+        hint: "Claude is waiting on you in the terminal",
+      };
     case "working":
-      return { kind: "working", label: "Working" };
+      return { kind: "working", label: "Working", hint: "Claude is mid-turn" };
     case "finished-unread":
-      return { kind: "finished", label: "Finished" };
+      return { kind: "finished", label: "Finished", hint: "The turn ended and you haven't looked at it yet" };
     case "idle":
-      return { kind: "idle", label: "Idle" };
+      // Started but no turn yet: nothing has finished.
+      return session.lastTurnEndedAt === null
+        ? { kind: "idle", label: "Ready", hint: "Claude is running and waiting for a first prompt" }
+        : { kind: "idle", label: "Idle", hint: "Claude is waiting for your next prompt" };
   }
 }
 

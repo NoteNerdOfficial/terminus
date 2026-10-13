@@ -1795,8 +1795,8 @@
 /* A row's own actions appear where the pointer or keyboard is, at the end
    of the row and on the row's own hover colour (no backing of their own,
    which never matched every theme's sidebar). Hidden, they take no space;
-   shown, they take the place of the row's trailing label ("Shell", "1 in
-   background"), and the name truncates before them. On touch screens
+   shown, they take the place of a terminal's "Shell" tag, sit after a
+   group's summary, and the name truncates before them. On touch screens
    there's no hover, so they're always shown. */
 .terminus-sidebar-row-actions {
   display: none;
@@ -1818,8 +1818,7 @@
   display: flex;
 }
 
-.terminus-sidebar-group-row:not(.is-ungrouped):hover .terminus-sidebar-group-state,
-.terminus-sidebar-group-row:not(.is-ungrouped):focus-within .terminus-sidebar-group-state,
+/* A group's summary stays: it's what says the group needs you. */
 .terminus-sidebar-terminal:hover .terminus-sidebar-shell-tag,
 .terminus-sidebar-terminal:focus-within .terminus-sidebar-shell-tag {
   display: none;
@@ -2280,6 +2279,13 @@
 .terminus-inbox-group .terminus-group-dot {
   width: 7px;
   height: 7px;
+}
+
+/* The agent a session runs as (`claude --agent`), like the branch. */
+.terminus-inbox-agent-name-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .terminus-inbox-branch {

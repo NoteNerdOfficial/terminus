@@ -98,7 +98,16 @@ export function renderChangeRow(
   // filename-relative-to-nowhere path.
   const vaultName = pathBasename(ctx.plugin.getVaultBasePath());
   const relativePath = pathRelative(ctx.plugin.getVaultBasePath(), change.diff.filePath);
-  info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
+  if (!inbox) {
+    info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
+  } else {
+    // The inbox shows only where the file is, when that adds something: its
+    // folder for a file in one, nothing for one at the vault's root (the
+    // name above says it all), the full path for one outside the vault.
+    const outside = relativePath.startsWith("..");
+    const folder = outside ? change.diff.filePath : relativePath.split("/").slice(0, -1).join("/");
+    if (folder) info.createDiv({ cls: "terminus-pending-path", text: outside ? folder : `${folder}/`, attr: { title: change.diff.filePath } });
+  }
   const warning = (cls: string, text: string) => {
     if (!inbox) {
       info.createDiv({ cls, text: `⚠ ${text}` });

@@ -581,7 +581,7 @@ export class TerminalView extends ItemView {
     const identity = sessionIdentity(payload);
     switch (payload.hook_event_name) {
       case "SessionStart":
-        store.sessionStarted(this.token, identity);
+        store.sessionStarted(this.token, identity, payload.agent_type);
         this.typePendingPrompt();
         void this.readGitBranch();
         // A resumed session's transcript already has usage in it.
@@ -598,7 +598,9 @@ export class TerminalView extends ItemView {
         store.sessionEnded(this.token);
         break;
       case "PreToolUse":
-        if (this.plugin.tracksSubagents) store.agentLaunched(this.token, payload.tool_input.description, payload.tool_input.subagent_type);
+        if (this.plugin.tracksSubagents) {
+          store.agentLaunched(this.token, payload.tool_input.description, payload.tool_input.subagent_type, payload.tool_input.name);
+        }
         break;
       case "SubagentStart":
         if (this.plugin.tracksSubagents) store.subagentStarted(this.token, payload.agent_id, payload.agent_type, identity);

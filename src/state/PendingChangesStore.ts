@@ -113,7 +113,17 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
       ? {
           ...existing.change,
           payload: input.payload,
-          diff: { ...input.diff, oldText: existing.change.diff.oldText, revertText: existing.change.diff.revertText },
+          // The baseline is the first edit's: what the file was before any
+          // of them, including whether it existed at all. A later edit sees
+          // the file the first one created, so taking its existedBefore
+          // made rejecting a created-then-edited file leave it empty on
+          // disk instead of deleting it.
+          diff: {
+            ...input.diff,
+            oldText: existing.change.diff.oldText,
+            revertText: existing.change.diff.revertText,
+            existedBefore: existing.change.diff.existedBefore,
+          },
           editCount: existing.change.editCount + 1,
           contributors: existing.change.contributors.some((c) => c.token === input.token)
             ? existing.change.contributors

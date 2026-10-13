@@ -53,6 +53,9 @@ export interface AgentSession {
    *  (subagents' are on their runs). Null before one, or when Claude Code
    *  isn't saving transcripts. */
   usage: UsageTotals | null;
+  /** The custom agent the session itself runs as (`claude --agent`), or
+   *  null for a plain session. */
+  agentName: string | null;
   /** Subagents this session started, oldest first. Empty unless subagents
    *  are tracked (Multi-agent, "Track subagents" on). */
   subagents: SubagentRun[];
@@ -63,8 +66,12 @@ export interface AgentSession {
  *  their edits apart (see PendingChange.agents). */
 export interface SubagentRun {
   agentId: string;
-  /** e.g. "general-purpose", "Explore". */
+  /** e.g. "general-purpose", "Explore"; a teammate's name for an
+   *  agent-team teammate. */
   agentType: string;
+  /** An agent-team teammate rather than a subagent: it can sit idle and
+   *  take more messages, and turn-end task lists don't name it by id. */
+  teammate: boolean;
   /** The task the lead gave it ("Check token rotation"). Null when it
    *  couldn't be matched to the lead's Agent call; show the type instead. */
   description: string | null;
@@ -105,6 +112,9 @@ export interface ReportedBackgroundTask {
 interface AgentLaunch {
   description: string | null;
   agentType: string | null;
+  /** An agent-team teammate's name, which its SubagentStart reports as
+   *  the type. */
+  name: string | null;
 }
 
 /** Ample for any card; keeps a long-running session from growing without
@@ -147,12 +157,12 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
 
   /** SessionStart. A new session id under the same terminal (/clear, or a
    *  fresh `claude` after the last one exited) starts from a clean slate. */
-  sessionStarted(token: string, identity: SessionIdentity): void {
+  sessionStarted(token: string, identity: SessionIdentity, agentName?: string): void {
     const existing = this.sessions.get(token);
     const isNewSession = !existing || !existing.running || (identity.sessionId !== undefined && identity.sessionId !== existing.sessionId);
     const base = isNewSession ? this.blank(token) : existing;
     if (isNewSession) this.launches.delete(token);
-    this.update({ ...base, ...this.identityFields(base, identity), running: true, endedAt: null });
+    this.update({ ...base, ...this.identityFields(base, identity), running: true, endedAt: null, agentName: agentName?.trim() || base.agentName });
   }
 
   /** UserPromptSubmit: a turn starts. */
@@ -170,9 +180,9 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
 
   /** The lead called the Agent tool. SubagentStart doesn't carry the task
    *  description, so this is queued for the start it's about to cause. */
-  agentLaunched(token: string, description: string | undefined, agentType: string | undefined): void {
+  agentLaunched(token: string, description: string | undefined, agentType: string | undefined, name?: string): void {
     const queue = this.launches.get(token) ?? [];
-    queue.push({ description: description?.trim() || null, agentType: agentType ?? null });
+    queue.push({ description: description?.trim() || null, agentType: agentType ?? null, name: name?.trim() || null });
     this.launches.set(token, queue);
   }
 
@@ -184,10 +194,12 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
   subagentStarted(token: string, agentId: string, agentType: string, identity: SessionIdentity, at = Date.now()): void {
     const s = this.ensure(token, identity);
     if (s.subagents.some((run) => run.agentId === agentId)) return;
+    const launch = this.takeLaunch(token, agentType);
     const run: SubagentRun = {
       agentId,
       agentType,
-      description: this.takeLaunch(token, agentType)?.description ?? null,
+      teammate: launch?.name === agentType,
+      description: launch?.description ?? null,
       running: true,
       outcome: null,
       error: null,
@@ -222,14 +234,17 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
   ): void {
     const s = this.ensure(token, identity);
     const existing = s.subagents.find((run) => run.agentId === end.agentId);
-    // Claude Code's internal helpers send a SubagentStop with no type and no
-    // start; they aren't subagents anyone started.
-    if (!existing && !end.agentType.trim()) return;
+    // Claude Code's internal helpers (a prompt suggestion: "commit this")
+    // send a SubagentStop with no start and the session's own agent type:
+    // none for a plain session, "reviewer" under `claude --agent reviewer`.
+    // They aren't subagents anyone started.
+    if (!existing && (!end.agentType.trim() || end.agentType === s.agentName)) return;
     // A stop with no start on record: the start landed before Terminus
     // loaded, or the hooks were installed mid-run.
     const base: SubagentRun = existing ?? {
       agentId: end.agentId,
       agentType: end.agentType,
+      teammate: false,
       description: null,
       running: true,
       outcome: null,
@@ -277,7 +292,10 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
         changed = true;
         return { ...run, seenInBackground: true, description };
       }
-      if (!run.running || !(atTurnEnd || run.seenInBackground)) return run;
+      // Teammates are listed as "teammate" tasks under task ids, not their
+      // agent ids, so their absence says nothing; they end with their own
+      // SubagentStop, or with the session.
+      if (!run.running || run.teammate || !(atTurnEnd || run.seenInBackground)) return run;
       changed = true;
       return { ...run, running: false, outcome: "stopped" as const, endedAt: at };
     });
@@ -406,7 +424,9 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
   private takeLaunch(token: string, agentType: string): AgentLaunch | undefined {
     const queue = this.launches.get(token);
     if (!queue || queue.length === 0) return undefined;
-    let index = queue.findIndex((launch) => launch.agentType === agentType);
+    // A teammate's type is the name its launch gave it.
+    let index = queue.findIndex((launch) => launch.name === agentType);
+    if (index === -1) index = queue.findIndex((launch) => launch.agentType === agentType);
     if (index === -1) index = queue.findIndex((launch) => launch.agentType === null);
     if (index === -1) return undefined;
     const [launch] = queue.splice(index, 1);
@@ -442,6 +462,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       turnStartedAt: null,
       lastTurnMs: null,
       lastTurnEndedAt: null,
+      agentName: null,
       currentFile: null,
       transcriptPath: null,
       cwd: null,

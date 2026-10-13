@@ -60,6 +60,10 @@ export interface SessionStartHookPayload extends SessionHookPayloadBase {
   hook_event_name: "SessionStart";
   /** "startup", "resume", "clear" or "compact". */
   source: string;
+  /** The custom agent the whole session runs as (`claude --agent reviewer`,
+   *  or the `agent` setting). Every later event carries it too, with no
+   *  agent_id on the session's own. Captured from 2.1.296. */
+  agent_type?: string;
 }
 
 export interface SessionEndHookPayload extends SessionHookPayloadBase {
@@ -88,6 +92,9 @@ export interface AgentToolHookPayload extends SessionHookPayloadBase {
     description?: string;
     subagent_type?: string;
     run_in_background?: boolean;
+    /** Set when the call spawns an agent-team teammate; the teammate's
+     *  SubagentStart then has this as its agent_type (2.1.296). */
+    name?: string;
   };
 }
 
