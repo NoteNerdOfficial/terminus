@@ -190,6 +190,15 @@ export class AgentInboxView extends ItemView {
       setIcon(empty.createDiv({ cls: "terminus-inbox-empty-icon" }), "check-circle");
       empty.createDiv({ cls: "terminus-inbox-empty-title", text: "All caught up" });
       empty.createDiv({ cls: "terminus-inbox-empty-text", text: "A dismissed session comes back here on its next turn." });
+      if (this.ui.lastDismissed.some((token) => this.ui.dismissed.has(token))) {
+        const undo = empty.createEl("button", { cls: "terminus-btn-ghost", text: "Undo dismiss" });
+        undo.addEventListener("click", () => {
+          this.ui.userAction();
+          for (const token of this.ui.lastDismissed) this.ui.dismissed.delete(token);
+          this.ui.lastDismissed = [];
+          this.render();
+        });
+      }
     }
 
     this.renderElsewhere(body, elsewhere);
@@ -378,6 +387,7 @@ export class AgentInboxView extends ItemView {
 
   private dismiss(cards: InboxCard[]): void {
     this.ui.userAction();
+    this.ui.lastDismissed = cards.map((card) => card.token);
     for (const card of cards) {
       this.ui.dismissed.add(card.token);
       this.plugin.agentSessionStore.seen(card.token);
@@ -841,7 +851,7 @@ function statusPill(card: InboxCard): { kind: string; label: string; hint: strin
 
 /** Claude's messages are Markdown; the two-line preview shows them as
  *  plain text rather than with their `**` and backticks. */
-function plainPreview(markdown: string): string {
+export function plainPreview(markdown: string): string {
   let text = markdown
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")

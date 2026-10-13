@@ -1,6 +1,7 @@
 import { ItemView, Menu, setIcon, setTooltip, TFile, WorkspaceLeaf } from "obsidian";
 import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { TerminalView } from "./TerminalView";
+import { plainPreview } from "./AgentInboxView";
 import { guardRenderDuringPress } from "./renderGuard";
 import { iconButton, iconLabel, makeActivatable } from "./uiHelpers";
 import type { TerminalGroup } from "../state/GroupStore";
@@ -403,6 +404,8 @@ export class TerminusSidebarView extends ItemView {
 
     row.createSpan({ cls: "terminus-sidebar-terminal-color" });
     row.createSpan({ cls: "terminus-sidebar-terminal-name", text: view.getDisplayText() });
+    const preview = this.preview(token);
+    if (preview) setTooltip(row, preview, { delay: 400 });
     const pending = this.plugin.pendingChangesStore.list().filter((c) => c.contributors[0]?.token === token).length;
     if (pending > 0) {
       const badge = row.createSpan({ cls: "terminus-sidebar-pending", text: String(pending), attr: { "aria-label": `${pending} ${pending === 1 ? "change" : "changes"} to review` } });
@@ -644,6 +647,30 @@ export class TerminusSidebarView extends ItemView {
       });
     }
     return cached?.branch ?? null;
+  }
+
+  /** What hovering a terminal tells you without opening it: what its
+   *  session is doing or last said, and the files waiting for review. */
+  private preview(token: string): string | null {
+    const session = this.plugin.agentSessionStore.get(token);
+    if (!session?.running) return null;
+    const lines: string[] = [];
+    const base = this.plugin.getVaultBasePath();
+    if (session.status === "working") {
+      lines.push(session.currentFile ? `Editing ${pathRelative(base, session.currentFile)}…` : "Working…");
+    } else if (session.status === "needs-attention" && session.needsMessage) {
+      lines.push(session.needsMessage);
+    } else if (session.lastMessage) {
+      const text = plainPreview(session.lastMessage);
+      lines.push(text.length > 160 ? `${text.slice(0, 160)}…` : text);
+    }
+    const files = this.plugin.pendingChangesStore.list().filter((c) => c.contributors[0]?.token === token);
+    if (files.length > 0) {
+      lines.push("", `${files.length} to review:`);
+      for (const change of files.slice(0, 5)) lines.push(`  ${pathRelative(base, change.diff.filePath)}`);
+      if (files.length > 5) lines.push(`  and ${files.length - 5} more`);
+    }
+    return lines.length > 0 ? lines.join("\n") : null;
   }
 
   private status(view: TerminalView): SidebarStatus | null {

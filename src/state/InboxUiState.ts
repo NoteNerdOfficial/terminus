@@ -21,6 +21,8 @@ export class InboxUiState {
   /** A card to bring into view on the next render: set by the sidebar's
    *  "to review" counts, consumed by the inbox. */
   revealToken: string | null = null;
+  /** The tokens the last dismissal hid, for Undo. */
+  lastDismissed: string[] = [];
   finishedCollapsed = false;
   elsewhereCollapsed = false;
   /** False: the inbox follows the sidebar's selected group. True: every session. */

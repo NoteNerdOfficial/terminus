@@ -20141,6 +20141,16 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       (0, import_obsidian19.setIcon)(empty.createDiv({ cls: "terminus-inbox-empty-icon" }), "check-circle");
       empty.createDiv({ cls: "terminus-inbox-empty-title", text: "All caught up" });
       empty.createDiv({ cls: "terminus-inbox-empty-text", text: "A dismissed session comes back here on its next turn." });
+      if (this.ui.lastDismissed.some((token) => this.ui.dismissed.has(token))) {
+        const undo = empty.createEl("button", { cls: "terminus-btn-ghost", text: "Undo dismiss" });
+        undo.addEventListener("click", () => {
+          this.ui.userAction();
+          for (const token of this.ui.lastDismissed)
+            this.ui.dismissed.delete(token);
+          this.ui.lastDismissed = [];
+          this.render();
+        });
+      }
     }
     this.renderElsewhere(body, elsewhere);
     this.revealRequested(container);
@@ -20332,6 +20342,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
   }
   dismiss(cards) {
     this.ui.userAction();
+    this.ui.lastDismissed = cards.map((card) => card.token);
     for (const card of cards) {
       this.ui.dismissed.add(card.token);
       this.plugin.agentSessionStore.seen(card.token);
@@ -21254,6 +21265,9 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     makeActivatable(row, () => void this.plugin.focusTerminal(token), (evt) => this.showMoveMenu(evt, this.dragSet(view)));
     row.createSpan({ cls: "terminus-sidebar-terminal-color" });
     row.createSpan({ cls: "terminus-sidebar-terminal-name", text: view.getDisplayText() });
+    const preview = this.preview(token);
+    if (preview)
+      (0, import_obsidian21.setTooltip)(row, preview, { delay: 400 });
     const pending = this.plugin.pendingChangesStore.list().filter((c) => {
       var _a8;
       return ((_a8 = c.contributors[0]) == null ? void 0 : _a8.token) === token;
@@ -21507,6 +21521,35 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       });
     }
     return (_c2 = cached == null ? void 0 : cached.branch) != null ? _c2 : null;
+  }
+  /** What hovering a terminal tells you without opening it: what its
+   *  session is doing or last said, and the files waiting for review. */
+  preview(token) {
+    const session = this.plugin.agentSessionStore.get(token);
+    if (!(session == null ? void 0 : session.running))
+      return null;
+    const lines = [];
+    const base = this.plugin.getVaultBasePath();
+    if (session.status === "working") {
+      lines.push(session.currentFile ? `Editing ${(0, import_terminus_node_bridge24.pathRelative)(base, session.currentFile)}\u2026` : "Working\u2026");
+    } else if (session.status === "needs-attention" && session.needsMessage) {
+      lines.push(session.needsMessage);
+    } else if (session.lastMessage) {
+      const text = plainPreview(session.lastMessage);
+      lines.push(text.length > 160 ? `${text.slice(0, 160)}\u2026` : text);
+    }
+    const files = this.plugin.pendingChangesStore.list().filter((c) => {
+      var _a8;
+      return ((_a8 = c.contributors[0]) == null ? void 0 : _a8.token) === token;
+    });
+    if (files.length > 0) {
+      lines.push("", `${files.length} to review:`);
+      for (const change of files.slice(0, 5))
+        lines.push(`  ${(0, import_terminus_node_bridge24.pathRelative)(base, change.diff.filePath)}`);
+      if (files.length > 5)
+        lines.push(`  and ${files.length - 5} more`);
+    }
+    return lines.length > 0 ? lines.join("\n") : null;
   }
   status(view) {
     const session = this.plugin.agentSessionStore.get(view.hookToken);
@@ -22865,6 +22908,8 @@ var InboxUiState = class {
     /** A card to bring into view on the next render: set by the sidebar's
      *  "to review" counts, consumed by the inbox. */
     this.revealToken = null;
+    /** The tokens the last dismissal hid, for Undo. */
+    this.lastDismissed = [];
     this.finishedCollapsed = false;
     this.elsewhereCollapsed = false;
     /** False: the inbox follows the sidebar's selected group. True: every session. */
