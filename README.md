@@ -13,7 +13,33 @@ A real terminal inside Obsidian that never lets you lose the thread on what [Cla
 
 Edits land on disk immediately; you review what changed afterwards, with the option to revert.
 
+Running several Claude sessions at once? The **Multi-agent experience** adds an Agent inbox with a card per session and groups to keep related terminals together. See [Multi-agent](#multi-agent).
+
 ## Screenshots
+
+### Multi-agent
+
+![Terminus with groups on the left and the Agent inbox on the right](screenshots/multi-agent-overview.png)
+
+*Groups on the left, and the Agent inbox on the right following the selected group. The working session's changes hang under the lead and each subagent that made them.*
+
+| Fork a session into a new terminal |
+| --- |
+| ![A Claude session forked into a second terminal in the same group](screenshots/multi-agent-fork-session.png) |
+
+| Send a task to a new terminal |
+| --- |
+| ![The send-a-task dialog](screenshots/multi-agent-send-task.png) |
+
+| Snooze a group until later |
+| --- |
+| ![Snooze presets](screenshots/multi-agent-snooze.png) |
+
+| Review a change hunk by hunk from the inbox |
+| --- |
+| ![Split diff opened from the Agent inbox](screenshots/multi-agent-split-diff.png) |
+
+### Terminal and review
 
 | Split Diff: per-hunk Accept/Reject |
 | --- |
@@ -65,6 +91,32 @@ Edits land on disk immediately; you review what changed afterwards, with the opt
 - **Split Diff view, with per-hunk Accept/Reject.** Click "Split Diff" on a pending change for a dedicated side-by-side (old | new) view with its own Accept/Reject bar on every individual changed block, so you can keep some edits and revert others within the same file instead of an all-or-nothing per-file decision. Not available for `NotebookEdit` changes, since their diff is a display-only approximation of the real file content and can't be safely spliced.
 - **Keyboard-driven review.** Accept/reject the oldest pending change without touching the panel.
 
+## Multi-agent
+
+Switch the **Experience** setting from Classic to Multi-agent (Settings → Terminus → Experience) to run several Claude sessions side by side without losing track of them. Classic keeps the single Pending Changes panel; the two share your terminals, pending changes and every other setting. Each keeps its own review settings.
+
+### Groups (left sidebar)
+
+- **A group is one piece of work.** It holds the terminals for that task, plus the notes you have open in it. Selecting a group shows only its terminals in the editor; the others keep running in the background. Terminals outside any group show in every group.
+- **Named for you.** A group takes its name from what Claude is working on, then your folder or note, unless you type one. A coloured folder marks the group; each terminal keeps its own colour stripe, like its tab.
+- **At a glance.** A group's row says what is happening in it (needs attention, N working, N to review, or when its last turn finished), with one status dot for the most urgent session. Click "N to review" to open the inbox at that terminal.
+- **Link a note.** A group can link to a note and show its `status`. When a turn ends with the note `active`, Terminus suggests moving it to `review` (and back); it never changes the note on its own.
+- **Settle or snooze.** *Settle* puts a finished group away on a Done shelf without closing its terminals; it comes back out by itself when a session in it starts working or needs you. *Snooze* hides a group until a time you pick; it comes back sooner if a session in it needs you or finishes a turn, marked "Woke". Neither is allowed while a session is waiting on a permission prompt.
+- **Organise.** Drag terminals between groups, drag a group's row (or use Move up / Move down) to reorder, and ⌘/Ctrl-click terminals then "Group selected" to gather them.
+- **Choose where a terminal opens.** + Terminal follows the Terminal placement setting, with the same menu as the ribbon icon (new tab, split right, split down, new window).
+- **Go anywhere.** "Go to terminal or group…" is a fuzzy picker over every terminal and group, urgent ones first.
+
+### Agent inbox (right sidebar)
+
+- **A card per Claude session**, sorted into Needs attention, Working and Finished, with what it is doing (or its closing message), how long its turn took, its git branch, and tokens, context use and an estimated cost from its transcript.
+- **It follows the sidebar.** The inbox shows the selected group; sessions in other groups are listed in one line each under Elsewhere, and a line says how many of them need you. **Show all** lists everything.
+- **Changes sit under whoever made them.** A session's pending changes are listed under the lead or the subagent that made them, with the subagent's task as its name and live timers. A long list over several folders groups under foldable folders.
+- **Tell a running session something.** Each card has a box: *Add to input* types your message into the session's input line for you to send, *Send now* types it and presses Enter. It works mid-turn (Claude queues what is entered then), and is refused only while Claude waits on a prompt. Drafts survive re-renders.
+- **Send a task to a new terminal.** Opens a new Claude session beside the sender with your prompt typed in, unsent. Its result shows on the sender's card, and one click types it back into the sender's input line.
+- **Fork a session.** Starts a new terminal in the same group continuing from this session's conversation (`claude --resume <id> --fork-session`), named "(fork)".
+- **Review feedback.** Comment on a hunk in Split Diff, queue comments per session, and type them into that session's input line between turns.
+- **Quiet by default.** An inbox you already have open only comes forward after a meaningful burst of edits (three files or 50 lines), and never while you are rearranging it. Terminus never submits anything for you except when you press Send now.
+
 ### Terminal help for beginners
 
 - **Shell integration** (zsh and bash) tracks every command's boundaries and exit code, without modifying your actual `.zshrc`/`.bashrc`.
@@ -84,6 +136,8 @@ All of these appear in the command palette under `Terminus:`. None ship with a d
 | Open in split down |
 | Open in new window |
 | Open Pending Changes |
+| Open agent inbox |
+| Jump to next session that needs attention |
 | Open Action Log |
 | Getting started |
 | Rescue closed terminal |
@@ -94,6 +148,13 @@ All of these appear in the command palette under `Terminus:`. None ship with a d
 | Reject oldest pending change |
 | Keep all pending changes |
 | Reject all pending changes |
+| New group *(Multi-agent)* |
+| Switch group… *(Multi-agent)* |
+| Go to terminal or group… *(Multi-agent)* |
+| Move tab to group… *(Multi-agent)* |
+| Close group *(Multi-agent)* |
+| Start Claude on this note *(Multi-agent)* |
+| Send a task to a new terminal… *(Multi-agent)* |
 
 ## How it works
 
@@ -102,6 +163,8 @@ All of these appear in the command palette under `Terminus:`. None ship with a d
 **Knowing when a turn ends.** The same file also gets a `Stop` hook, pointing at a second bundled script that pings the same server when Claude finishes a turn. Nothing in the `PreToolUse` stream can express "no more writes are coming" — a turn goes quiet whenever Claude is thinking or running non-write tools — so without it the activity chip has to guess with a timer and either drops mid-turn or lingers past the end. It's a bodyless ping that writes nothing to stdout, since a `Stop` hook's stdout is how a hook tells Claude Code to *block* stopping.
 
 **Knowing when Claude needs you.** A third hook, `Notification`, points at a third bundled script and fires whenever Claude Code needs permission to use a tool or has sat idle waiting on input. Both are "a human needs to look here" moments, so either one lights up that terminal's tab dot the same way, without the plugin parsing the notification's message text. The `Stop` hook (above) or focusing that tab, whichever comes first, clears it again.
+
+**Multi-agent.** The Multi-agent experience adds hooks for `SessionStart`, `SessionEnd`, `UserPromptSubmit` and `StopFailure` (and, while subagents are tracked, the Agent tool's `PreToolUse`, `SubagentStart` and `SubagentStop`) to the same bundled bridge scripts. Every event carries its terminal's own token, so a session, its subagents and their edits are always attributed to the right terminal. Nothing polls. If your vault path contains a space, the hook commands are written single-quoted so the shell runs them correctly.
 
 All three hooks are added without disturbing anything already in that file, and Claude Code reads hooks at session start — so a `claude` that was already running when the plugin first provisioned them picks them up on its next start.
 
@@ -138,6 +201,9 @@ The build bundles `src/main.ts` into `main.js` with esbuild, and regenerates `st
 | `src/settings.ts` | Settings tab + settings type/defaults |
 | `src/views/TerminalView.ts` | The terminal panel: xterm.js, PTY wiring, failure badges, rename/color identity |
 | `src/views/PendingChangesView.ts` | The Pending Changes sidebar panel |
+| `src/views/AgentInboxView.ts`, `TerminusSidebarView.ts` | Multi-agent: the Agent inbox (right) and the groups sidebar (left) |
+| `src/groups/` | Group logic: controller, menus, naming, notes, snooze presets, tab visibility, fork command, the "Go to terminal or group" picker |
+| `src/state/AgentSessionStore.ts`, `GroupStore.ts`, `InboxUiState.ts`, `DelegationStore.ts`, `inboxModel.ts` | Session status, groups, how the inbox is arranged, delegated tasks, and sorting sessions into cards |
 | `src/views/DiffSplitView.ts` | The Split Diff view (one pending change, opened per-file) |
 | `src/diff/buildDiffLines.ts`, `renderDiff.ts` | Line-structured, word-emphasized diff model + gutter/minimap rendering |
 | `src/diff/hunks.ts` | Groups a diff into context runs and hunks with stable offsets, shared by the Split Diff renderer and per-hunk resolution |
