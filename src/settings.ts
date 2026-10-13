@@ -276,8 +276,7 @@ export class TerminusSettingTab extends PluginSettingTab {
       )
       .addToggle((toggle) =>
         toggle.setValue(multiAgent.trackSubagents).onChange(async (value) => {
-          multiAgent.trackSubagents = value;
-          await this.plugin.saveSettings();
+          await this.plugin.setTrackSubagents(value);
         })
       );
 

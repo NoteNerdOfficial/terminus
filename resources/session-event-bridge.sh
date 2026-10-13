@@ -2,10 +2,15 @@
 # Session-event hook bridge for the Terminus Obsidian plugin.
 #
 # One bridge for the hooks the Multi-agent experience adds on top of the
-# three Classic ones: SessionStart, SessionEnd and UserPromptSubmit. Each
-# payload carries its own hook_event_name, so they share a script and a
-# route (/session-event) rather than one of each. Only installed while the
-# Multi-agent experience is selected (see provisionSettings.ts).
+# three Classic ones: SessionStart, SessionEnd and UserPromptSubmit, and,
+# while subagents are tracked, the lead's Agent tool call (PreToolUse),
+# SubagentStart and SubagentStop. Each payload carries its own
+# hook_event_name, so they share a script and a route (/session-event)
+# rather than one of each. Only installed while the Multi-agent experience
+# is selected (see provisionSettings.ts).
+#
+# The Agent call goes here rather than to hook-bridge.sh because it edits no
+# file: there's no snapshot to take, only the subagent's task description.
 #
 # Same environment contract as the other bridges: runs as a subprocess of
 # the shell inside a Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT

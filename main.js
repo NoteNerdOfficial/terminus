@@ -399,11 +399,19 @@ var import_terminus_node_bridge = __toESM(require_dist());
 var MAX_BODY_BYTES = 5 * 1024 * 1024;
 var STATUS_BODY_MAX_BYTES = 1024 * 1024;
 var SESSION_EVENTS = /* @__PURE__ */ new Set(["SessionStart", "SessionEnd", "UserPromptSubmit"]);
+var SUBAGENT_EVENTS = /* @__PURE__ */ new Set(["SubagentStart", "SubagentStop"]);
+var AGENT_TOOLS = /* @__PURE__ */ new Set(["Agent", "Task"]);
 function isSessionEvent(value) {
   if (typeof value !== "object" || value === null)
     return false;
-  const name = value.hook_event_name;
-  return typeof name === "string" && SESSION_EVENTS.has(name);
+  const v3 = value;
+  if (typeof v3.hook_event_name !== "string")
+    return false;
+  if (SESSION_EVENTS.has(v3.hook_event_name))
+    return true;
+  if (SUBAGENT_EVENTS.has(v3.hook_event_name))
+    return typeof v3.agent_id === "string";
+  return v3.hook_event_name === "PreToolUse" && typeof v3.tool_name === "string" && AGENT_TOOLS.has(v3.tool_name) && typeof v3.tool_input === "object" && v3.tool_input !== null;
 }
 var ReviewServer = class {
   constructor() {
@@ -533,7 +541,9 @@ function isClaudeSettingsFile(value) {
   return typeof value === "object" && value !== null;
 }
 var MULTI_AGENT_ONLY_EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit"];
+var SUBAGENT_EVENTS2 = ["SubagentStart", "SubagentStop"];
 var MATCHER = "Edit|Write|NotebookEdit";
+var AGENT_MATCHER = "Agent|Task";
 var DEFAULT_TIMEOUT_SECONDS = 15;
 var TURN_END_TIMEOUT_SECONDS = 10;
 var NOTIFICATION_TIMEOUT_SECONDS = 5;
@@ -562,8 +572,10 @@ function getNotificationBridgePath(app, manifest) {
 function getSessionEventBridgePath(app, manifest) {
   return resourcePath(app, manifest, "session-event-bridge.sh");
 }
-async function provisionClaudeSettings(app, manifest, experience) {
+async function provisionClaudeSettings(app, manifest, options) {
   var _a8;
+  const multiAgent = options.experience === "multi-agent";
+  const trackSubagents = multiAgent && options.trackSubagents;
   const basePath = getVaultBasePath(app);
   const claudeDir = (0, import_terminus_node_bridge2.pathJoin)(basePath, ".claude");
   const settingsPath = (0, import_terminus_node_bridge2.pathJoin)(claudeDir, "settings.local.json");
@@ -590,11 +602,18 @@ async function provisionClaudeSettings(app, manifest, experience) {
     timeout: NOTIFICATION_TIMEOUT_SECONDS
   });
   const sessionEventBridge = getSessionEventBridgePath(app, manifest);
+  const sessionHook = { command: sessionEventBridge, timeout: SESSION_EVENT_TIMEOUT_SECONDS };
   let sessionHooksChanged = false;
   for (const event of MULTI_AGENT_ONLY_EVENTS) {
-    const changed = experience === "multi-agent" ? ensureHook(hooks, event, { command: sessionEventBridge, timeout: SESSION_EVENT_TIMEOUT_SECONDS }) : removeHook(hooks, event, sessionEventBridge);
+    const changed = multiAgent ? ensureHook(hooks, event, sessionHook) : removeHook(hooks, event, sessionEventBridge);
     sessionHooksChanged || (sessionHooksChanged = changed);
   }
+  for (const event of SUBAGENT_EVENTS2) {
+    const changed = trackSubagents ? ensureHook(hooks, event, sessionHook) : removeHook(hooks, event, sessionEventBridge);
+    sessionHooksChanged || (sessionHooksChanged = changed);
+  }
+  const agentToolChanged = trackSubagents ? ensureHook(hooks, "PreToolUse", { ...sessionHook, matcher: AGENT_MATCHER }) : removeHook(hooks, "PreToolUse", sessionEventBridge);
+  sessionHooksChanged || (sessionHooksChanged = agentToolChanged);
   if (preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged) {
     await (0, import_terminus_node_bridge2.writeTextFile)(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
@@ -948,7 +967,45 @@ curl -s -m 5 -o /dev/null \\
 
 exit 0
 `, executable: true },
-  { relativePath: "session-event-bridge.sh", content: '#!/usr/bin/env bash\n# Session-event hook bridge for the Terminus Obsidian plugin.\n#\n# One bridge for the hooks the Multi-agent experience adds on top of the\n# three Classic ones: SessionStart, SessionEnd and UserPromptSubmit. Each\n# payload carries its own hook_event_name, so they share a script and a\n# route (/session-event) rather than one of each. Only installed while the\n# Multi-agent experience is selected (see provisionSettings.ts).\n#\n# Same environment contract as the other bridges: runs as a subprocess of\n# the shell inside a Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT\n# and TERMINUS_HOOK_TOKEN from it, and does nothing at all outside one.\n#\n# Always exits 0, and never writes anything to stdout: SessionStart\'s and\n# UserPromptSubmit\'s stdout is added to Claude\'s context, and a status\n# update has no business putting anything there. An unreachable review\n# server just means this one event goes unrecorded.\nset -u\n\nINPUT="$(cat)"\n\nif [ -z "${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "${TERMINUS_HOOK_PORT:-}" ]; then\n  exit 0\nfi\n\ncurl -s -m 5 -o /dev/null \\\n  -X POST "http://127.0.0.1:${TERMINUS_HOOK_PORT}/session-event" \\\n  -H "Authorization: Bearer ${TERMINUS_HOOK_TOKEN}" \\\n  -H "Content-Type: application/json" \\\n  --data-binary "$INPUT" \\\n  2>/dev/null\n\nexit 0\n', executable: true },
+  { relativePath: "session-event-bridge.sh", content: `#!/usr/bin/env bash
+# Session-event hook bridge for the Terminus Obsidian plugin.
+#
+# One bridge for the hooks the Multi-agent experience adds on top of the
+# three Classic ones: SessionStart, SessionEnd and UserPromptSubmit, and,
+# while subagents are tracked, the lead's Agent tool call (PreToolUse),
+# SubagentStart and SubagentStop. Each payload carries its own
+# hook_event_name, so they share a script and a route (/session-event)
+# rather than one of each. Only installed while the Multi-agent experience
+# is selected (see provisionSettings.ts).
+#
+# The Agent call goes here rather than to hook-bridge.sh because it edits no
+# file: there's no snapshot to take, only the subagent's task description.
+#
+# Same environment contract as the other bridges: runs as a subprocess of
+# the shell inside a Terminus PTY panel, so it inherits TERMINUS_HOOK_PORT
+# and TERMINUS_HOOK_TOKEN from it, and does nothing at all outside one.
+#
+# Always exits 0, and never writes anything to stdout: SessionStart's and
+# UserPromptSubmit's stdout is added to Claude's context, and a status
+# update has no business putting anything there. An unreachable review
+# server just means this one event goes unrecorded.
+set -u
+
+INPUT="$(cat)"
+
+if [ -z "\${TERMINUS_HOOK_TOKEN:-}" ] || [ -z "\${TERMINUS_HOOK_PORT:-}" ]; then
+  exit 0
+fi
+
+curl -s -m 5 -o /dev/null \\
+  -X POST "http://127.0.0.1:\${TERMINUS_HOOK_PORT}/session-event" \\
+  -H "Authorization: Bearer \${TERMINUS_HOOK_TOKEN}" \\
+  -H "Content-Type: application/json" \\
+  --data-binary "$INPUT" \\
+  2>/dev/null
+
+exit 0
+`, executable: true },
   { relativePath: "shell-integration/zsh/.zshenv", content: `# Terminus shell integration (zsh).
 #
 # We hijack ZDOTDIR so zsh looks here for .zshenv, which is the ONLY rc file
@@ -16742,9 +16799,12 @@ var TerminalView = class extends import_obsidian7.ItemView {
     this.refreshPendingDot();
     this.plugin.agentSessionStore.needsAttention(this.token, payload == null ? void 0 : payload.notification_type, sessionIdentity(payload));
   }
-  /** SessionStart / SessionEnd / UserPromptSubmit -- only sent while the
-   *  Multi-agent experience has those hooks installed. */
+  /** SessionStart / SessionEnd / UserPromptSubmit, and the subagent
+   *  events -- only sent while the Multi-agent experience has those hooks
+   *  installed. Subagent events are dropped once tracking is off, since
+   *  a session started earlier keeps sending them. */
   onSessionEvent(payload) {
+    var _a8, _b;
     const store = this.plugin.agentSessionStore;
     const identity = sessionIdentity(payload);
     switch (payload.hook_event_name) {
@@ -16756,6 +16816,29 @@ var TerminalView = class extends import_obsidian7.ItemView {
         break;
       case "SessionEnd":
         store.sessionEnded(this.token);
+        break;
+      case "PreToolUse":
+        if (this.plugin.tracksSubagents)
+          store.agentLaunched(this.token, payload.tool_input.description, payload.tool_input.subagent_type);
+        break;
+      case "SubagentStart":
+        if (this.plugin.tracksSubagents)
+          store.subagentStarted(this.token, payload.agent_id, payload.agent_type, identity);
+        break;
+      case "SubagentStop":
+        if (!this.plugin.tracksSubagents)
+          break;
+        store.subagentStopped(
+          this.token,
+          {
+            agentId: payload.agent_id,
+            agentType: payload.agent_type,
+            lastMessage: payload.last_assistant_message,
+            transcriptPath: payload.agent_transcript_path,
+            description: (_b = (_a8 = payload.background_tasks) == null ? void 0 : _a8.find((task) => task.id === payload.agent_id)) == null ? void 0 : _b.description
+          },
+          identity
+        );
         break;
     }
   }
@@ -17101,6 +17184,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
    * just records the pre-edit snapshot for later review/revert.
    */
   async onChangeApplied(payload) {
+    var _a8;
     const diff = await buildDiff(payload);
     this.noteActivity(diff.filePath);
     this.plugin.agentSessionStore.fileEdited(this.token, diff.filePath, sessionIdentity(payload));
@@ -17109,7 +17193,10 @@ var TerminalView = class extends import_obsidian7.ItemView {
       diff,
       token: this.token,
       panelLabel: this.getDisplayText(),
-      panelColor: this.color
+      panelColor: this.color,
+      // PreToolUse is a Classic hook, so agent_id arrives either way; it's
+      // only kept while subagents are tracked.
+      agent: this.plugin.tracksSubagents && payload.agent_id ? { id: payload.agent_id, type: (_a8 = payload.agent_type) != null ? _a8 : "" } : null
     });
     void this.checkBacklinkBreakage(diff.filePath);
   }
@@ -18774,14 +18861,17 @@ var PendingChangesStore = class extends TypedEmitter {
    * and the UI warns before a reject undoes it.
    */
   recordChange(input) {
+    var _a8, _b, _c2, _d;
     const key = input.diff.filePath;
     const existing = this.entries.get(key);
+    const agent = { token: input.token, agentId: (_b = (_a8 = input.agent) == null ? void 0 : _a8.id) != null ? _b : null, agentType: (_d = (_c2 = input.agent) == null ? void 0 : _c2.type) != null ? _d : null };
     const change = existing ? {
       ...existing.change,
       payload: input.payload,
       diff: { ...input.diff, oldText: existing.change.diff.oldText, revertText: existing.change.diff.revertText },
       editCount: existing.change.editCount + 1,
-      contributors: existing.change.contributors.some((c) => c.token === input.token) ? existing.change.contributors : [...existing.change.contributors, { token: input.token, label: input.panelLabel, color: input.panelColor }]
+      contributors: existing.change.contributors.some((c) => c.token === input.token) ? existing.change.contributors : [...existing.change.contributors, { token: input.token, label: input.panelLabel, color: input.panelColor }],
+      agents: existing.change.agents.some((a) => a.token === agent.token && a.agentId === agent.agentId) ? existing.change.agents : [...existing.change.agents, agent]
     } : {
       id: key,
       payload: input.payload,
@@ -18791,6 +18881,7 @@ var PendingChangesStore = class extends TypedEmitter {
       createdAt: Date.now(),
       editCount: 1,
       contributors: [{ token: input.token, label: input.panelLabel, color: input.panelColor }],
+      agents: [agent],
       brokenBacklinks: []
     };
     this.entries.set(key, { change, onExternallyResolved: existing == null ? void 0 : existing.onExternallyResolved });
@@ -18982,11 +19073,14 @@ var ActionLog = class {
 };
 
 // src/state/AgentSessionStore.ts
+var MAX_SUBAGENTS = 50;
 var MAX_MESSAGE_LENGTH = 500;
 var AgentSessionStore = class extends TypedEmitter {
   constructor() {
     super(...arguments);
     this.sessions = /* @__PURE__ */ new Map();
+    /** Per terminal: Agent calls not yet matched to a SubagentStart. */
+    this.launches = /* @__PURE__ */ new Map();
   }
   get(token) {
     return this.sessions.get(token);
@@ -19000,6 +19094,8 @@ var AgentSessionStore = class extends TypedEmitter {
     const existing = this.sessions.get(token);
     const isNewSession = !existing || !existing.running || identity.sessionId !== void 0 && identity.sessionId !== existing.sessionId;
     const base = isNewSession ? this.blank(token) : existing;
+    if (isNewSession)
+      this.launches.delete(token);
     this.update({ ...base, ...this.identityFields(base, identity), running: true, endedAt: null });
   }
   /** UserPromptSubmit: a turn starts. */
@@ -19014,8 +19110,66 @@ var AgentSessionStore = class extends TypedEmitter {
     const s15 = this.ensure(token, identity);
     this.update({ ...s15, status: "working", needs: null, currentFile: filePath, turnStartedAt: (_a8 = s15.turnStartedAt) != null ? _a8 : Date.now() });
   }
+  /** The lead called the Agent tool. SubagentStart doesn't carry the task
+   *  description, so this is queued for the start it's about to cause. */
+  agentLaunched(token, description, agentType) {
+    var _a8;
+    const queue = (_a8 = this.launches.get(token)) != null ? _a8 : [];
+    queue.push({ description: (description == null ? void 0 : description.trim()) || null, agentType: agentType != null ? agentType : null });
+    this.launches.set(token, queue);
+  }
+  /** SubagentStart. In captured runs it lands right after the Agent call
+   *  that caused it, for foreground and background subagents alike, so it
+   *  takes the oldest queued launch of its type, or failing that one that
+   *  named no type (the Agent call can omit subagent_type). With neither,
+   *  the run shows its type alone. */
+  subagentStarted(token, agentId, agentType, identity, at3 = Date.now()) {
+    var _a8, _b;
+    const s15 = this.ensure(token, identity);
+    if (s15.subagents.some((run2) => run2.agentId === agentId))
+      return;
+    const run = {
+      agentId,
+      agentType,
+      description: (_b = (_a8 = this.takeLaunch(token, agentType)) == null ? void 0 : _a8.description) != null ? _b : null,
+      running: true,
+      startedAt: at3,
+      endedAt: null,
+      lastMessage: null,
+      transcriptPath: null
+    };
+    this.update({ ...s15, subagents: capSubagents([...s15.subagents, run]) });
+  }
+  /** SubagentStop. Its background_tasks list the stopping subagent with its
+   *  description, which settles any guess made at the start. */
+  subagentStopped(token, stop, identity, at3 = Date.now()) {
+    var _a8, _b;
+    const s15 = this.ensure(token, identity);
+    const existing = s15.subagents.find((run2) => run2.agentId === stop.agentId);
+    const base = existing != null ? existing : {
+      agentId: stop.agentId,
+      agentType: stop.agentType,
+      description: null,
+      running: true,
+      startedAt: at3,
+      endedAt: null,
+      lastMessage: null,
+      transcriptPath: null
+    };
+    const run = {
+      ...base,
+      description: ((_a8 = stop.description) == null ? void 0 : _a8.trim()) || base.description,
+      running: false,
+      endedAt: at3,
+      lastMessage: stop.lastMessage === void 0 ? base.lastMessage : truncate(stop.lastMessage),
+      transcriptPath: (_b = stop.transcriptPath) != null ? _b : base.transcriptPath
+    };
+    const subagents = existing ? s15.subagents.map((r) => r === existing ? run : r) : capSubagents([...s15.subagents, run]);
+    this.update({ ...s15, subagents });
+  }
   /** Stop: the turn is over. */
   turnEnded(token, lastMessage, identity, at3 = Date.now()) {
+    this.launches.delete(token);
     const s15 = this.ensure(token, identity);
     this.update({
       ...s15,
@@ -19046,11 +19200,35 @@ var AgentSessionStore = class extends TypedEmitter {
     const s15 = this.sessions.get(token);
     if (!s15 || !s15.running)
       return;
-    this.update({ ...s15, running: false, status: "idle", needs: null, currentFile: null, turnStartedAt: null, endedAt: at3 });
+    this.launches.delete(token);
+    this.update({
+      ...s15,
+      running: false,
+      status: "idle",
+      needs: null,
+      currentFile: null,
+      turnStartedAt: null,
+      endedAt: at3,
+      // Subagents live in the lead's process, so they've ended with it.
+      subagents: s15.subagents.map((run) => run.running ? { ...run, running: false, endedAt: at3 } : run)
+    });
   }
   /** Forgets a terminal entirely, for when nothing needs its record any more. */
   remove(token) {
     this.sessions.delete(token);
+    this.launches.delete(token);
+  }
+  takeLaunch(token, agentType) {
+    const queue = this.launches.get(token);
+    if (!queue || queue.length === 0)
+      return void 0;
+    let index = queue.findIndex((launch2) => launch2.agentType === agentType);
+    if (index === -1)
+      index = queue.findIndex((launch2) => launch2.agentType === null);
+    if (index === -1)
+      return void 0;
+    const [launch] = queue.splice(index, 1);
+    return launch;
   }
   ensure(token, identity) {
     const existing = this.sessions.get(token);
@@ -19078,7 +19256,8 @@ var AgentSessionStore = class extends TypedEmitter {
       currentFile: null,
       transcriptPath: null,
       cwd: null,
-      endedAt: null
+      endedAt: null,
+      subagents: []
     };
   }
   update(session) {
@@ -19086,6 +19265,12 @@ var AgentSessionStore = class extends TypedEmitter {
     this.emit("change", session);
   }
 };
+function capSubagents(runs) {
+  let excess = runs.length - MAX_SUBAGENTS;
+  if (excess <= 0)
+    return runs;
+  return runs.filter((run) => run.running || excess-- <= 0);
+}
 function needsKindOf(notificationType) {
   if (notificationType === "permission_prompt")
     return "permission";
@@ -19385,8 +19570,7 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
       "Show each subagent Claude starts as a row on its session's card, with the changes it made. Turning this off removes the subagent hooks from .claude/settings.local.json and credits every change to the main session."
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.trackSubagents).onChange(async (value) => {
-        multiAgent.trackSubagents = value;
-        await this.plugin.saveSettings();
+        await this.plugin.setTrackSubagents(value);
       })
     );
     new import_obsidian15.Setting(containerEl).setName("Show estimated cost").setDesc(
@@ -19964,6 +20148,18 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
   get experience() {
     return MULTI_AGENT_AVAILABLE ? this.settings.experience : "classic";
   }
+  /** Whether subagents get their own record and their edits their own
+   *  attribution: Multi-agent with "Track subagents" on. */
+  get tracksSubagents() {
+    return this.experience === "multi-agent" && this.settings.multiAgent.trackSubagents;
+  }
+  async setTrackSubagents(track) {
+    if (track === this.settings.multiAgent.trackSubagents)
+      return;
+    this.settings.multiAgent.trackSubagents = track;
+    await this.saveSettings();
+    await this.provisionHooks();
+  }
   async setExperience(experience) {
     if (experience === this.settings.experience)
       return;
@@ -19975,7 +20171,7 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
    *  .claude/settings.local.json; see provisionClaudeSettings. */
   async provisionHooks() {
     try {
-      await provisionClaudeSettings(this.app, this.manifest, this.experience);
+      await provisionClaudeSettings(this.app, this.manifest, { experience: this.experience, trackSubagents: this.tracksSubagents });
     } catch (err) {
       console.error("Terminus: failed to provision .claude/settings.local.json", err);
       new import_obsidian19.Notice(

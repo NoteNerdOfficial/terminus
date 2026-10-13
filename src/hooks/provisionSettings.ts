@@ -23,14 +23,30 @@ function isClaudeSettingsFile(value: unknown): value is ClaudeSettingsFile {
   return typeof value === "object" && value !== null;
 }
 
-type HookEvent = "PreToolUse" | "Stop" | "Notification" | "SessionStart" | "SessionEnd" | "UserPromptSubmit";
+type HookEvent =
+  | "PreToolUse"
+  | "Stop"
+  | "Notification"
+  | "SessionStart"
+  | "SessionEnd"
+  | "UserPromptSubmit"
+  | "SubagentStart"
+  | "SubagentStop";
 
 /** Hooks only the Multi-agent experience installs, all through the one
  *  session-event bridge. Switching back to Classic removes them again, so a
  *  Classic vault's settings file looks exactly as it did before. */
 const MULTI_AGENT_ONLY_EVENTS: HookEvent[] = ["SessionStart", "SessionEnd", "UserPromptSubmit"];
 
+/** Subagent tracking's hooks, also on the session-event bridge: installed
+ *  only in Multi-agent with "Track subagents" on. */
+const SUBAGENT_EVENTS: HookEvent[] = ["SubagentStart", "SubagentStop"];
+
 const MATCHER = "Edit|Write|NotebookEdit";
+/** The lead's Agent tool call, for the subagent's task description. "Task"
+ *  is the tool's older name. A separate PreToolUse entry on the session-event
+ *  bridge, so it never reaches hook-bridge.sh's snapshot code. */
+const AGENT_MATCHER = "Agent|Task";
 // Short: the hook no longer waits on a human decision (see ReviewServer),
 // just a local server round-trip to record the pre-edit snapshot, so this
 // only needs to cover slow disk I/O, not review time.
@@ -76,15 +92,26 @@ export function getSessionEventBridgePath(app: App, manifest: PluginManifest): s
   return resourcePath(app, manifest, "session-event-bridge.sh");
 }
 
+export interface HookOptions {
+  experience: Experience;
+  /** Only honoured in Multi-agent. */
+  trackSubagents: boolean;
+}
+
 /**
  * Idempotently ensures the vault's project-scoped .claude/settings.local.json
- * wires our hooks for `experience` -- always PreToolUse (record each write
- * for review), Stop (turn is over), and Notification (Claude needs
+ * wires our hooks for the given options -- always PreToolUse (record each
+ * write for review), Stop (turn is over), and Notification (Claude needs
  * permission or is waiting on the user); in Multi-agent also SessionStart,
- * SessionEnd and UserPromptSubmit, which Classic removes -- without
- * clobbering any hooks or settings the user already has there.
+ * SessionEnd and UserPromptSubmit, plus, while subagents are tracked, the
+ * Agent tool's PreToolUse, SubagentStart and SubagentStop. Hooks the options
+ * don't call for are removed. Never clobbers hooks or settings the user
+ * already has there.
  */
-export async function provisionClaudeSettings(app: App, manifest: PluginManifest, experience: Experience): Promise<void> {
+export async function provisionClaudeSettings(app: App, manifest: PluginManifest, options: HookOptions): Promise<void> {
+  const multiAgent = options.experience === "multi-agent";
+  const trackSubagents = multiAgent && options.trackSubagents;
+
   const basePath = getVaultBasePath(app);
   const claudeDir = pathJoin(basePath, ".claude");
   const settingsPath = pathJoin(claudeDir, "settings.local.json");
@@ -119,14 +146,22 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
   });
 
   const sessionEventBridge = getSessionEventBridgePath(app, manifest);
+  const sessionHook = { command: sessionEventBridge, timeout: SESSION_EVENT_TIMEOUT_SECONDS };
   let sessionHooksChanged = false;
   for (const event of MULTI_AGENT_ONLY_EVENTS) {
-    const changed =
-      experience === "multi-agent"
-        ? ensureHook(hooks, event, { command: sessionEventBridge, timeout: SESSION_EVENT_TIMEOUT_SECONDS })
-        : removeHook(hooks, event, sessionEventBridge);
+    const changed = multiAgent ? ensureHook(hooks, event, sessionHook) : removeHook(hooks, event, sessionEventBridge);
     sessionHooksChanged ||= changed;
   }
+  for (const event of SUBAGENT_EVENTS) {
+    const changed = trackSubagents ? ensureHook(hooks, event, sessionHook) : removeHook(hooks, event, sessionEventBridge);
+    sessionHooksChanged ||= changed;
+  }
+  // The same command path under PreToolUse is only ever this entry, so
+  // ensureHook/removeHook's command match finds it beside hook-bridge.sh's.
+  const agentToolChanged = trackSubagents
+    ? ensureHook(hooks, "PreToolUse", { ...sessionHook, matcher: AGENT_MATCHER })
+    : removeHook(hooks, "PreToolUse", sessionEventBridge);
+  sessionHooksChanged ||= agentToolChanged;
 
   if (preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged) {
     await writeTextFile(settingsPath, JSON.stringify(settings, null, 2) + "\n");

@@ -500,8 +500,10 @@ export class TerminalView extends ItemView {
     this.plugin.agentSessionStore.needsAttention(this.token, payload?.notification_type, sessionIdentity(payload));
   }
 
-  /** SessionStart / SessionEnd / UserPromptSubmit -- only sent while the
-   *  Multi-agent experience has those hooks installed. */
+  /** SessionStart / SessionEnd / UserPromptSubmit, and the subagent
+   *  events -- only sent while the Multi-agent experience has those hooks
+   *  installed. Subagent events are dropped once tracking is off, since
+   *  a session started earlier keeps sending them. */
   private onSessionEvent(payload: SessionEventHookPayload): void {
     const store = this.plugin.agentSessionStore;
     const identity = sessionIdentity(payload);
@@ -514,6 +516,26 @@ export class TerminalView extends ItemView {
         break;
       case "SessionEnd":
         store.sessionEnded(this.token);
+        break;
+      case "PreToolUse":
+        if (this.plugin.tracksSubagents) store.agentLaunched(this.token, payload.tool_input.description, payload.tool_input.subagent_type);
+        break;
+      case "SubagentStart":
+        if (this.plugin.tracksSubagents) store.subagentStarted(this.token, payload.agent_id, payload.agent_type, identity);
+        break;
+      case "SubagentStop":
+        if (!this.plugin.tracksSubagents) break;
+        store.subagentStopped(
+          this.token,
+          {
+            agentId: payload.agent_id,
+            agentType: payload.agent_type,
+            lastMessage: payload.last_assistant_message,
+            transcriptPath: payload.agent_transcript_path,
+            description: payload.background_tasks?.find((task) => task.id === payload.agent_id)?.description,
+          },
+          identity
+        );
         break;
     }
   }
@@ -952,6 +974,9 @@ export class TerminalView extends ItemView {
       token: this.token,
       panelLabel: this.getDisplayText(),
       panelColor: this.color,
+      // PreToolUse is a Classic hook, so agent_id arrives either way; it's
+      // only kept while subagents are tracked.
+      agent: this.plugin.tracksSubagents && payload.agent_id ? { id: payload.agent_id, type: payload.agent_type ?? "" } : null,
     });
     // Doesn't reveal/focus the panel directly here -- Claude may make
     // several edits in one turn, and popping the sidebar open on each one

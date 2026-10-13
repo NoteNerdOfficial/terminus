@@ -24,8 +24,10 @@ export interface RegisteredPanel {
    *  the two it was; undefined for a bodyless call, like onTurnEnd. */
   onNeedsAttention(payload: NotificationHookPayload | undefined): void;
 
-  /** SessionStart, SessionEnd and UserPromptSubmit, from the session-event
-   *  bridge -- installed only in the Multi-agent experience. */
+  /** SessionStart, SessionEnd and UserPromptSubmit, plus the lead's Agent
+   *  tool call, SubagentStart and SubagentStop when subagents are tracked --
+   *  all from the session-event bridge, installed only in the Multi-agent
+   *  experience. */
   onSessionEvent(payload: SessionEventHookPayload): void;
 }
 
@@ -34,11 +36,23 @@ const MAX_BODY_BYTES = 5 * 1024 * 1024; // generous cap for a Write tool's full 
 const STATUS_BODY_MAX_BYTES = 1024 * 1024;
 
 const SESSION_EVENTS = new Set(["SessionStart", "SessionEnd", "UserPromptSubmit"]);
+const SUBAGENT_EVENTS = new Set(["SubagentStart", "SubagentStop"]);
+const AGENT_TOOLS = new Set(["Agent", "Task"]);
 
 function isSessionEvent(value: unknown): value is SessionEventHookPayload {
   if (typeof value !== "object" || value === null) return false;
-  const name = (value as { hook_event_name?: unknown }).hook_event_name;
-  return typeof name === "string" && SESSION_EVENTS.has(name);
+  const v = value as { hook_event_name?: unknown; tool_name?: unknown; tool_input?: unknown; agent_id?: unknown };
+  if (typeof v.hook_event_name !== "string") return false;
+  if (SESSION_EVENTS.has(v.hook_event_name)) return true;
+  // The rest feed subagent attribution, which needs the fields checked here.
+  if (SUBAGENT_EVENTS.has(v.hook_event_name)) return typeof v.agent_id === "string";
+  return (
+    v.hook_event_name === "PreToolUse" &&
+    typeof v.tool_name === "string" &&
+    AGENT_TOOLS.has(v.tool_name) &&
+    typeof v.tool_input === "object" &&
+    v.tool_input !== null
+  );
 }
 
 /**

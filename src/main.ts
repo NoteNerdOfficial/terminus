@@ -226,6 +226,19 @@ export default class TerminusPlugin extends Plugin {
     return MULTI_AGENT_AVAILABLE ? this.settings.experience : "classic";
   }
 
+  /** Whether subagents get their own record and their edits their own
+   *  attribution: Multi-agent with "Track subagents" on. */
+  get tracksSubagents(): boolean {
+    return this.experience === "multi-agent" && this.settings.multiAgent.trackSubagents;
+  }
+
+  async setTrackSubagents(track: boolean): Promise<void> {
+    if (track === this.settings.multiAgent.trackSubagents) return;
+    this.settings.multiAgent.trackSubagents = track;
+    await this.saveSettings();
+    await this.provisionHooks();
+  }
+
   async setExperience(experience: Experience): Promise<void> {
     if (experience === this.settings.experience) return;
     this.settings.experience = experience;
@@ -240,7 +253,7 @@ export default class TerminusPlugin extends Plugin {
    *  .claude/settings.local.json; see provisionClaudeSettings. */
   private async provisionHooks(): Promise<void> {
     try {
-      await provisionClaudeSettings(this.app, this.manifest, this.experience);
+      await provisionClaudeSettings(this.app, this.manifest, { experience: this.experience, trackSubagents: this.tracksSubagents });
     } catch (err) {
       console.error("Terminus: failed to provision .claude/settings.local.json", err);
       new Notice(

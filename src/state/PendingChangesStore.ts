@@ -13,6 +13,14 @@ export interface ChangeContributor {
   color: string | null;
 }
 
+/** Who inside a terminal edited a pending change's file: the lead session
+ *  (`agentId` null) or one of its subagents. */
+export interface ChangeAgent {
+  token: string;
+  agentId: string | null;
+  agentType: string | null;
+}
+
 export interface PendingChange {
   /** Always the file's absolute path -- edits to the same file within one
    *  review window coalesce into a single row (see recordChange), so this
@@ -30,6 +38,10 @@ export interface PendingChange {
    *  from. More than one means rejecting reverts to the snapshot taken before
    *  the first terminal's edit, undoing the later terminals' work too. */
   contributors: ChangeContributor[];
+  /** Every lead session or subagent whose edits were coalesced into this
+   *  row, in the order they first edited it. Subagents appear only while
+   *  they're tracked; otherwise their edits count as the lead's. */
+  agents: ChangeAgent[];
   /** Populated separately via setBrokenBacklinks (computation needs the
    *  Obsidian App instance, which this store deliberately doesn't depend
    *  on -- keeps this class's core logic plain and independently testable). */
@@ -49,6 +61,8 @@ export interface RecordChangeInput {
   token: string;
   panelLabel: string;
   panelColor: string | null;
+  /** The subagent that made the edit; null or absent for the lead session. */
+  agent?: { id: string; type: string } | null;
 }
 
 interface PendingEntry {
@@ -93,6 +107,7 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
   recordChange(input: RecordChangeInput): void {
     const key = input.diff.filePath;
     const existing = this.entries.get(key);
+    const agent: ChangeAgent = { token: input.token, agentId: input.agent?.id ?? null, agentType: input.agent?.type ?? null };
 
     const change: PendingChange = existing
       ? {
@@ -103,6 +118,9 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
           contributors: existing.change.contributors.some((c) => c.token === input.token)
             ? existing.change.contributors
             : [...existing.change.contributors, { token: input.token, label: input.panelLabel, color: input.panelColor }],
+          agents: existing.change.agents.some((a) => a.token === agent.token && a.agentId === agent.agentId)
+            ? existing.change.agents
+            : [...existing.change.agents, agent],
         }
       : {
           id: key,
@@ -113,6 +131,7 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
           createdAt: Date.now(),
           editCount: 1,
           contributors: [{ token: input.token, label: input.panelLabel, color: input.panelColor }],
+          agents: [agent],
           brokenBacklinks: [],
         };
 

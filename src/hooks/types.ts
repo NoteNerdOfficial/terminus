@@ -10,6 +10,10 @@ export interface PreToolUseHookPayloadBase {
   permission_mode: string;
   hook_event_name: "PreToolUse";
   tool_use_id: string;
+  /** Present only when a subagent made the call (captured from 2.1.296);
+   *  the lead session's own calls carry neither. */
+  agent_id?: string;
+  agent_type?: string;
 }
 
 export interface EditToolInput {
@@ -68,8 +72,58 @@ export interface UserPromptSubmitHookPayload extends SessionHookPayloadBase {
   prompt: string;
 }
 
+// Subagent payloads, captured from a real 2.1.296 run with both background
+// and foreground subagents.
+
+/** The lead's PreToolUse for the Agent tool (matcher "Agent|Task", on the
+ *  session-event bridge rather than hook-bridge.sh: it edits no file, so
+ *  there's no snapshot to take). The only place a subagent's task
+ *  description appears before it finishes. */
+export interface AgentToolHookPayload extends SessionHookPayloadBase {
+  hook_event_name: "PreToolUse";
+  tool_name: "Agent" | "Task";
+  tool_use_id: string;
+  tool_input: {
+    description?: string;
+    subagent_type?: string;
+    run_in_background?: boolean;
+  };
+}
+
+export interface SubagentStartHookPayload extends SessionHookPayloadBase {
+  hook_event_name: "SubagentStart";
+  agent_id: string;
+  agent_type: string;
+}
+
+/** One of the session's background tasks, as SubagentStop lists them --
+ *  including the subagent that's stopping. Foreground subagents aren't
+ *  listed. */
+export interface BackgroundTask {
+  id: string;
+  type: string;
+  status?: string;
+  description?: string;
+  agent_type?: string;
+}
+
+export interface SubagentStopHookPayload extends SessionHookPayloadBase {
+  hook_event_name: "SubagentStop";
+  agent_id: string;
+  agent_type: string;
+  agent_transcript_path?: string;
+  last_assistant_message?: string;
+  background_tasks?: BackgroundTask[];
+}
+
 /** What the session-event bridge forwards (see session-event-bridge.sh). */
-export type SessionEventHookPayload = SessionStartHookPayload | SessionEndHookPayload | UserPromptSubmitHookPayload;
+export type SessionEventHookPayload =
+  | SessionStartHookPayload
+  | SessionEndHookPayload
+  | UserPromptSubmitHookPayload
+  | AgentToolHookPayload
+  | SubagentStartHookPayload
+  | SubagentStopHookPayload;
 
 export interface StopHookPayload extends SessionHookPayloadBase {
   hook_event_name: "Stop";
