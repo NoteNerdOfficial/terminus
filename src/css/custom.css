@@ -2157,6 +2157,12 @@
   margin: 0 7px;
 }
 
+/* The inbox scrolls as a whole: a long list of cards would otherwise be
+   clipped by the pending-view frame's overflow. */
+.terminus-inbox-view.terminus-pending-view {
+  overflow-y: auto;
+}
+
 /* What the inbox is showing (the sidebar's selected group), and the way to
    see everything. */
 .terminus-inbox-scope {
@@ -2178,7 +2184,8 @@
   color: var(--text-normal);
 }
 
-.terminus-inbox-scope-alert {
+/* Prefixed like the other inbox buttons, to outrank the theme's own. */
+.terminus-inbox-view .terminus-inbox-scope-alert {
   padding: 0 6px;
   border: 0;
   background: transparent;
@@ -2190,7 +2197,7 @@
   cursor: pointer;
 }
 
-.terminus-inbox-scope-alert:hover {
+.terminus-inbox-view .terminus-inbox-scope-alert:hover {
   text-decoration: underline;
 }
 

@@ -116,6 +116,9 @@ export class AgentInboxView extends ItemView {
 
   private renderNow(): void {
     const container = this.contentEl;
+    // Emptying the view resets its scroll; the stores re-render it often
+    // while Claude works, so put the user back where they were.
+    const scrollTop = container.scrollTop;
     container.empty();
     // terminus-pending-view brings the Pending Changes row styles with it.
     container.addClass("terminus-pending-view", "terminus-inbox-view");
@@ -202,10 +205,13 @@ export class AgentInboxView extends ItemView {
     }
 
     this.renderElsewhere(body, elsewhere);
-    this.revealRequested(container);
 
     const history = this.plugin.pendingChangesStore.listHistory();
     if (history.length > 0) renderHistorySection(this.rows, body, history);
+
+    // Last, once the content is as tall as it was.
+    container.scrollTop = scrollTop;
+    this.revealRequested(container);
   }
 
   /** What the sidebar has selected, as the inbox sees it: the selected

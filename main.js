@@ -20076,6 +20076,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
   }
   renderNow() {
     const container = this.contentEl;
+    const scrollTop = container.scrollTop;
     container.empty();
     container.addClass("terminus-pending-view", "terminus-inbox-view");
     const full = buildInbox(
@@ -20153,10 +20154,11 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       }
     }
     this.renderElsewhere(body, elsewhere);
-    this.revealRequested(container);
     const history = this.plugin.pendingChangesStore.listHistory();
     if (history.length > 0)
       renderHistorySection(this.rows, body, history);
+    container.scrollTop = scrollTop;
+    this.revealRequested(container);
   }
   /** What the sidebar has selected, as the inbox sees it: the selected
    *  group's name, and which cards belong to it. Ungrouped terminals show in
