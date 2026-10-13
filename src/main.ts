@@ -30,7 +30,7 @@ import { ConfirmModal } from "./modals/ConfirmModal";
 import { confirmCollisionReject, hasCollision } from "./modals/collisions";
 import { RescueClosedTerminalModal } from "./modals/RescueClosedTerminalModal";
 import { GettingStartedModal } from "./modals/GettingStartedModal";
-import { MultiAgentInviteModal } from "./modals/MultiAgentInviteModal";
+import { MultiAgentInviteModal, type InviteReason } from "./modals/MultiAgentInviteModal";
 import { computeDiffStats } from "./diff/renderDiff";
 import { inlineDiffDecorations, inlineDiffField } from "./editor/inlineDiff";
 import { errorMessage } from "./util/errors";
@@ -279,7 +279,11 @@ export default class TerminusPlugin extends Plugin {
     // goes looking for it.
     this.app.workspace.onLayoutReady(() => {
       void this.revealReviewView();
-      void this.showWelcomeIfFirstRun();
+      void this.showWelcomeIfFirstRun().then((showedWelcome) => {
+        // A new install already has the welcome to read; the invite waits for
+        // two terminals editing at once. Everyone updating gets it once.
+        if (!showedWelcome) this.announceMultiAgent();
+      });
       if (this.experience === "multi-agent") void this.startMultiAgentViews();
     });
   }
@@ -288,11 +292,24 @@ export default class TerminusPlugin extends Plugin {
    *  opens rather than after it's dismissed, so a crash or a force-quit
    *  while it's on screen can't turn it into a modal that greets the user
    *  on every single startup. */
-  private async showWelcomeIfFirstRun(): Promise<void> {
-    if (this.settings.hasSeenWelcome) return;
+  private async showWelcomeIfFirstRun(): Promise<boolean> {
+    if (this.settings.hasSeenWelcome) return false;
     this.settings.hasSeenWelcome = true;
     await this.saveSettings();
     GettingStartedModal.openWelcome(this.app);
+    return true;
+  }
+
+  /** The one-time "New: Multi-agent" invite for an existing Classic user,
+   *  a few seconds after the workspace is up so it doesn't land on a half-
+   *  loaded window. Shares its seen-flag with the two-terminals invite, so
+   *  whichever comes first is the only one. */
+  private announceMultiAgent(): void {
+    if (!MULTI_AGENT_AVAILABLE || this.settings.hasSeenMultiAgentInvite || this.experience !== "classic") return;
+    window.setTimeout(() => {
+      if (this.isUnloading || this.settings.hasSeenMultiAgentInvite) return;
+      void this.showMultiAgentInvite("announcement");
+    }, 3000);
   }
 
   onunload(): void {
@@ -472,10 +489,10 @@ export default class TerminusPlugin extends Plugin {
 
   /** Persisted before the modal opens, like showWelcomeIfFirstRun, so a
    *  crash while it's on screen can't make it come back. */
-  private async showMultiAgentInvite(): Promise<void> {
+  private async showMultiAgentInvite(reason: InviteReason = "two-terminals"): Promise<void> {
     this.settings.hasSeenMultiAgentInvite = true;
     await this.saveSettings();
-    if (await MultiAgentInviteModal.ask(this.app)) {
+    if (await MultiAgentInviteModal.ask(this.app, reason)) {
       await this.setExperience("multi-agent");
       new Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
     }

@@ -1,18 +1,28 @@
 import { App, Modal } from "obsidian";
 
 /**
- * One-time invite to try the Multi-agent experience, shown the first time
- * pending changes come from two terminals at once (see main.ts) -- the
- * moment its per-session inbox actually helps. Resolves true for "Try
- * multi-agent" and false for every other way out (Not now, Escape, clicking
- * outside), so a dismissal is never mistaken for a yes.
+ * One-time invite to try the Multi-agent experience. Shown either the first
+ * time pending changes come from two terminals at once (see main.ts) -- the
+ * moment its per-session inbox actually helps -- or once, shortly after
+ * loading the version that introduced it ("announcement"). Resolves true for
+ * "Try multi-agent" and false for every other way out (Not now, Escape,
+ * clicking outside), so a dismissal is never mistaken for a yes.
  */
+export type InviteReason = "two-terminals" | "announcement";
+
 export class MultiAgentInviteModal extends Modal {
   private resolvePromise: ((accepted: boolean) => void) | null = null;
 
-  static ask(app: App): Promise<boolean> {
+  private constructor(
+    app: App,
+    private reason: InviteReason
+  ) {
+    super(app);
+  }
+
+  static ask(app: App, reason: InviteReason = "two-terminals"): Promise<boolean> {
     return new Promise((resolve) => {
-      const modal = new MultiAgentInviteModal(app);
+      const modal = new MultiAgentInviteModal(app, reason);
       modal.resolvePromise = resolve;
       modal.open();
     });
@@ -20,9 +30,10 @@ export class MultiAgentInviteModal extends Modal {
 
   onOpen(): void {
     const { contentEl } = this;
-    contentEl.createEl("h3", { text: "Running Claude in more than one terminal?" });
+    const announcement = this.reason === "announcement";
+    contentEl.createEl("h3", { text: announcement ? "New in Terminus: Multi-agent" : "Running Claude in more than one terminal?" });
     contentEl.createEl("p", {
-      text: "Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs your attention, plus groups to keep related terminals together.",
+      text: `${announcement ? "Run several Claude sessions side by side. " : ""}Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs your attention, plus groups to keep related terminals together.`,
     });
     contentEl.createEl("p", {
       cls: "setting-item-description",

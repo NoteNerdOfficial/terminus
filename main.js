@@ -24466,22 +24466,24 @@ var GettingStartedModal = class extends import_obsidian28.Modal {
 // src/modals/MultiAgentInviteModal.ts
 var import_obsidian29 = require("obsidian");
 var MultiAgentInviteModal = class extends import_obsidian29.Modal {
-  constructor() {
-    super(...arguments);
+  constructor(app, reason) {
+    super(app);
+    this.reason = reason;
     this.resolvePromise = null;
   }
-  static ask(app) {
+  static ask(app, reason = "two-terminals") {
     return new Promise((resolve) => {
-      const modal = new MultiAgentInviteModal(app);
+      const modal = new MultiAgentInviteModal(app, reason);
       modal.resolvePromise = resolve;
       modal.open();
     });
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h3", { text: "Running Claude in more than one terminal?" });
+    const announcement = this.reason === "announcement";
+    contentEl.createEl("h3", { text: announcement ? "New in Terminus: Multi-agent" : "Running Claude in more than one terminal?" });
     contentEl.createEl("p", {
-      text: "Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs your attention, plus groups to keep related terminals together."
+      text: `${announcement ? "Run several Claude sessions side by side. " : ""}Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs your attention, plus groups to keep related terminals together.`
     });
     contentEl.createEl("p", {
       cls: "setting-item-description",
@@ -24705,7 +24707,10 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     });
     this.app.workspace.onLayoutReady(() => {
       void this.revealReviewView();
-      void this.showWelcomeIfFirstRun();
+      void this.showWelcomeIfFirstRun().then((showedWelcome) => {
+        if (!showedWelcome)
+          this.announceMultiAgent();
+      });
       if (this.experience === "multi-agent")
         void this.startMultiAgentViews();
     });
@@ -24716,10 +24721,24 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
    *  on every single startup. */
   async showWelcomeIfFirstRun() {
     if (this.settings.hasSeenWelcome)
-      return;
+      return false;
     this.settings.hasSeenWelcome = true;
     await this.saveSettings();
     GettingStartedModal.openWelcome(this.app);
+    return true;
+  }
+  /** The one-time "New: Multi-agent" invite for an existing Classic user,
+   *  a few seconds after the workspace is up so it doesn't land on a half-
+   *  loaded window. Shares its seen-flag with the two-terminals invite, so
+   *  whichever comes first is the only one. */
+  announceMultiAgent() {
+    if (!MULTI_AGENT_AVAILABLE || this.settings.hasSeenMultiAgentInvite || this.experience !== "classic")
+      return;
+    window.setTimeout(() => {
+      if (this.isUnloading || this.settings.hasSeenMultiAgentInvite)
+        return;
+      void this.showMultiAgentInvite("announcement");
+    }, 3e3);
   }
   onunload() {
     this.unloading = true;
@@ -24894,10 +24913,10 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
   }
   /** Persisted before the modal opens, like showWelcomeIfFirstRun, so a
    *  crash while it's on screen can't make it come back. */
-  async showMultiAgentInvite() {
+  async showMultiAgentInvite(reason = "two-terminals") {
     this.settings.hasSeenMultiAgentInvite = true;
     await this.saveSettings();
-    if (await MultiAgentInviteModal.ask(this.app)) {
+    if (await MultiAgentInviteModal.ask(this.app, reason)) {
       await this.setExperience("multi-agent");
       new import_obsidian30.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
     }
