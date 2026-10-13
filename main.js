@@ -19974,7 +19974,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     el2.toggleClass("is-needs-attention", needsAttention);
     el2.toggleClass("is-ended", card.ended);
     const head = el2.createDiv({ cls: "terminus-inbox-card-head" });
-    const swatch = head.createSpan({ cls: "terminus-inbox-card-swatch" });
+    const swatch = head.createSpan({ cls: "terminus-inbox-card-stroke" });
     if (color)
       swatch.style.setProperty("--terminus-terminal-color", color);
     head.createSpan({ cls: "terminus-inbox-card-name", text: name });
@@ -19994,8 +19994,9 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     const meta = el2.createDiv({ cls: "terminus-inbox-card-meta" });
     const group = this.plugin.groupStore.get(terminal == null ? void 0 : terminal.groupId);
     if (group) {
-      const groupLabel = iconLabel(meta, "layers", group.name, "terminus-inbox-group");
-      groupLabel.style.setProperty("--terminus-group-color", group.color);
+      const groupLabel = meta.createSpan({ cls: "terminus-inbox-group" });
+      groupLabel.createSpan({ cls: "terminus-group-dot" }).style.setProperty("--terminus-group-color", group.color);
+      groupLabel.createSpan({ text: group.name });
       (0, import_obsidian19.setTooltip)(groupLabel, "This terminal's group");
     }
     if ((session == null ? void 0 : session.branch) && this.plugin.settings.multiAgent.showGitBranch) {
@@ -20039,11 +20040,16 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
     if (card.leadChanges.length > 0 || card.subagents.length > 0) {
       if (card.subagents.length > 0) {
-        const who = el2.createDiv({ cls: "terminus-inbox-who" });
-        who.createSpan({ cls: "terminus-inbox-who-label", text: "Lead" });
-        who.createSpan({ text: changeCount(card.leadChanges.length) });
+        this.renderAgent(el2, {
+          mark: { kind: "lead", icon: "bot", label: "Lead session" },
+          name: "Lead",
+          description: "Main session",
+          details: [changeCount(card.leadChanges.length)],
+          changes: card.leadChanges
+        });
+      } else {
+        this.renderChangeList(el2.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges);
       }
-      this.renderChangeList(el2, card.leadChanges);
       for (const sub of card.subagents)
         this.renderSubagent(el2, sub);
       if (card.hiddenSubagents > 0) {
@@ -20058,11 +20064,11 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     if (card.changes.length > 0) {
       const ids = new Set(card.changes.map((c) => c.id));
       const inCard = (change) => ids.has(change.id);
-      foot.createEl("button", { text: "Reject all" }).addEventListener(
+      foot.createEl("button", { cls: "terminus-btn-ghost", text: "Reject all" }).addEventListener(
         "click",
         () => void runBulkAction(this.rows, false, card.changes, () => this.plugin.pendingChangesStore.resolveAll(false, inCard), name)
       );
-      foot.createEl("button", { cls: "mod-cta", text: "Keep all" }).addEventListener(
+      foot.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Keep all" }).addEventListener(
         "click",
         () => void runBulkAction(this.rows, true, card.changes, () => this.plugin.pendingChangesStore.resolveAll(true, inCard), name)
       );
@@ -20071,10 +20077,10 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
     foot.createDiv({ cls: "terminus-inbox-spacer" });
     if (terminal) {
-      const open = foot.createEl("button", { cls: "terminus-inbox-open" });
-      (0, import_obsidian19.setIcon)(open.createSpan({ cls: "terminus-meta-icon" }), "square-terminal");
-      open.createSpan({ text: "Open terminal" });
-      open.addEventListener("click", () => void this.plugin.focusTerminal(card.token));
+      foot.createEl("button", { cls: "terminus-btn-ghost", text: "Open terminal" }).addEventListener(
+        "click",
+        () => void this.plugin.focusTerminal(card.token)
+      );
     }
   }
   /** Queued review comments for this session, and the button that types
@@ -20144,33 +20150,51 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     return session.lastMessage === null ? null : plainPreview(session.lastMessage);
   }
   renderSubagent(el2, sub) {
-    var _a8, _b, _c2, _d, _e4, _f, _g, _h, _i3, _j;
-    const row = el2.createDiv({ cls: "terminus-inbox-subagent" });
-    const line = row.createDiv({ cls: "terminus-inbox-subagent-line" });
+    var _a8, _b, _c2, _d, _e4, _f, _g, _h;
     const running = (_b = (_a8 = sub.run) == null ? void 0 : _a8.running) != null ? _b : false;
-    const mark = subagentMark(sub.run);
-    const markEl = line.createSpan({ cls: `terminus-inbox-subagent-mark is-${mark.kind}`, attr: { "aria-label": mark.label } });
-    if (mark.icon)
-      (0, import_obsidian19.setIcon)(markEl, mark.icon);
-    line.createSpan({ cls: "terminus-inbox-subagent-type", text: sub.agentType });
-    const description = (_c2 = sub.run) == null ? void 0 : _c2.description;
-    if (description)
-      line.createSpan({ cls: "terminus-inbox-subagent-desc", text: description, attr: { title: description } });
-    const details = row.createDiv({ cls: "terminus-inbox-subagent-details" });
+    const details = [];
     const time = subagentTime(sub.run);
     if (time)
-      details.createSpan({ text: time });
-    this.renderUsage(details, (_e4 = (_d = sub.run) == null ? void 0 : _d.usage) != null ? _e4 : null, (_g = (_f = sub.run) == null ? void 0 : _f.usage) != null ? _g : null);
-    details.createSpan({ text: changeCount(sub.changes.length) });
-    if (((_h = sub.run) == null ? void 0 : _h.outcome) === "failed" && sub.run.error) {
-      row.createDiv({ cls: "terminus-inbox-subagent-error", text: (_i3 = sub.run.error.split("\n")[0]) != null ? _i3 : "", attr: { title: sub.run.error } });
-    } else if (((_j = sub.run) == null ? void 0 : _j.lastMessage) && !running) {
-      row.setAttr("title", sub.run.lastMessage);
+      details.push(time);
+    const failed = ((_c2 = sub.run) == null ? void 0 : _c2.outcome) === "failed" && sub.run.error ? sub.run.error : null;
+    this.renderAgent(el2, {
+      mark: subagentMark(sub.run),
+      name: sub.agentType,
+      description: (_e4 = (_d = sub.run) == null ? void 0 : _d.description) != null ? _e4 : null,
+      details,
+      usage: (_g = (_f = sub.run) == null ? void 0 : _f.usage) != null ? _g : null,
+      changes: sub.changes,
+      error: failed,
+      title: !failed && ((_h = sub.run) == null ? void 0 : _h.lastMessage) && !running ? sub.run.lastMessage : null
+    });
+  }
+  /** One agent on a card -- the lead or a subagent -- always in the same
+   *  shape: a status mark, its name and task, a line of details, then its
+   *  changes indented underneath. */
+  renderAgent(el2, agent) {
+    var _a8;
+    const row = el2.createDiv({ cls: "terminus-inbox-agent" });
+    const line = row.createDiv({ cls: "terminus-inbox-agent-line" });
+    const markEl = line.createSpan({ cls: `terminus-inbox-agent-mark is-${agent.mark.kind}`, attr: { "aria-label": agent.mark.label } });
+    if (agent.mark.icon)
+      (0, import_obsidian19.setIcon)(markEl, agent.mark.icon);
+    line.createSpan({ cls: "terminus-inbox-agent-name", text: agent.name });
+    if (agent.description)
+      line.createSpan({ cls: "terminus-inbox-agent-desc", text: agent.description, attr: { title: agent.description } });
+    const details = row.createDiv({ cls: "terminus-inbox-agent-details" });
+    for (const detail of agent.details)
+      details.createSpan({ text: detail });
+    if (agent.usage)
+      this.renderUsage(details, agent.usage, agent.usage);
+    if (agent.mark.kind !== "lead")
+      details.createSpan({ text: changeCount(agent.changes.length) });
+    if (agent.error) {
+      row.createDiv({ cls: "terminus-inbox-agent-error", text: (_a8 = agent.error.split("\n")[0]) != null ? _a8 : "", attr: { title: agent.error } });
+    } else if (agent.title) {
+      row.setAttr("title", agent.title);
     }
-    if (sub.changes.length > 0) {
-      const nested = el2.createDiv({ cls: "terminus-inbox-subagent-changes" });
-      this.renderChangeList(nested, sub.changes);
-    }
+    if (agent.changes.length > 0)
+      this.renderChangeList(row.createDiv({ cls: "terminus-inbox-agent-changes" }), agent.changes);
   }
   renderChangeList(parent, changes) {
     if (changes.length === 0)
@@ -20503,7 +20527,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     this.makeDropTarget(row, group.id);
     makeActivatable(row, () => void this.plugin.groups.selectGroup(group.id), (evt) => this.showGroupMenu(evt, group));
     row.setAttr("aria-current", active ? "true" : "false");
-    row.createSpan({ cls: "terminus-sidebar-swatch" });
+    row.createSpan({ cls: "terminus-group-dot" });
     if (this.renamingGroupId === group.id) {
       this.renderRenameInput(row, group);
     } else {

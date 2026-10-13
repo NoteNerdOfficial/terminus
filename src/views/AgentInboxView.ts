@@ -199,8 +199,9 @@ export class AgentInboxView extends ItemView {
     el.toggleClass("is-needs-attention", needsAttention);
     el.toggleClass("is-ended", card.ended);
     const head = el.createDiv({ cls: "terminus-inbox-card-head" });
-    // The terminal's colour as the same dot the sidebar uses.
-    const swatch = head.createSpan({ cls: "terminus-inbox-card-swatch" });
+    // The terminal's colour as a short stroke, like its tab and its row in
+    // the sidebar; a group's colour is a dot.
+    const swatch = head.createSpan({ cls: "terminus-inbox-card-stroke" });
     if (color) swatch.style.setProperty("--terminus-terminal-color", color);
     head.createSpan({ cls: "terminus-inbox-card-name", text: name });
     const pill = statusPill(card);
@@ -218,8 +219,9 @@ export class AgentInboxView extends ItemView {
     const meta = el.createDiv({ cls: "terminus-inbox-card-meta" });
     const group = this.plugin.groupStore.get(terminal?.groupId);
     if (group) {
-      const groupLabel = iconLabel(meta, "layers", group.name, "terminus-inbox-group");
-      groupLabel.style.setProperty("--terminus-group-color", group.color);
+      const groupLabel = meta.createSpan({ cls: "terminus-inbox-group" });
+      groupLabel.createSpan({ cls: "terminus-group-dot" }).style.setProperty("--terminus-group-color", group.color);
+      groupLabel.createSpan({ text: group.name });
       setTooltip(groupLabel, "This terminal's group");
     }
     if (session?.branch && this.plugin.settings.multiAgent.showGitBranch) {
@@ -266,11 +268,19 @@ export class AgentInboxView extends ItemView {
 
     if (card.leadChanges.length > 0 || card.subagents.length > 0) {
       if (card.subagents.length > 0) {
-        const who = el.createDiv({ cls: "terminus-inbox-who" });
-        who.createSpan({ cls: "terminus-inbox-who-label", text: "Lead" });
-        who.createSpan({ text: changeCount(card.leadChanges.length) });
+        // With subagents, the lead is one agent among them, in the same
+        // shape of row, so the card reads as a list of agents, each with
+        // its own changes underneath.
+        this.renderAgent(el, {
+          mark: { kind: "lead", icon: "bot", label: "Lead session" },
+          name: "Lead",
+          description: "Main session",
+          details: [changeCount(card.leadChanges.length)],
+          changes: card.leadChanges,
+        });
+      } else {
+        this.renderChangeList(el.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges);
       }
-      this.renderChangeList(el, card.leadChanges);
       for (const sub of card.subagents) this.renderSubagent(el, sub);
       if (card.hiddenSubagents > 0) {
         el.createDiv({
@@ -286,10 +296,10 @@ export class AgentInboxView extends ItemView {
     if (card.changes.length > 0) {
       const ids = new Set(card.changes.map((c) => c.id));
       const inCard = (change: PendingChange) => ids.has(change.id);
-      foot.createEl("button", { text: "Reject all" }).addEventListener("click", () =>
+      foot.createEl("button", { cls: "terminus-btn-ghost", text: "Reject all" }).addEventListener("click", () =>
         void runBulkAction(this.rows, false, card.changes, () => this.plugin.pendingChangesStore.resolveAll(false, inCard), name)
       );
-      foot.createEl("button", { cls: "mod-cta", text: "Keep all" }).addEventListener("click", () =>
+      foot.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Keep all" }).addEventListener("click", () =>
         void runBulkAction(this.rows, true, card.changes, () => this.plugin.pendingChangesStore.resolveAll(true, inCard), name)
       );
     } else {
@@ -297,10 +307,9 @@ export class AgentInboxView extends ItemView {
     }
     foot.createDiv({ cls: "terminus-inbox-spacer" });
     if (terminal) {
-      const open = foot.createEl("button", { cls: "terminus-inbox-open" });
-      setIcon(open.createSpan({ cls: "terminus-meta-icon" }), "square-terminal");
-      open.createSpan({ text: "Open terminal" });
-      open.addEventListener("click", () => void this.plugin.focusTerminal(card.token));
+      foot.createEl("button", { cls: "terminus-btn-ghost", text: "Open terminal" }).addEventListener("click", () =>
+        void this.plugin.focusTerminal(card.token)
+      );
     }
   }
 
@@ -369,33 +378,59 @@ export class AgentInboxView extends ItemView {
   }
 
   private renderSubagent(el: HTMLElement, sub: InboxSubagent): void {
-    const row = el.createDiv({ cls: "terminus-inbox-subagent" });
-    const line = row.createDiv({ cls: "terminus-inbox-subagent-line" });
     const running = sub.run?.running ?? false;
-    const mark = subagentMark(sub.run);
-    const markEl = line.createSpan({ cls: `terminus-inbox-subagent-mark is-${mark.kind}`, attr: { "aria-label": mark.label } });
-    // Running is a pulsing dot drawn in CSS; the rest are icons.
-    if (mark.icon) setIcon(markEl, mark.icon);
-    line.createSpan({ cls: "terminus-inbox-subagent-type", text: sub.agentType });
-    const description = sub.run?.description;
-    if (description) line.createSpan({ cls: "terminus-inbox-subagent-desc", text: description, attr: { title: description } });
-
-    const details = row.createDiv({ cls: "terminus-inbox-subagent-details" });
+    const details: string[] = [];
     const time = subagentTime(sub.run);
-    if (time) details.createSpan({ text: time });
-    this.renderUsage(details, sub.run?.usage ?? null, sub.run?.usage ?? null);
-    details.createSpan({ text: changeCount(sub.changes.length) });
-    if (sub.run?.outcome === "failed" && sub.run.error) {
+    if (time) details.push(time);
+    const failed = sub.run?.outcome === "failed" && sub.run.error ? sub.run.error : null;
+    this.renderAgent(el, {
+      mark: subagentMark(sub.run),
+      name: sub.agentType,
+      description: sub.run?.description ?? null,
+      details,
+      usage: sub.run?.usage ?? null,
+      changes: sub.changes,
+      error: failed,
+      title: !failed && sub.run?.lastMessage && !running ? sub.run.lastMessage : null,
+    });
+  }
+
+  /** One agent on a card -- the lead or a subagent -- always in the same
+   *  shape: a status mark, its name and task, a line of details, then its
+   *  changes indented underneath. */
+  private renderAgent(
+    el: HTMLElement,
+    agent: {
+      mark: { kind: string; icon: string | null; label: string };
+      name: string;
+      description: string | null;
+      details: string[];
+      usage?: UsageTotals | null;
+      changes: PendingChange[];
+      error?: string | null;
+      title?: string | null;
+    }
+  ): void {
+    const row = el.createDiv({ cls: "terminus-inbox-agent" });
+    const line = row.createDiv({ cls: "terminus-inbox-agent-line" });
+    const markEl = line.createSpan({ cls: `terminus-inbox-agent-mark is-${agent.mark.kind}`, attr: { "aria-label": agent.mark.label } });
+    // Running is a pulsing dot drawn in CSS; the rest are icons.
+    if (agent.mark.icon) setIcon(markEl, agent.mark.icon);
+    line.createSpan({ cls: "terminus-inbox-agent-name", text: agent.name });
+    if (agent.description) line.createSpan({ cls: "terminus-inbox-agent-desc", text: agent.description, attr: { title: agent.description } });
+
+    const details = row.createDiv({ cls: "terminus-inbox-agent-details" });
+    for (const detail of agent.details) details.createSpan({ text: detail });
+    if (agent.usage) this.renderUsage(details, agent.usage, agent.usage);
+    if (agent.mark.kind !== "lead") details.createSpan({ text: changeCount(agent.changes.length) });
+    if (agent.error) {
       // First line only; the full error is on hover.
-      row.createDiv({ cls: "terminus-inbox-subagent-error", text: sub.run.error.split("\n")[0] ?? "", attr: { title: sub.run.error } });
-    } else if (sub.run?.lastMessage && !running) {
-      row.setAttr("title", sub.run.lastMessage);
+      row.createDiv({ cls: "terminus-inbox-agent-error", text: agent.error.split("\n")[0] ?? "", attr: { title: agent.error } });
+    } else if (agent.title) {
+      row.setAttr("title", agent.title);
     }
 
-    if (sub.changes.length > 0) {
-      const nested = el.createDiv({ cls: "terminus-inbox-subagent-changes" });
-      this.renderChangeList(nested, sub.changes);
-    }
+    if (agent.changes.length > 0) this.renderChangeList(row.createDiv({ cls: "terminus-inbox-agent-changes" }), agent.changes);
   }
 
   private renderChangeList(parent: HTMLElement, changes: PendingChange[]): void {

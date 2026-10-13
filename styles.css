@@ -1488,7 +1488,18 @@
   --tm-ok: var(--color-green, #08b94e);
   --tm-bad: var(--color-red, #e93147);
   --tm-gap: 6px;
+  /* Every text button in both views shares the ＋ Terminal height. */
+  --tm-button-height: 26px;
   font-size: var(--font-ui-small);
+}
+
+/* A group's colour, everywhere: a dot. */
+.terminus-group-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--terminus-group-color, var(--background-modifier-border-hover));
 }
 
 /* Icons inside text: one size, aligned with the text they sit in. */
@@ -1577,19 +1588,21 @@
   margin-top: 10px;
 }
 
-.terminus-sidebar-actions button {
-  height: auto;
-  padding: 4px 10px;
-  font-size: var(--font-ui-smaller);
-}
-
+.terminus-sidebar-actions button,
 .terminus-sidebar-plus {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
+/* The icon's wrapper is a flex box and the svg a block, so the icon centres
+   on the label instead of sitting on its text baseline (which put it high). */
+.terminus-sidebar-plus > span:first-child {
+  display: inline-flex;
+}
+
 .terminus-sidebar-plus svg {
+  display: block;
   width: 14px;
   height: 14px;
 }
@@ -1650,14 +1663,6 @@
   outline-offset: -2px;
 }
 
-.terminus-sidebar-swatch {
-  flex: none;
-  width: 9px;
-  height: 9px;
-  border-radius: 3px;
-  background-color: var(--terminus-group-color);
-}
-
 .terminus-sidebar-group-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -1691,15 +1696,38 @@
   color: var(--text-accent);
 }
 
-/* A row's own actions appear where the pointer or keyboard is, so the list
-   stays calm. On touch screens there's no hover, so they always show. */
+/* A row's own actions appear where the pointer or keyboard is, floating
+   over the end of the row: hidden, they take no space, so a row's text and
+   tags run to the edge instead of stopping short of an empty gap. Their
+   backing repeats the row's hover colour over the sidebar background. On
+   touch screens there's no hover, so they sit in the row, always shown. */
+.terminus-sidebar-group-row,
+.terminus-sidebar-terminal {
+  position: relative;
+}
+
 .terminus-sidebar-row-actions {
+  position: absolute;
+  top: 50%;
+  right: 2px;
   display: flex;
-  flex: none;
   align-items: center;
   gap: 1px;
+  padding-left: 8px;
+  border-radius: var(--radius-s);
+  background:
+    linear-gradient(var(--nav-item-background-hover, var(--background-modifier-hover)), var(--nav-item-background-hover, var(--background-modifier-hover))),
+    var(--background-secondary);
   opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
   transition: opacity 120ms ease-out;
+}
+
+.terminus-sidebar-group-row.is-active .terminus-sidebar-row-actions {
+  background:
+    linear-gradient(var(--nav-item-background-active, var(--background-modifier-active-hover)), var(--nav-item-background-active, var(--background-modifier-active-hover))),
+    var(--background-secondary);
 }
 
 .terminus-sidebar-group-row:hover .terminus-sidebar-row-actions,
@@ -1707,11 +1735,17 @@
 .terminus-sidebar-terminal:hover .terminus-sidebar-row-actions,
 .terminus-sidebar-terminal:focus-within .terminus-sidebar-row-actions {
   opacity: 1;
+  pointer-events: auto;
 }
 
 @media (hover: none) {
   .terminus-sidebar-row-actions {
+    position: static;
+    padding-left: 0;
+    background: none;
     opacity: 1;
+    pointer-events: auto;
+    transform: none;
   }
 }
 
@@ -1774,19 +1808,13 @@
   animation: terminus-tab-pending-pulse 1.4s ease-in-out infinite;
 }
 
-/* Terminals sit under their group on an indentation guide, like files
-   under a folder. */
+/* Terminals sit indented under their group. */
 .terminus-sidebar-terminal {
   margin-left: 12px;
-  padding-left: 10px;
-  border-radius: 0 var(--radius-s) var(--radius-s) 0;
-  box-shadow: inset 1px 0 0 var(--nav-indentation-guide-color, var(--background-modifier-border));
 }
 
 .terminus-sidebar-group.is-ungrouped .terminus-sidebar-terminal {
   margin-left: 0;
-  border-radius: var(--radius-s);
-  box-shadow: none;
 }
 
 .terminus-sidebar-terminal.is-focused {
@@ -1802,11 +1830,14 @@
   background-color: var(--nav-item-background-selected, var(--background-modifier-active-hover));
 }
 
-.terminus-sidebar-terminal-color {
+/* A terminal's colour, everywhere: a short stroke, like the one on its
+   tab. */
+.terminus-sidebar-terminal-color,
+.terminus-inbox-card-stroke {
   flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
   background-color: var(--terminus-terminal-color, var(--background-modifier-border-hover));
 }
 
@@ -1968,13 +1999,14 @@
 }
 
 .terminus-inbox-view .terminus-inbox-next,
-.terminus-inbox-view .terminus-inbox-card-foot button,
 .terminus-inbox-view .terminus-inbox-feedback-row button,
 .terminus-inbox-view .terminus-inbox-banner button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 4px 10px;
+  height: var(--tm-button-height);
+  padding: 0 10px;
+  line-height: 1;
   border-radius: var(--button-radius, var(--radius-s));
   font-size: var(--font-ui-smaller);
   font-weight: 500;
@@ -1984,7 +2016,6 @@
 }
 
 .terminus-inbox-view .terminus-inbox-next:hover:not(:disabled),
-.terminus-inbox-view .terminus-inbox-card-foot button:hover,
 .terminus-inbox-view .terminus-inbox-feedback-row button:hover,
 .terminus-inbox-view .terminus-inbox-banner button:hover {
   background-color: var(--interactive-hover);
@@ -2099,14 +2130,6 @@
   cursor: pointer;
 }
 
-.terminus-inbox-card-swatch {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: var(--terminus-terminal-color, var(--background-modifier-border-hover));
-}
-
 .terminus-inbox-card-name {
   flex: 1 1 auto;
   min-width: 0;
@@ -2163,12 +2186,13 @@
 .terminus-inbox-group {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   color: var(--text-muted);
 }
 
-.terminus-inbox-group .terminus-meta-icon {
-  color: var(--terminus-group-color, var(--text-faint));
+.terminus-inbox-group .terminus-group-dot {
+  width: 7px;
+  height: 7px;
 }
 
 .terminus-inbox-branch {
@@ -2225,31 +2249,30 @@
   vertical-align: -2px;
 }
 
-.terminus-inbox-who,
-.terminus-inbox-subagent {
-  padding: 7px 12px 4px 16px;
+/* Change rows inside a card line up with the card's text: on the card's
+   left edge when there are no subagents, and under the agent's name when
+   they belong to one. The rows themselves are Pending Changes' own. */
+.terminus-inbox-changes .terminus-pending-list {
+  padding: 0 6px 6px 8px;
+}
+
+.terminus-inbox-agent-changes .terminus-pending-list {
+  padding: 2px 0 2px 12px;
+}
+
+/* One agent on a card -- the lead or a subagent -- always the same shape. */
+.terminus-inbox-agent {
+  padding: 8px 10px 6px 16px;
   border-top: 1px solid var(--background-modifier-border);
 }
 
-.terminus-inbox-who {
-  display: flex;
-  gap: 8px;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-faint);
-}
-
-.terminus-inbox-who-label {
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.terminus-inbox-subagent-line {
+.terminus-inbox-agent-line {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-.terminus-inbox-subagent-mark {
+.terminus-inbox-agent-mark {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -2258,13 +2281,21 @@
   height: 14px;
 }
 
-.terminus-inbox-subagent-mark svg {
+.terminus-inbox-agent-mark svg {
   width: 13px;
   height: 13px;
   stroke-width: 2.5;
 }
 
-.terminus-inbox-subagent-mark.is-running::before {
+.terminus-inbox-agent-mark.is-lead {
+  color: var(--text-muted);
+}
+
+.terminus-inbox-agent-mark.is-lead svg {
+  stroke-width: 2;
+}
+
+.terminus-inbox-agent-mark.is-running::before {
   content: "";
   width: 7px;
   height: 7px;
@@ -2273,24 +2304,24 @@
   animation: terminus-tab-pending-pulse 2s ease-in-out infinite;
 }
 
-.terminus-inbox-subagent-mark.is-done {
+.terminus-inbox-agent-mark.is-done {
   color: var(--tm-ok);
 }
 
-.terminus-inbox-subagent-mark.is-failed {
+.terminus-inbox-agent-mark.is-failed {
   color: var(--tm-bad);
 }
 
-.terminus-inbox-subagent-mark.is-stopped {
+.terminus-inbox-agent-mark.is-stopped {
   color: var(--text-faint);
 }
 
-.terminus-inbox-subagent-type {
+.terminus-inbox-agent-name {
   font-weight: 600;
   color: var(--text-normal);
 }
 
-.terminus-inbox-subagent-desc {
+.terminus-inbox-agent-desc {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -2299,7 +2330,7 @@
   color: var(--text-muted);
 }
 
-.terminus-inbox-subagent-details {
+.terminus-inbox-agent-details {
   display: flex;
   flex-wrap: wrap;
   gap: 2px 10px;
@@ -2309,17 +2340,13 @@
   font-variant-numeric: tabular-nums;
 }
 
-.terminus-inbox-subagent-error {
+.terminus-inbox-agent-error {
   padding-left: 20px;
   font-size: var(--font-ui-smaller);
   color: var(--tm-bad);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.terminus-inbox-subagent-changes {
-  padding-left: 20px;
 }
 
 .terminus-inbox-more {
@@ -2384,8 +2411,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--tm-gap);
-  padding: 8px 10px 8px 16px;
+  gap: 4px;
+  padding: 4px 8px 4px 10px;
   border-top: 1px solid var(--background-modifier-border);
   background-color: var(--background-secondary);
 }
@@ -2397,17 +2424,6 @@
 .terminus-inbox-foot-note {
   font-size: var(--font-ui-smaller);
   color: var(--text-faint);
-}
-
-.terminus-inbox-view .terminus-inbox-card-foot .terminus-inbox-open {
-  color: var(--text-muted);
-  background-color: transparent;
-  box-shadow: none;
-}
-
-.terminus-inbox-view .terminus-inbox-card-foot .terminus-inbox-open:hover {
-  color: var(--text-normal);
-  background-color: var(--background-modifier-hover);
 }
 
 /* --- Split Diff comments ------------------------------------------------ */
@@ -2492,7 +2508,7 @@
   .terminus-sidebar-attention,
   .terminus-sidebar-status.is-working,
   .terminus-sidebar-status.is-needs-attention,
-  .terminus-inbox-subagent-mark.is-running::before {
+  .terminus-inbox-agent-mark.is-running::before {
     animation: none;
   }
 

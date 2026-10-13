@@ -214,7 +214,8 @@ export class TerminusSidebarView extends ItemView {
     makeActivatable(row, () => void this.plugin.groups.selectGroup(group.id), (evt) => this.showGroupMenu(evt, group));
     row.setAttr("aria-current", active ? "true" : "false");
 
-    row.createSpan({ cls: "terminus-sidebar-swatch" });
+    // A group's colour is a dot; a terminal's is a stroke, like its tab.
+    row.createSpan({ cls: "terminus-group-dot" });
     if (this.renamingGroupId === group.id) {
       this.renderRenameInput(row, group);
     } else {
