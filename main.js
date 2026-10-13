@@ -19660,6 +19660,33 @@ function buildCard(token, session, changes) {
   };
 }
 
+// src/views/renderGuard.ts
+function guardRenderDuringPress(component, el2, render) {
+  let pressed = false;
+  let queued = false;
+  component.registerDomEvent(el2, "pointerdown", () => {
+    pressed = true;
+  });
+  const release = () => {
+    if (!pressed)
+      return;
+    pressed = false;
+    if (!queued)
+      return;
+    queued = false;
+    window.setTimeout(render, 0);
+  };
+  component.registerDomEvent(window, "pointerup", release);
+  component.registerDomEvent(window, "pointercancel", release);
+  return () => {
+    if (pressed) {
+      queued = true;
+      return;
+    }
+    render();
+  };
+}
+
 // src/views/AgentInboxView.ts
 var AGENT_INBOX_VIEW_TYPE = "terminus-agent-inbox";
 var AgentInboxView = class extends import_obsidian18.ItemView {
@@ -19669,43 +19696,12 @@ var AgentInboxView = class extends import_obsidian18.ItemView {
     /** Per-view UI state, kept across re-renders. */
     this.collapsedCards = /* @__PURE__ */ new Set();
     this.finishedCollapsed = false;
-    this.render = () => {
-      const container = this.contentEl;
-      container.empty();
-      container.addClass("terminus-pending-view", "terminus-inbox-view");
-      const inbox = buildInbox(
-        this.plugin.agentSessionStore.list(),
-        this.plugin.pendingChangesStore.list(),
-        this.plugin.feedbackStore.tokens()
-      );
-      const allChanges = this.plugin.pendingChangesStore.list();
-      this.renderHeader(container, inbox.needsAttention.length, allChanges);
-      this.renderTotals(container, [...inbox.needsAttention, ...inbox.working, ...inbox.finished]);
-      const body = container.createDiv({ cls: "terminus-inbox-body" });
-      const cardCount = inbox.needsAttention.length + inbox.working.length + inbox.finished.length;
-      if (cardCount === 0) {
-        const empty = body.createDiv({ cls: "terminus-pending-empty terminus-inbox-empty" });
-        empty.appendText("No Claude sessions. Type ");
-        const command = "claude";
-        empty.createEl("code", { text: command });
-        empty.appendText(" in a terminal to start one.");
-      }
-      this.renderSection(body, "Needs attention", inbox.needsAttention);
-      this.renderSection(body, "Working", inbox.working);
-      if (inbox.finished.length > 0) {
-        const heading = this.renderSectionHeading(body, "Finished", inbox.finished.length, this.finishedCollapsed);
-        heading.addEventListener("click", () => {
-          this.finishedCollapsed = !this.finishedCollapsed;
-          this.render();
-        });
-        if (!this.finishedCollapsed)
-          for (const card of inbox.finished)
-            this.renderCard(body, card);
-      }
-      const history = this.plugin.pendingChangesStore.listHistory();
-      if (history.length > 0)
-        renderHistorySection(this.rows, body, history);
-    };
+    /** Set in onOpen: holds renders while a mouse button is down here. */
+    this.guardedRender = () => this.renderNow();
+    /** Every re-render goes through here: the stores change often while
+     *  Claude works, and a rebuild mid-click would lose the click (see
+     *  renderGuard.ts). */
+    this.render = () => this.guardedRender();
   }
   get rows() {
     return { plugin: this.plugin, component: this };
@@ -19721,6 +19717,7 @@ var AgentInboxView = class extends import_obsidian18.ItemView {
   }
   async onOpen() {
     this.plugin.dedupeView(AGENT_INBOX_VIEW_TYPE);
+    this.guardedRender = guardRenderDuringPress(this, this.contentEl, () => this.renderNow());
     this.plugin.pendingChangesStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.feedbackStore.on("change", this.render);
@@ -19730,6 +19727,43 @@ var AgentInboxView = class extends import_obsidian18.ItemView {
     this.plugin.pendingChangesStore.off("change", this.render);
     this.plugin.agentSessionStore.off("change", this.render);
     this.plugin.feedbackStore.off("change", this.render);
+  }
+  renderNow() {
+    const container = this.contentEl;
+    container.empty();
+    container.addClass("terminus-pending-view", "terminus-inbox-view");
+    const inbox = buildInbox(
+      this.plugin.agentSessionStore.list(),
+      this.plugin.pendingChangesStore.list(),
+      this.plugin.feedbackStore.tokens()
+    );
+    const allChanges = this.plugin.pendingChangesStore.list();
+    this.renderHeader(container, inbox.needsAttention.length, allChanges);
+    this.renderTotals(container, [...inbox.needsAttention, ...inbox.working, ...inbox.finished]);
+    const body = container.createDiv({ cls: "terminus-inbox-body" });
+    const cardCount = inbox.needsAttention.length + inbox.working.length + inbox.finished.length;
+    if (cardCount === 0) {
+      const empty = body.createDiv({ cls: "terminus-pending-empty terminus-inbox-empty" });
+      empty.appendText("No Claude sessions. Type ");
+      const command = "claude";
+      empty.createEl("code", { text: command });
+      empty.appendText(" in a terminal to start one.");
+    }
+    this.renderSection(body, "Needs attention", inbox.needsAttention);
+    this.renderSection(body, "Working", inbox.working);
+    if (inbox.finished.length > 0) {
+      const heading = this.renderSectionHeading(body, "Finished", inbox.finished.length, this.finishedCollapsed);
+      heading.addEventListener("click", () => {
+        this.finishedCollapsed = !this.finishedCollapsed;
+        this.render();
+      });
+      if (!this.finishedCollapsed)
+        for (const card of inbox.finished)
+          this.renderCard(body, card);
+    }
+    const history = this.plugin.pendingChangesStore.listHistory();
+    if (history.length > 0)
+      renderHistorySection(this.rows, body, history);
   }
   renderHeader(container, needsCount, allChanges) {
     const header = container.createDiv({ cls: "terminus-inbox-header" });
@@ -20169,22 +20203,13 @@ var TerminusSidebarView = class extends import_obsidian20.ItemView {
      *  again; a render asked for mid-render waits until this one is done. */
     this.rendering = false;
     this.renderQueued = false;
-    this.render = () => {
-      if (this.rendering) {
-        this.renderQueued = true;
-        return;
-      }
-      this.rendering = true;
-      try {
-        this.renderNow();
-      } finally {
-        this.rendering = false;
-      }
-      if (this.renderQueued) {
-        this.renderQueued = false;
-        window.setTimeout(this.render, 0);
-      }
-    };
+    /** Set in onOpen: holds renders while a mouse button is down here. */
+    this.guardedRender = () => this.renderSafely();
+    /** The terminal last used, highlighted in its row. Kept while the user
+     *  works in the sidebar itself, which makes no terminal active. */
+    this.focusedToken = null;
+    /** Every re-render goes through here (see renderGuard.ts). */
+    this.render = () => this.guardedRender();
   }
   getViewType() {
     return TERMINUS_SIDEBAR_VIEW_TYPE;
@@ -20196,12 +20221,15 @@ var TerminusSidebarView = class extends import_obsidian20.ItemView {
     return this.plugin.settings.ribbonIcon;
   }
   async onOpen() {
+    var _a8, _b;
     this.plugin.dedupeView(TERMINUS_SIDEBAR_VIEW_TYPE);
     this.plugin.groupStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.pendingChangesStore.on("change", this.render);
+    this.guardedRender = guardRenderDuringPress(this, this.contentEl, () => this.renderSafely());
     this.registerEvent(this.app.workspace.on("layout-change", this.render));
-    this.registerEvent(this.app.workspace.on("active-leaf-change", this.render));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshFocus()));
+    this.focusedToken = (_b = (_a8 = this.app.workspace.getActiveViewOfType(TerminalView)) == null ? void 0 : _a8.hookToken) != null ? _b : null;
     this.render();
   }
   async onClose() {
@@ -20213,6 +20241,31 @@ var TerminusSidebarView = class extends import_obsidian20.ItemView {
   startRename(groupId) {
     this.renamingGroupId = groupId;
     this.render();
+  }
+  refreshFocus() {
+    const view = this.app.workspace.getActiveViewOfType(TerminalView);
+    if (!view || view.hookToken === this.focusedToken)
+      return;
+    this.focusedToken = view.hookToken;
+    this.contentEl.querySelectorAll(".terminus-sidebar-terminal").forEach((row) => {
+      row.toggleClass("is-focused", row.dataset.token === this.focusedToken);
+    });
+  }
+  renderSafely() {
+    if (this.rendering) {
+      this.renderQueued = true;
+      return;
+    }
+    this.rendering = true;
+    try {
+      this.renderNow();
+    } finally {
+      this.rendering = false;
+    }
+    if (this.renderQueued) {
+      this.renderQueued = false;
+      window.setTimeout(this.render, 0);
+    }
   }
   renderNow() {
     const container = this.contentEl;
@@ -20402,7 +20455,8 @@ var TerminusSidebarView = class extends import_obsidian20.ItemView {
     const token = view.hookToken;
     const row = section.createDiv({ cls: "terminus-sidebar-terminal" });
     row.toggleClass("is-selected", this.selected.has(token));
-    row.toggleClass("is-focused", this.app.workspace.getActiveViewOfType(TerminalView) === view);
+    row.dataset.token = token;
+    row.toggleClass("is-focused", token === this.focusedToken);
     const color = view.effectiveColor;
     if (color)
       row.style.setProperty("--terminus-terminal-color", color);

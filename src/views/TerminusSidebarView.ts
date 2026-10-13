@@ -1,6 +1,7 @@
 import { ItemView, Menu, setIcon, setTooltip, TFile, WorkspaceLeaf } from "obsidian";
 import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { TerminalView } from "./TerminalView";
+import { guardRenderDuringPress } from "./renderGuard";
 import type { TerminalGroup } from "../state/GroupStore";
 import type { GroupTarget } from "../groups/GroupController";
 import { refreshTabPendingDot } from "../terminal/tabHeaderColor";
@@ -30,6 +31,11 @@ export class TerminusSidebarView extends ItemView {
    *  again; a render asked for mid-render waits until this one is done. */
   private rendering = false;
   private renderQueued = false;
+  /** Set in onOpen: holds renders while a mouse button is down here. */
+  private guardedRender: () => void = () => this.renderSafely();
+  /** The terminal last used, highlighted in its row. Kept while the user
+   *  works in the sidebar itself, which makes no terminal active. */
+  private focusedToken: string | null = null;
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -52,8 +58,13 @@ export class TerminusSidebarView extends ItemView {
     this.plugin.groupStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.pendingChangesStore.on("change", this.render);
+    this.guardedRender = guardRenderDuringPress(this, this.contentEl, () => this.renderSafely());
     this.registerEvent(this.app.workspace.on("layout-change", this.render));
-    this.registerEvent(this.app.workspace.on("active-leaf-change", this.render));
+    // Only the highlight changes, in place: rebuilding here would swap out
+    // the row under the pointer when a click is what made this pane
+    // active, losing that click.
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshFocus()));
+    this.focusedToken = this.app.workspace.getActiveViewOfType(TerminalView)?.hookToken ?? null;
     this.render();
   }
 
@@ -69,7 +80,19 @@ export class TerminusSidebarView extends ItemView {
     this.render();
   }
 
-  render = (): void => {
+  /** Every re-render goes through here (see renderGuard.ts). */
+  render = (): void => this.guardedRender();
+
+  private refreshFocus(): void {
+    const view = this.app.workspace.getActiveViewOfType(TerminalView);
+    if (!view || view.hookToken === this.focusedToken) return;
+    this.focusedToken = view.hookToken;
+    this.contentEl.querySelectorAll<HTMLElement>(".terminus-sidebar-terminal").forEach((row) => {
+      row.toggleClass("is-focused", row.dataset.token === this.focusedToken);
+    });
+  }
+
+  private renderSafely(): void {
     if (this.rendering) {
       this.renderQueued = true;
       return;
@@ -84,7 +107,7 @@ export class TerminusSidebarView extends ItemView {
       this.renderQueued = false;
       window.setTimeout(this.render, 0);
     }
-  };
+  }
 
   private renderNow(): void {
     const container = this.contentEl;
@@ -287,7 +310,8 @@ export class TerminusSidebarView extends ItemView {
     const token = view.hookToken;
     const row = section.createDiv({ cls: "terminus-sidebar-terminal" });
     row.toggleClass("is-selected", this.selected.has(token));
-    row.toggleClass("is-focused", this.app.workspace.getActiveViewOfType(TerminalView) === view);
+    row.dataset.token = token;
+    row.toggleClass("is-focused", token === this.focusedToken);
     const color = view.effectiveColor;
     if (color) row.style.setProperty("--terminus-terminal-color", color);
     row.draggable = true;

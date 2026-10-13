@@ -7,6 +7,7 @@ import { buildInbox, InboxCard, InboxSubagent } from "../state/inboxModel";
 import { computeDiffStats } from "../diff/renderDiff";
 import { ActionLogModal } from "../modals/ActionLogModal";
 import { ChangeRowContext, renderChangeRow, renderHistorySection, runBulkAction } from "./changeRows";
+import { guardRenderDuringPress } from "./renderGuard";
 import type TerminusPlugin from "../main";
 
 export const AGENT_INBOX_VIEW_TYPE = "terminus-agent-inbox";
@@ -22,6 +23,8 @@ export class AgentInboxView extends ItemView {
   /** Per-view UI state, kept across re-renders. */
   private collapsedCards = new Set<string>();
   private finishedCollapsed = false;
+  /** Set in onOpen: holds renders while a mouse button is down here. */
+  private guardedRender: () => void = () => this.renderNow();
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -45,6 +48,7 @@ export class AgentInboxView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.plugin.dedupeView(AGENT_INBOX_VIEW_TYPE);
+    this.guardedRender = guardRenderDuringPress(this, this.contentEl, () => this.renderNow());
     this.plugin.pendingChangesStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.feedbackStore.on("change", this.render);
@@ -57,7 +61,12 @@ export class AgentInboxView extends ItemView {
     this.plugin.feedbackStore.off("change", this.render);
   }
 
-  render = (): void => {
+  /** Every re-render goes through here: the stores change often while
+   *  Claude works, and a rebuild mid-click would lose the click (see
+   *  renderGuard.ts). */
+  render = (): void => this.guardedRender();
+
+  private renderNow(): void {
     const container = this.contentEl;
     container.empty();
     // terminus-pending-view brings the Pending Changes row styles with it.
@@ -96,7 +105,7 @@ export class AgentInboxView extends ItemView {
 
     const history = this.plugin.pendingChangesStore.listHistory();
     if (history.length > 0) renderHistorySection(this.rows, body, history);
-  };
+  }
 
   private renderHeader(container: HTMLElement, needsCount: number, allChanges: PendingChange[]): void {
     const header = container.createDiv({ cls: "terminus-inbox-header" });
