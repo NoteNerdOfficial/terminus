@@ -1,4 +1,4 @@
-import { ItemView, Menu, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
 import { pathRelative } from "terminus-node-bridge";
 import type { AgentSession, SubagentRun } from "../state/AgentSessionStore";
 import { addUsage, totalTokens, UsageTotals } from "../claude/transcriptUsage";
@@ -8,6 +8,7 @@ import { computeDiffStats } from "../diff/renderDiff";
 import { ActionLogModal } from "../modals/ActionLogModal";
 import { ChangeRowContext, renderChangeRow, renderHistorySection, runBulkAction } from "./changeRows";
 import { guardRenderDuringPress } from "./renderGuard";
+import { iconButton, iconLabel, makeActivatable } from "./uiHelpers";
 import type TerminusPlugin from "../main";
 
 export const AGENT_INBOX_VIEW_TYPE = "terminus-agent-inbox";
@@ -84,22 +85,28 @@ export class AgentInboxView extends ItemView {
     const body = container.createDiv({ cls: "terminus-inbox-body" });
     const cardCount = inbox.needsAttention.length + inbox.working.length + inbox.finished.length;
     if (cardCount === 0) {
-      const empty = body.createDiv({ cls: "terminus-pending-empty terminus-inbox-empty" });
-      empty.appendText("No Claude sessions. Type ");
+      const empty = body.createDiv({ cls: "terminus-inbox-empty" });
+      setIcon(empty.createDiv({ cls: "terminus-inbox-empty-icon" }), "inbox");
+      empty.createDiv({ cls: "terminus-inbox-empty-title", text: "No Claude sessions" });
+      const text = empty.createDiv({ cls: "terminus-inbox-empty-text" });
+      text.appendText("Type ");
       // A command name, not UI text, so it stays lowercase.
       const command = "claude";
-      empty.createEl("code", { text: command });
-      empty.appendText(" in a terminal to start one.");
+      text.createEl("code", { text: command });
+      text.appendText(" in a terminal. Each session gets a card here with what it's doing, what it changed, and when it needs you.");
     }
 
     this.renderSection(body, "Needs attention", inbox.needsAttention);
     this.renderSection(body, "Working", inbox.working);
     if (inbox.finished.length > 0) {
       const heading = this.renderSectionHeading(body, "Finished", inbox.finished.length, this.finishedCollapsed);
-      heading.addEventListener("click", () => {
+      const toggle = () => {
         this.finishedCollapsed = !this.finishedCollapsed;
         this.render();
-      });
+      };
+      heading.addEventListener("click", toggle);
+      makeActivatable(heading, toggle, () => undefined);
+      heading.setAttr("aria-expanded", String(!this.finishedCollapsed));
       if (!this.finishedCollapsed) for (const card of inbox.finished) this.renderCard(body, card);
     }
 
@@ -111,16 +118,15 @@ export class AgentInboxView extends ItemView {
     const header = container.createDiv({ cls: "terminus-inbox-header" });
     header.createSpan({ cls: "terminus-inbox-title", text: "Agent inbox" });
 
-    const next = header.createEl("button", {
-      cls: "terminus-btn-outline",
-      text: needsCount > 0 ? `Next ⇥ (${needsCount})` : "Next ⇥",
-      attr: { "aria-label": "Jump to the next session that needs attention" },
-    });
+    const next = header.createEl("button", { cls: "terminus-inbox-next" });
+    setIcon(next.createSpan({ cls: "terminus-meta-icon" }), "skip-forward");
+    next.createSpan({ text: "Next" });
+    if (needsCount > 0) next.createSpan({ cls: "terminus-inbox-count", text: String(needsCount) });
+    setTooltip(next, needsCount > 0 ? "Jump to the next session that needs attention" : "No session needs attention");
     next.disabled = needsCount === 0;
     next.addEventListener("click", () => void this.plugin.jumpToNextSessionNeedingAttention());
 
-    const more = header.createEl("button", { cls: "terminus-btn-outline", text: "⋯", attr: { "aria-label": "More" } });
-    more.addEventListener("click", (evt) => {
+    iconButton(header, "more-horizontal", "More", (evt) => {
       const menu = new Menu();
       const resolveEverything = (accepted: boolean) =>
         void runBulkAction(this.rows, accepted, allChanges, () => this.plugin.pendingChangesStore.resolveAll(accepted));
@@ -138,24 +144,24 @@ export class AgentInboxView extends ItemView {
     });
   }
 
-  /** Tiles under the header, for every card shown: ≈ cost (unless hidden in
-   *  settings), tokens, and how many sessions are running. */
+  /** One line under the header, for every card shown: how many sessions
+   *  are running, tokens, and ≈ cost (unless hidden in settings). A line
+   *  rather than stat tiles: the sidebar is narrow, and the cards are what
+   *  matter. */
   private renderTotals(container: HTMLElement, cards: InboxCard[]): void {
     if (cards.length === 0) return;
     const usages = cards.map((card) => sessionUsage(card.session)).filter((u): u is UsageTotals => u !== null);
     const total = usages.reduce<UsageTotals | null>((sum, u) => (sum ? addUsage(sum, u) : u), null);
-    const tiles = container.createDiv({ cls: "terminus-inbox-totals" });
-    const tile = (label: string, value: string, title?: string) => {
-      const el = tiles.createDiv({ cls: "terminus-inbox-tile", attr: title ? { title } : {} });
-      el.createDiv({ cls: "terminus-inbox-tile-label", text: label });
-      el.createDiv({ cls: "terminus-inbox-tile-value", text: value });
-    };
-    if (this.plugin.settings.multiAgent.showEstimatedCost) {
-      tile("Cost", total?.costUsd != null ? `≈ ${formatCost(total.costUsd)}` : "—", COST_TITLE);
-    }
-    tile("Tokens", total ? formatTokens(totalTokens(total)) : "—", total ? tokenBreakdown(total) : undefined);
+    const line = container.createDiv({ cls: "terminus-inbox-totals" });
     const live = cards.filter((card) => !card.ended).length;
-    tile("Sessions", `${live} live`);
+    line.createSpan({ text: `${live} ${live === 1 ? "session" : "sessions"} running` });
+    if (total) {
+      const tokens = line.createSpan({ text: `${formatTokens(totalTokens(total))} tokens` });
+      setTooltip(tokens, tokenBreakdown(total));
+      if (this.plugin.settings.multiAgent.showEstimatedCost && total.costUsd !== null) {
+        setTooltip(line.createSpan({ text: `≈ ${formatCost(total.costUsd)}` }), COST_TITLE);
+      }
+    }
   }
 
   private renderSection(body: HTMLElement, label: string, cards: InboxCard[]): void {
@@ -169,9 +175,10 @@ export class AgentInboxView extends ItemView {
     const heading = body.createDiv({ cls: "terminus-inbox-section" });
     if (collapsed !== null) {
       heading.addClass("is-collapsible");
-      heading.createSpan({ cls: "terminus-inbox-section-chevron", text: collapsed ? "▸" : "▾" });
+      setIcon(heading.createSpan({ cls: "terminus-inbox-section-chevron" }), collapsed ? "chevron-right" : "chevron-down");
     }
-    heading.createSpan({ text: `${label} · ${count}` });
+    heading.createSpan({ text: label });
+    heading.createSpan({ cls: "terminus-inbox-count", text: String(count) });
     return heading;
   }
 
@@ -191,25 +198,32 @@ export class AgentInboxView extends ItemView {
     const el = body.createDiv({ cls: "terminus-inbox-card" });
     el.toggleClass("is-needs-attention", needsAttention);
     el.toggleClass("is-ended", card.ended);
-    if (color) {
-      el.addClass("terminus-group-colored");
-      el.style.setProperty("--terminus-group-color", color);
-    }
-
     const head = el.createDiv({ cls: "terminus-inbox-card-head" });
+    // The terminal's colour as the same dot the sidebar uses.
+    const swatch = head.createSpan({ cls: "terminus-inbox-card-swatch" });
+    if (color) swatch.style.setProperty("--terminus-terminal-color", color);
     head.createSpan({ cls: "terminus-inbox-card-name", text: name });
     const pill = statusPill(card);
     head.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label });
-    head.createSpan({ cls: "terminus-inbox-chevron", text: collapsed ? "▸" : "▾" });
-    head.addEventListener("click", () => {
+    setIcon(head.createSpan({ cls: "terminus-inbox-chevron" }), collapsed ? "chevron-right" : "chevron-down");
+    const toggle = () => {
       if (collapsed) this.collapsedCards.delete(card.token);
       else this.collapsedCards.add(card.token);
       this.render();
-    });
+    };
+    head.addEventListener("click", toggle);
+    makeActivatable(head, toggle, () => undefined);
+    head.setAttr("aria-expanded", String(!collapsed));
 
     const meta = el.createDiv({ cls: "terminus-inbox-card-meta" });
+    const group = this.plugin.groupStore.get(terminal?.groupId);
+    if (group) {
+      const groupLabel = iconLabel(meta, "layers", group.name, "terminus-inbox-group");
+      groupLabel.style.setProperty("--terminus-group-color", group.color);
+      setTooltip(groupLabel, "This terminal's group");
+    }
     if (session?.branch && this.plugin.settings.multiAgent.showGitBranch) {
-      meta.createSpan({ cls: "terminus-inbox-branch", text: `⎇ ${session.branch}`, attr: { title: "Git branch of this session's folder" } });
+      setTooltip(iconLabel(meta, "git-branch", session.branch, "terminus-inbox-branch"), "Git branch of this session's folder");
     }
     if (session?.lastTurnMs != null && session.status !== "working") {
       meta.createSpan({ text: `turn ${formatDuration(session.lastTurnMs)}` });
@@ -217,17 +231,19 @@ export class AgentInboxView extends ItemView {
     this.renderUsage(meta, sessionUsage(session), session?.usage ?? null);
     if (card.changes.length > 0) {
       const { added, removed } = sumStats(card.changes);
-      meta.createSpan({ text: `${card.changes.length} pending` });
-      meta.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
-      meta.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
+      // One unit, so a narrow card wraps before it rather than inside it.
+      const pending = meta.createSpan({ cls: "terminus-inbox-pending" });
+      pending.createSpan({ text: `${card.changes.length} pending` });
+      pending.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
+      pending.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
     }
     if (collapsed) return;
 
     if (needsAttention && session) {
-      const banner = el.createDiv({ cls: "terminus-inbox-banner" });
-      banner.createSpan({ text: `⚠ ${session.needsMessage ?? needsFallback(session)}` });
+      const banner = el.createDiv({ cls: "terminus-inbox-banner", attr: { role: "status" } });
+      iconLabel(banner, "alert-triangle", session.needsMessage ?? needsFallback(session), "terminus-inbox-banner-text");
       if (terminal) {
-        banner.createEl("button", { cls: "terminus-btn-solid", text: "Answer in terminal" }).addEventListener("click", () =>
+        banner.createEl("button", { cls: "mod-cta", text: "Answer in terminal" }).addEventListener("click", () =>
           void this.plugin.focusTerminal(card.token)
         );
       }
@@ -238,11 +254,13 @@ export class AgentInboxView extends ItemView {
       const quote = this.quoteFor(card);
       if (quote) {
         const failed = session?.lastTurnFailed && session.status !== "working";
-        el.createDiv({
-          cls: `terminus-inbox-quote${failed ? " is-failed" : ""}`,
-          text: failed ? `✗ Turn failed: ${quote}` : quote,
-          attr: { title: quote },
-        });
+        const quoteEl = el.createDiv({ cls: `terminus-inbox-quote${failed ? " is-failed" : ""}`, attr: { title: quote } });
+        if (failed) {
+          setIcon(quoteEl.createSpan({ cls: "terminus-meta-icon" }), "x-circle");
+          quoteEl.createSpan({ text: `Turn failed: ${quote}` });
+        } else {
+          quoteEl.setText(quote);
+        }
       }
     }
 
@@ -268,10 +286,10 @@ export class AgentInboxView extends ItemView {
     if (card.changes.length > 0) {
       const ids = new Set(card.changes.map((c) => c.id));
       const inCard = (change: PendingChange) => ids.has(change.id);
-      foot.createEl("button", { cls: "terminus-btn-ghost", text: "Reject all" }).addEventListener("click", () =>
+      foot.createEl("button", { text: "Reject all" }).addEventListener("click", () =>
         void runBulkAction(this.rows, false, card.changes, () => this.plugin.pendingChangesStore.resolveAll(false, inCard), name)
       );
-      foot.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Keep all" }).addEventListener("click", () =>
+      foot.createEl("button", { cls: "mod-cta", text: "Keep all" }).addEventListener("click", () =>
         void runBulkAction(this.rows, true, card.changes, () => this.plugin.pendingChangesStore.resolveAll(true, inCard), name)
       );
     } else {
@@ -279,9 +297,10 @@ export class AgentInboxView extends ItemView {
     }
     foot.createDiv({ cls: "terminus-inbox-spacer" });
     if (terminal) {
-      foot.createEl("button", { cls: "terminus-btn-ghost", text: "Open terminal" }).addEventListener("click", () =>
-        void this.plugin.focusTerminal(card.token)
-      );
+      const open = foot.createEl("button", { cls: "terminus-inbox-open" });
+      setIcon(open.createSpan({ cls: "terminus-meta-icon" }), "square-terminal");
+      open.createSpan({ text: "Open terminal" });
+      open.addEventListener("click", () => void this.plugin.focusTerminal(card.token));
     }
   }
 
@@ -291,24 +310,20 @@ export class AgentInboxView extends ItemView {
     const items = this.plugin.feedbackStore.listFor(token);
     if (items.length === 0) return;
     const section = el.createDiv({ cls: "terminus-inbox-feedback" });
+    iconLabel(section, "message-square", `${items.length} ${items.length === 1 ? "comment" : "comments"} queued`, "terminus-inbox-feedback-title");
     const row = section.createDiv({ cls: "terminus-inbox-feedback-row" });
-    row.createSpan({ text: `💬 ${items.length} feedback ${items.length === 1 ? "item" : "items"} queued` });
-    row.createDiv({ cls: "terminus-inbox-spacer" });
     const readiness = this.plugin.feedbackReadiness(token);
     if (readiness.ready) {
-      row
-        .createEl("button", {
-          cls: "terminus-btn-solid",
-          text: `Send to ${terminalName}`,
-          attr: { title: "Types the feedback into the terminal's input line without sending it." },
-        })
-        .addEventListener("click", () => void this.plugin.sendFeedback(token));
+      const send = row.createEl("button", { cls: "mod-cta", text: `Send to ${terminalName}` });
+      setTooltip(send, "Types the comments into the terminal's input line without sending them");
+      send.addEventListener("click", () => void this.plugin.sendFeedback(token));
     } else {
       row.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
     }
-    row
-      .createEl("button", { cls: "terminus-btn-ghost", text: "Discard", attr: { "aria-label": "Discard all queued feedback for this session" } })
-      .addEventListener("click", () => this.plugin.feedbackStore.clear(token));
+    row.createDiv({ cls: "terminus-inbox-spacer" });
+    const discard = row.createEl("button", { text: "Discard" });
+    setTooltip(discard, "Discard every queued comment for this session");
+    discard.addEventListener("click", () => this.plugin.feedbackStore.clear(token));
 
     const list = section.createDiv({ cls: "terminus-inbox-feedback-list" });
     const base = this.plugin.getVaultBasePath();
@@ -319,9 +334,7 @@ export class AgentInboxView extends ItemView {
       line.createSpan({ cls: "terminus-inbox-feedback-place", text: place });
       if (item.rejected) line.createSpan({ cls: "terminus-diff-stat-remove", text: "rejected" });
       line.createSpan({ cls: "terminus-inbox-feedback-text", text: item.comment, attr: { title: item.comment } });
-      line
-        .createEl("button", { cls: "terminus-btn-ghost", text: "✕", attr: { "aria-label": "Remove this comment" } })
-        .addEventListener("click", () => this.plugin.feedbackStore.remove(item.id));
+      iconButton(line, "x", "Remove this comment", () => this.plugin.feedbackStore.remove(item.id));
     }
   }
 
@@ -360,7 +373,9 @@ export class AgentInboxView extends ItemView {
     const line = row.createDiv({ cls: "terminus-inbox-subagent-line" });
     const running = sub.run?.running ?? false;
     const mark = subagentMark(sub.run);
-    line.createSpan({ cls: `terminus-inbox-subagent-mark is-${mark.kind}`, text: mark.symbol, attr: { "aria-label": mark.label } });
+    const markEl = line.createSpan({ cls: `terminus-inbox-subagent-mark is-${mark.kind}`, attr: { "aria-label": mark.label } });
+    // Running is a pulsing dot drawn in CSS; the rest are icons.
+    if (mark.icon) setIcon(markEl, mark.icon);
     line.createSpan({ cls: "terminus-inbox-subagent-type", text: sub.agentType });
     const description = sub.run?.description;
     if (description) line.createSpan({ cls: "terminus-inbox-subagent-desc", text: description, attr: { title: description } });
@@ -460,19 +475,20 @@ function needsFallback(session: AgentSession): string {
   return "Claude needs your attention.";
 }
 
-/** ● running, ✓ done, ✗ failed (red), ■ stopped (grey: stopping isn't
- *  failing). The label says it in words too, for screen readers and for
- *  anyone who can't tell the colours apart. */
-function subagentMark(run: SubagentRun | null): { kind: string; symbol: string; label: string } {
-  if (!run) return { kind: "done", symbol: "✓", label: "Finished" };
-  if (run.running) return { kind: "running", symbol: "●", label: "Running" };
+/** A pulsing dot while running, then a check (done), an x (failed, red) or
+ *  a square (stopped, grey: stopping isn't failing). The label says it in
+ *  words too, for screen readers and for anyone who can't tell the colours
+ *  apart. */
+function subagentMark(run: SubagentRun | null): { kind: string; icon: string | null; label: string } {
+  if (!run) return { kind: "done", icon: "check", label: "Finished" };
+  if (run.running) return { kind: "running", icon: null, label: "Running" };
   switch (run.outcome) {
     case "failed":
-      return { kind: "failed", symbol: "✗", label: "Failed" };
+      return { kind: "failed", icon: "x", label: "Failed" };
     case "stopped":
-      return { kind: "stopped", symbol: "■", label: "Stopped" };
+      return { kind: "stopped", icon: "square", label: "Stopped" };
     default:
-      return { kind: "done", symbol: "✓", label: "Finished" };
+      return { kind: "done", icon: "check", label: "Finished" };
   }
 }
 

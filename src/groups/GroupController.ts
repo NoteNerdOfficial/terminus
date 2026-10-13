@@ -1,4 +1,4 @@
-import { TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
+import { setIcon, TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
 import { TERMINUS_VIEW_TYPE, TerminalView } from "../views/TerminalView";
 import type { TerminalGroup } from "../state/GroupStore";
 import { ConfirmModal } from "../modals/ConfirmModal";
@@ -154,7 +154,7 @@ export class GroupController {
     this.refreshStatus();
   }
 
-  /** "⧉ Auth rotation · 4 in other groups" in the status bar; click to
+  /** "Auth rotation · 4 in other groups", with a layers icon, in the status bar; click to
    *  switch. Empty outside Multi-agent or with no groups. */
   private refreshStatus(): void {
     const el = this.statusEl;
@@ -164,7 +164,9 @@ export class GroupController {
     if (groups.length === 0) return;
     const active = this.store.get(this.store.activeGroupId);
     const hidden = this.tabs.hiddenTerminalCount();
-    el.setText(`⧉ ${active?.name ?? "No group"}${hidden > 0 ? ` · ${hidden} in other groups` : ""}`);
+    el.empty();
+    setIcon(el.createSpan({ cls: "terminus-meta-icon" }), "layers");
+    el.createSpan({ text: `${active?.name ?? "No group"}${hidden > 0 ? ` · ${hidden} in other groups` : ""}` });
     el.setAttr("aria-label", "Switch group");
   }
 

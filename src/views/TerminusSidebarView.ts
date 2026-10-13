@@ -2,6 +2,7 @@ import { ItemView, Menu, setIcon, setTooltip, TFile, WorkspaceLeaf } from "obsid
 import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { TerminalView } from "./TerminalView";
 import { guardRenderDuringPress } from "./renderGuard";
+import { iconButton, iconLabel, makeActivatable } from "./uiHelpers";
 import type { TerminalGroup } from "../state/GroupStore";
 import type { GroupTarget } from "../groups/GroupController";
 import { refreshTabPendingDot } from "../terminal/tabHeaderColor";
@@ -122,10 +123,25 @@ export class TerminusSidebarView extends ItemView {
 
     this.renderHeader(container, terminals);
     const list = container.createDiv({ cls: "terminus-sidebar-list" });
-    for (const group of groups) this.renderGroup(list, group, terminals.filter((t) => t.groupId === group.id));
-    this.renderUngrouped(list, terminals.filter((t) => !t.groupId || !this.plugin.groupStore.get(t.groupId)));
+    if (groups.length === 0 && terminals.length === 0) {
+      this.renderEmpty(list);
+    } else {
+      for (const group of groups) this.renderGroup(list, group, terminals.filter((t) => t.groupId === group.id));
+      this.renderUngrouped(list, terminals.filter((t) => !t.groupId || !this.plugin.groupStore.get(t.groupId)));
+    }
 
     refreshTabPendingDot(this.leaf, terminals.some((t) => this.status(t) === "needs-attention"));
+  }
+
+  /** Nothing open yet: say what the sidebar is for and how to start. */
+  private renderEmpty(list: HTMLElement): void {
+    const empty = list.createDiv({ cls: "terminus-sidebar-empty-state" });
+    setIcon(empty.createDiv({ cls: "terminus-sidebar-empty-icon" }), "square-terminal");
+    empty.createDiv({ cls: "terminus-sidebar-empty-title", text: "No terminals open" });
+    empty.createDiv({
+      cls: "terminus-sidebar-empty-text",
+      text: "Open a terminal on its own, or start a group to keep the terminals for one piece of work together. Only the selected group's terminals show in the editor; the rest keep running.",
+    });
   }
 
   private renderHeader(container: HTMLElement, terminals: TerminalView[]): void {
@@ -137,7 +153,7 @@ export class TerminusSidebarView extends ItemView {
     const actions = header.createDiv({ cls: "terminus-sidebar-actions" });
     if (this.selected.size > 0) {
       actions.createSpan({ cls: "terminus-sidebar-selected", text: `${this.selected.size} selected` });
-      actions.createEl("button", { text: "Group selected" }).addEventListener("click", () => {
+      actions.createEl("button", { text: "Group selected", cls: "mod-cta" }).addEventListener("click", () => {
         const views = terminals.filter((t) => this.selected.has(t.hookToken));
         this.selected.clear();
         void this.plugin.groups.createGroup(views).then((group) => this.startRename(group.id));
@@ -195,6 +211,8 @@ export class TerminusSidebarView extends ItemView {
     const row = section.createDiv({ cls: "terminus-sidebar-group-row" });
     row.toggleClass("is-active", active);
     this.makeDropTarget(row, group.id);
+    makeActivatable(row, () => void this.plugin.groups.selectGroup(group.id), (evt) => this.showGroupMenu(evt, group));
+    row.setAttr("aria-current", active ? "true" : "false");
 
     row.createSpan({ cls: "terminus-sidebar-swatch" });
     if (this.renamingGroupId === group.id) {
@@ -207,28 +225,31 @@ export class TerminusSidebarView extends ItemView {
       });
     }
     const needsAttention = members.some((t) => this.status(t) === "needs-attention");
-    if (needsAttention && !active) row.createSpan({ cls: "terminus-sidebar-attention", attr: { "aria-label": "Needs attention" } });
+    if (needsAttention && !active) row.createSpan({ cls: "terminus-sidebar-attention", attr: { "aria-label": "A session here needs attention" } });
     row.createSpan({
       cls: "terminus-sidebar-group-state",
       text: members.length === 0 ? "No terminals" : active ? "Showing" : `${members.length} in background`,
     });
 
-    const add = row.createEl("button", { cls: "terminus-sidebar-icon-btn", text: "＋" });
-    setTooltip(add, "New terminal in this group");
-    add.addEventListener("click", (evt) => {
-      evt.stopPropagation();
-      void this.plugin.groups.newTerminal(group.id);
-    });
-    this.renderCloseButton(row, group.id, members, "Close this group and its terminals", () => this.plugin.groups.closeGroup(group.id), true);
+    const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
+    iconButton(actions, "plus", "New terminal in this group", () => void this.plugin.groups.newTerminal(group.id));
+    this.renderCloseButton(actions, group.id, members, "Close this group and its terminals", () => this.plugin.groups.closeGroup(group.id), row);
 
     row.addEventListener("click", () => void this.plugin.groups.selectGroup(group.id));
     row.addEventListener("contextmenu", (evt) => this.showGroupMenu(evt, group));
 
-    const meta = section.createDiv({ cls: "terminus-sidebar-group-meta" });
-    meta.createSpan({ text: `📁 ${this.folderLabel(group.folder)}`, attr: { title: "New terminals in this group start here" } });
+    // Only what's particular to this group: its own folder (the vault root
+    // is every group's default) and its linked note.
     const note = noteFile(this.plugin, group.note);
-    if (note) {
-      const link = meta.createEl("a", { cls: "terminus-sidebar-note", text: `📝 ${note.basename}`, href: "#" });
+    const meta = group.folder || note ? section.createDiv({ cls: "terminus-sidebar-group-meta" }) : null;
+    if (meta && group.folder) {
+      const folder = iconLabel(meta, "folder", this.folderLabel(group.folder), "terminus-sidebar-folder");
+      setTooltip(folder, "New terminals in this group start here");
+    }
+    if (meta && note) {
+      const link = meta.createEl("a", { cls: "terminus-sidebar-note", href: "#" });
+      setIcon(link.createSpan({ cls: "terminus-meta-icon" }), "file-text");
+      link.createSpan({ text: note.basename });
       setTooltip(link, `Open ${note.path}`);
       link.addEventListener("click", (evt) => {
         evt.preventDefault();
@@ -300,7 +321,7 @@ export class TerminusSidebarView extends ItemView {
     row.createSpan({ cls: "terminus-sidebar-group-state", text: "Shown in every group" });
     this.makeDropTarget(row, null);
     if (members.length === 0) {
-      section.createDiv({ cls: "terminus-sidebar-empty", text: "No ungrouped terminals." });
+      section.createDiv({ cls: "terminus-sidebar-empty", text: "Drag a terminal here to show it in every group." });
       return;
     }
     for (const view of members) this.renderTerminal(section, view);
@@ -315,11 +336,14 @@ export class TerminusSidebarView extends ItemView {
     const color = view.effectiveColor;
     if (color) row.style.setProperty("--terminus-terminal-color", color);
     row.draggable = true;
+    makeActivatable(row, () => void this.plugin.focusTerminal(token), (evt) => this.showMoveMenu(evt, this.dragSet(view)));
 
     row.createSpan({ cls: "terminus-sidebar-terminal-color" });
     row.createSpan({ cls: "terminus-sidebar-terminal-name", text: view.getDisplayText() });
     const pending = this.plugin.pendingChangesStore.list().filter((c) => c.contributors[0]?.token === token).length;
-    if (pending > 0) row.createSpan({ cls: "terminus-sidebar-pending", text: String(pending), attr: { title: `${pending} pending` } });
+    if (pending > 0) {
+      row.createSpan({ cls: "terminus-sidebar-pending", text: String(pending), attr: { "aria-label": `${pending} pending ${pending === 1 ? "change" : "changes"}` } });
+    }
     const status = this.status(view);
     if (status) {
       row.createSpan({ cls: `terminus-sidebar-status is-${status}`, attr: { "aria-label": STATUS_LABELS[status] } });
@@ -327,13 +351,9 @@ export class TerminusSidebarView extends ItemView {
       row.createSpan({ cls: "terminus-sidebar-shell-tag", text: "Shell", attr: { title: "Claude isn't running here" } });
     }
 
-    const move = row.createEl("button", { cls: "terminus-sidebar-icon-btn", text: "⇄" });
-    setTooltip(move, "Move to group");
-    move.addEventListener("click", (evt) => {
-      evt.stopPropagation();
-      this.showMoveMenu(evt, this.dragSet(view));
-    });
-    this.renderCloseButton(row, token, [view], "Close terminal", () => this.plugin.groups.closeTerminals([view]), false);
+    const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
+    iconButton(actions, "arrow-left-right", "Move to group", (evt) => this.showMoveMenu(evt, this.dragSet(view)));
+    this.renderCloseButton(actions, token, [view], "Close terminal", () => this.plugin.groups.closeTerminals([view]), null);
 
     row.addEventListener("click", (evt) => {
       if (evt.metaKey || evt.ctrlKey || evt.shiftKey) {
@@ -355,13 +375,18 @@ export class TerminusSidebarView extends ItemView {
 
   /** × closes at once, unless a session in it is mid-turn or waiting on an
    *  answer: then it asks inline first. Pending changes never block it. */
-  /** `isGroup`: a group's confirmation goes right under its row, before its
-   *  terminals; a terminal's is added after the row by renderTerminal. */
-  private renderCloseButton(row: HTMLElement, key: string, terminals: TerminalView[], label: string, close: () => void, isGroup: boolean): void {
-    const button = row.createEl("button", { cls: "terminus-sidebar-icon-btn", text: "×" });
-    setTooltip(button, label);
-    button.addEventListener("click", (evt) => {
-      evt.stopPropagation();
+  /** `groupRow`: a group's confirmation goes right under its row, before
+   *  its terminals; a terminal's (null) is added after the row by
+   *  renderTerminal. */
+  private renderCloseButton(
+    actions: HTMLElement,
+    key: string,
+    terminals: TerminalView[],
+    label: string,
+    close: () => void,
+    groupRow: HTMLElement | null
+  ): void {
+    iconButton(actions, "x", label, () => {
       if (this.plugin.groups.busy(terminals).length > 0) {
         this.confirmingClose = key;
         this.render();
@@ -369,7 +394,7 @@ export class TerminusSidebarView extends ItemView {
       }
       close();
     });
-    if (isGroup && this.confirmingClose === key) this.renderCloseConfirm(row.parentElement ?? row, key, close, row);
+    if (groupRow && this.confirmingClose === key) this.renderCloseConfirm(groupRow.parentElement ?? groupRow, key, close, groupRow);
   }
 
   private renderCloseConfirm(parent: HTMLElement, key: string, close: () => void, after?: HTMLElement): void {
@@ -377,7 +402,8 @@ export class TerminusSidebarView extends ItemView {
     const confirm = createDiv({ cls: "terminus-sidebar-confirm", attr: { "data-confirm": key } });
     if (after) after.after(confirm);
     else parent.appendChild(confirm);
-    confirm.createSpan({ text: "Claude is mid-turn here. Close anyway?" });
+    setIcon(confirm.createSpan({ cls: "terminus-meta-icon" }), "alert-triangle");
+    confirm.createSpan({ cls: "terminus-sidebar-confirm-text", text: "Claude is mid-turn here. Close anyway?" });
     confirm.createEl("button", { text: "Close", cls: "mod-warning" }).addEventListener("click", () => {
       this.confirmingClose = null;
       close();

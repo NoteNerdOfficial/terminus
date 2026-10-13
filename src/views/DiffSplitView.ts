@@ -1,4 +1,4 @@
-import { ItemView, ViewStateResult, WorkspaceLeaf } from "obsidian";
+import { ItemView, setIcon, setTooltip, ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { pathBasename } from "terminus-node-bridge";
 import { HunkCommentContext, renderSplitDiffBody } from "../diff/renderSplitDiff";
 import { collisionLabel } from "../modals/collisions";
@@ -116,11 +116,10 @@ export class DiffSplitView extends ItemView {
       };
       const queued = this.plugin.feedbackStore.listForFile(change.diff.filePath).length;
       if (queued > 0) {
-        header.createSpan({
-          cls: "terminus-split-diff-queued",
-          text: `💬 ${queued} ${queued === 1 ? "comment" : "comments"} queued for ${recipient}`,
-          attr: { title: "Send them from this session's card in the Agent inbox" },
-        });
+        const note = header.createSpan({ cls: "terminus-split-diff-queued" });
+        setIcon(note.createSpan({ cls: "terminus-meta-icon" }), "message-square");
+        note.createSpan({ text: `${queued} ${queued === 1 ? "comment" : "comments"} queued for ${recipient}` });
+        setTooltip(note, "Send them from this session's card in the Agent inbox");
       }
     }
 
