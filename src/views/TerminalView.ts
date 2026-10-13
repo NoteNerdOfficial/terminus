@@ -502,6 +502,7 @@ export class TerminalView extends ItemView {
     this.clearPendingAttention();
     if (failed) this.plugin.agentSessionStore.turnFailed(this.token, message, identity);
     else this.plugin.agentSessionStore.turnEnded(this.token, message, identity);
+    void this.plugin.refreshUsage(this.token);
     // Watching the terminal as the turn ends counts as reading it, or a
     // minute later idle_prompt would flag a turn already being looked at.
     if (this.app.workspace.getActiveViewOfType(TerminalView) === this && document.hasFocus()) {
@@ -549,9 +550,12 @@ export class TerminalView extends ItemView {
       case "SessionStart":
         store.sessionStarted(this.token, identity);
         void this.readGitBranch();
+        // A resumed session's transcript already has usage in it.
+        void this.plugin.refreshUsage(this.token);
         break;
       case "UserPromptSubmit":
         store.promptSubmitted(this.token, identity);
+        void this.plugin.refreshUsage(this.token);
         break;
       case "SessionEnd":
         store.sessionEnded(this.token);
@@ -577,6 +581,7 @@ export class TerminalView extends ItemView {
           identity
         );
         store.backgroundTasksReported(this.token, payload.background_tasks, false);
+        void this.plugin.refreshUsage(this.token);
         break;
       case "StopFailure":
         if (!payload.agent_id) {
@@ -594,6 +599,7 @@ export class TerminalView extends ItemView {
             },
             identity
           );
+          void this.plugin.refreshUsage(this.token);
         }
         break;
     }

@@ -84,12 +84,12 @@ var require_fs = __commonJS({
       };
     }();
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.pathJoin = pathJoin9;
-    exports.pathBasename = pathBasename11;
-    exports.pathDirname = pathDirname3;
+    exports.pathJoin = pathJoin10;
+    exports.pathBasename = pathBasename12;
+    exports.pathDirname = pathDirname4;
     exports.pathRelative = pathRelative7;
     exports.fileExistsSync = fileExistsSync6;
-    exports.readTextFileIfExists = readTextFileIfExists4;
+    exports.readTextFileIfExists = readTextFileIfExists5;
     exports.writeTextFile = writeTextFile5;
     exports.appendTextFile = appendTextFile2;
     exports.makeDirRecursive = makeDirRecursive4;
@@ -100,13 +100,13 @@ var require_fs = __commonJS({
     var fsPromises = __importStar(require("fs/promises"));
     var nodePath = __importStar(require("path"));
     var crypto_1 = require("crypto");
-    function pathJoin9(...segments) {
+    function pathJoin10(...segments) {
       return nodePath.join(...segments);
     }
-    function pathBasename11(filePath, ext) {
+    function pathBasename12(filePath, ext) {
       return nodePath.basename(filePath, ext);
     }
-    function pathDirname3(filePath) {
+    function pathDirname4(filePath) {
       return nodePath.dirname(filePath);
     }
     function pathRelative7(from, to) {
@@ -118,7 +118,7 @@ var require_fs = __commonJS({
     function isEnoent(err) {
       return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
     }
-    async function readTextFileIfExists4(filePath) {
+    async function readTextFileIfExists5(filePath) {
       try {
         return await fsPromises.readFile(filePath, "utf8");
       } catch (err) {
@@ -392,7 +392,7 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian21 = require("obsidian");
-var import_terminus_node_bridge25 = __toESM(require_dist());
+var import_terminus_node_bridge26 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
 var import_terminus_node_bridge = __toESM(require_dist());
@@ -16814,6 +16814,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
       this.plugin.agentSessionStore.turnFailed(this.token, message, identity);
     else
       this.plugin.agentSessionStore.turnEnded(this.token, message, identity);
+    void this.plugin.refreshUsage(this.token);
     if (this.app.workspace.getActiveViewOfType(TerminalView) === this && document.hasFocus()) {
       this.plugin.agentSessionStore.seen(this.token);
     }
@@ -16860,9 +16861,11 @@ var TerminalView = class extends import_obsidian7.ItemView {
       case "SessionStart":
         store.sessionStarted(this.token, identity);
         void this.readGitBranch();
+        void this.plugin.refreshUsage(this.token);
         break;
       case "UserPromptSubmit":
         store.promptSubmitted(this.token, identity);
+        void this.plugin.refreshUsage(this.token);
         break;
       case "SessionEnd":
         store.sessionEnded(this.token);
@@ -16891,6 +16894,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
           identity
         );
         store.backgroundTasksReported(this.token, payload.background_tasks, false);
+        void this.plugin.refreshUsage(this.token);
         break;
       case "StopFailure":
         if (!payload.agent_id) {
@@ -16906,6 +16910,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
             },
             identity
           );
+          void this.plugin.refreshUsage(this.token);
         }
         break;
     }
@@ -18910,7 +18915,185 @@ var PendingChangesView = class extends import_obsidian14.ItemView {
 
 // src/views/AgentInboxView.ts
 var import_obsidian15 = require("obsidian");
+var import_terminus_node_bridge22 = __toESM(require_dist());
+
+// src/claude/transcriptUsage.ts
 var import_terminus_node_bridge21 = __toESM(require_dist());
+var MILLION = 1e6;
+var LONG_PROMPT_TOKENS = 1e5;
+var US_ONLY_MULTIPLIER = 1.1;
+var price = (input, cacheWrite5m, cacheWrite1h, cacheRead, output) => ({
+  input,
+  cacheWrite5m,
+  cacheWrite1h,
+  cacheRead,
+  output
+});
+var MODELS = [
+  { prefix: "claude-fable-5-1", price: price(10, 12.5, 20, 0.25, 50), contextWindow: MILLION },
+  { prefix: "claude-mythos-5-1", price: price(10, 12.5, 20, 0.25, 50), contextWindow: MILLION },
+  { prefix: "claude-fable-5", price: price(10, 12.5, 20, 1, 50), contextWindow: MILLION },
+  { prefix: "claude-mythos-5", price: price(10, 12.5, 20, 1, 50), contextWindow: MILLION },
+  { prefix: "claude-opus-5-5", price: price(4, 5, 8, 0.2, 20), contextWindow: MILLION },
+  { prefix: "claude-opus-5", price: price(5, 6.25, 10, 0.5, 25), contextWindow: MILLION },
+  { prefix: "claude-opus-4-8", price: price(5, 6.25, 10, 0.5, 25), contextWindow: MILLION },
+  { prefix: "claude-opus-4-7", price: price(5, 6.25, 10, 0.5, 25), contextWindow: MILLION },
+  { prefix: "claude-opus-4-6", price: price(5, 6.25, 10, 0.5, 25), contextWindow: MILLION },
+  { prefix: "claude-opus-4-5", price: price(5, 6.25, 10, 0.5, 25), contextWindow: 2e5 },
+  { prefix: "claude-opus-4-1", price: price(15, 18.75, 30, 1.5, 75), contextWindow: 2e5 },
+  { prefix: "claude-opus-4", price: price(15, 18.75, 30, 1.5, 75), contextWindow: 2e5 },
+  { prefix: "claude-sonnet-5-5", price: price(2, 2.5, 4, 0.1, 10), contextWindow: MILLION },
+  { prefix: "claude-sonnet-5", price: price(2, 2.5, 4, 0.2, 10), contextWindow: MILLION },
+  { prefix: "claude-sonnet-4-6", price: price(3, 3.75, 6, 0.3, 15), contextWindow: MILLION },
+  { prefix: "claude-sonnet-4-5", price: price(3, 3.75, 6, 0.3, 15), contextWindow: 2e5 },
+  { prefix: "claude-sonnet-4", price: price(3, 3.75, 6, 0.3, 15), contextWindow: 2e5 },
+  {
+    prefix: "claude-haiku-5-5",
+    price: price(0.1, 0.125, 0.2, 0.01, 0.5),
+    longPromptPrice: price(0.5, 0.625, 1, 0.05, 2.5),
+    contextWindow: MILLION
+  },
+  { prefix: "claude-haiku-4-5", price: price(1, 1.25, 2, 0.1, 5), contextWindow: 2e5 },
+  { prefix: "claude-3-5-haiku", price: price(0.8, 1, 1.6, 0.08, 4), contextWindow: 2e5 }
+];
+function modelInfo(model) {
+  let best = null;
+  for (const info of MODELS) {
+    if (model.startsWith(info.prefix) && (!best || info.prefix.length > best.prefix.length))
+      best = info;
+  }
+  return best;
+}
+function totalTokens(usage) {
+  return usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+}
+function addUsage(a, b3) {
+  return {
+    ...a,
+    inputTokens: a.inputTokens + b3.inputTokens,
+    outputTokens: a.outputTokens + b3.outputTokens,
+    cacheReadTokens: a.cacheReadTokens + b3.cacheReadTokens,
+    cacheWriteTokens: a.cacheWriteTokens + b3.cacheWriteTokens,
+    costUsd: a.costUsd === null || b3.costUsd === null ? null : a.costUsd + b3.costUsd
+  };
+}
+var TranscriptUsageReader = class {
+  constructor() {
+    this.files = /* @__PURE__ */ new Map();
+    /** One read per file at a time, so two hooks landing together can't
+     *  parse the same appended lines twice. */
+    this.pending = /* @__PURE__ */ new Map();
+  }
+  /** Null when the transcript doesn't exist (Claude Code may not be saving
+   *  transcripts) or has no assistant messages yet. */
+  read(path, kind) {
+    var _a8;
+    const previous = (_a8 = this.pending.get(path)) != null ? _a8 : Promise.resolve(null);
+    const next = previous.then(
+      () => this.readNow(path, kind),
+      () => this.readNow(path, kind)
+    );
+    this.pending.set(path, next);
+    return next;
+  }
+  forget(path) {
+    this.files.delete(path);
+    this.pending.delete(path);
+  }
+  async readNow(path, kind) {
+    const text = await (0, import_terminus_node_bridge21.readTextFileIfExists)(path);
+    if (text === null) {
+      this.files.delete(path);
+      return null;
+    }
+    let state = this.files.get(path);
+    if (!state || text.length < state.parsed) {
+      state = { parsed: 0, messages: /* @__PURE__ */ new Map(), latest: null };
+      this.files.set(path, state);
+    }
+    const end = text.lastIndexOf("\n") + 1;
+    if (end > state.parsed) {
+      for (const line of text.slice(state.parsed, end).split("\n"))
+        parseLine(line, state, kind);
+      state.parsed = end;
+    }
+    return state.messages.size === 0 ? null : summarize(state);
+  }
+};
+function parseLine(line, state, kind) {
+  if (!line.includes('"assistant"'))
+    return;
+  let entry;
+  try {
+    entry = JSON.parse(line);
+  } catch (e2) {
+    return;
+  }
+  if (typeof entry !== "object" || entry === null)
+    return;
+  const e = entry;
+  if (e.type !== "assistant" || kind === "lead" && e.isSidechain === true)
+    return;
+  const message = e.message;
+  if (!message || typeof message.id !== "string" || typeof message.model !== "string")
+    return;
+  if (typeof message.usage !== "object" || message.usage === null)
+    return;
+  if (message.model === "<synthetic>")
+    return;
+  const usage = { model: message.model, usage: message.usage };
+  state.messages.set(message.id, usage);
+  state.latest = usage;
+}
+function summarize(state) {
+  var _a8, _b, _c2, _d, _e4, _f, _g, _h, _i3, _j, _k, _l2;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let costUsd = 0;
+  for (const { model, usage } of state.messages.values()) {
+    const input = (_a8 = usage.input_tokens) != null ? _a8 : 0;
+    const output = (_b = usage.output_tokens) != null ? _b : 0;
+    const cacheRead = (_c2 = usage.cache_read_input_tokens) != null ? _c2 : 0;
+    const cacheWrite = (_d = usage.cache_creation_input_tokens) != null ? _d : 0;
+    inputTokens += input;
+    outputTokens += output;
+    cacheReadTokens += cacheRead;
+    cacheWriteTokens += cacheWrite;
+    const info = modelInfo(model);
+    if (!info || costUsd === null) {
+      costUsd = null;
+      continue;
+    }
+    const prompt = input + cacheRead + cacheWrite;
+    const p2 = info.longPromptPrice && prompt > LONG_PROMPT_TOKENS ? info.longPromptPrice : info.price;
+    const write1h = (_f = (_e4 = usage.cache_creation) == null ? void 0 : _e4.ephemeral_1h_input_tokens) != null ? _f : 0;
+    const write5m = usage.cache_creation ? (_g = usage.cache_creation.ephemeral_5m_input_tokens) != null ? _g : 0 : cacheWrite;
+    let cost = input * p2.input + output * p2.output + cacheRead * p2.cacheRead + write5m * p2.cacheWrite5m + write1h * p2.cacheWrite1h;
+    if (usage.inference_geo === "us")
+      cost *= US_ONLY_MULTIPLIER;
+    costUsd += cost / MILLION;
+  }
+  const latest = state.latest;
+  const latestInfo = latest ? modelInfo(latest.model) : null;
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    costUsd,
+    contextTokens: latest ? ((_h = latest.usage.input_tokens) != null ? _h : 0) + ((_i3 = latest.usage.cache_read_input_tokens) != null ? _i3 : 0) + ((_j = latest.usage.cache_creation_input_tokens) != null ? _j : 0) : null,
+    contextWindow: (_k = latestInfo == null ? void 0 : latestInfo.contextWindow) != null ? _k : null,
+    model: (_l2 = latest == null ? void 0 : latest.model) != null ? _l2 : null
+  };
+}
+function subagentTranscriptPath(leadTranscriptPath, agentId) {
+  if (!leadTranscriptPath.endsWith(".jsonl"))
+    return null;
+  const session = (0, import_terminus_node_bridge21.pathBasename)(leadTranscriptPath, ".jsonl");
+  return (0, import_terminus_node_bridge21.pathJoin)((0, import_terminus_node_bridge21.pathDirname)(leadTranscriptPath), session, "subagents", `agent-${agentId}.jsonl`);
+}
 
 // src/state/inboxModel.ts
 var VISIBLE_FINISHED_SUBAGENTS = 10;
@@ -19015,6 +19198,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
       const inbox = buildInbox(this.plugin.agentSessionStore.list(), this.plugin.pendingChangesStore.list());
       const allChanges = this.plugin.pendingChangesStore.list();
       this.renderHeader(container, inbox.needsAttention.length, allChanges);
+      this.renderTotals(container, [...inbox.needsAttention, ...inbox.working, ...inbox.finished]);
       const body = container.createDiv({ cls: "terminus-inbox-body" });
       const cardCount = inbox.needsAttention.length + inbox.working.length + inbox.finished.length;
       if (cardCount === 0) {
@@ -19089,6 +19273,26 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
       menu.showAtMouseEvent(evt);
     });
   }
+  /** Tiles under the header, for every card shown: ≈ cost (unless hidden in
+   *  settings), tokens, and how many sessions are running. */
+  renderTotals(container, cards) {
+    if (cards.length === 0)
+      return;
+    const usages = cards.map((card) => sessionUsage(card.session)).filter((u) => u !== null);
+    const total = usages.reduce((sum, u) => sum ? addUsage(sum, u) : u, null);
+    const tiles = container.createDiv({ cls: "terminus-inbox-totals" });
+    const tile = (label, value, title) => {
+      const el2 = tiles.createDiv({ cls: "terminus-inbox-tile", attr: title ? { title } : {} });
+      el2.createDiv({ cls: "terminus-inbox-tile-label", text: label });
+      el2.createDiv({ cls: "terminus-inbox-tile-value", text: value });
+    };
+    if (this.plugin.settings.multiAgent.showEstimatedCost) {
+      tile("Cost", (total == null ? void 0 : total.costUsd) != null ? `\u2248 ${formatCost(total.costUsd)}` : "\u2014", COST_TITLE);
+    }
+    tile("Tokens", total ? formatTokens(totalTokens(total)) : "\u2014", total ? tokenBreakdown(total) : void 0);
+    const live = cards.filter((card) => !card.ended).length;
+    tile("Sessions", `${live} live`);
+  }
   renderSection(body, label, cards) {
     if (cards.length === 0)
       return;
@@ -19107,7 +19311,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     return heading;
   }
   renderCard(body, card) {
-    var _a8, _b, _c2, _d;
+    var _a8, _b, _c2, _d, _e4;
     const terminal = this.plugin.findTerminalView(card.token);
     const firstChange = card.changes[0];
     const name = (_b = (_a8 = terminal == null ? void 0 : terminal.getDisplayText()) != null ? _a8 : firstChange == null ? void 0 : firstChange.panelLabel) != null ? _b : "Closed terminal";
@@ -19141,6 +19345,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     if ((session == null ? void 0 : session.lastTurnMs) != null && session.status !== "working") {
       meta.createSpan({ text: `turn ${formatDuration(session.lastTurnMs)}` });
     }
+    this.renderUsage(meta, sessionUsage(session), (_d = session == null ? void 0 : session.usage) != null ? _d : null);
     if (card.changes.length > 0) {
       const { added, removed } = sumStats(card.changes);
       meta.createSpan({ text: `${card.changes.length} pending` });
@@ -19151,7 +19356,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
       return;
     if (needsAttention && session) {
       const banner = el2.createDiv({ cls: "terminus-inbox-banner" });
-      banner.createSpan({ text: `\u26A0 ${(_d = session.needsMessage) != null ? _d : needsFallback(session)}` });
+      banner.createSpan({ text: `\u26A0 ${(_e4 = session.needsMessage) != null ? _e4 : needsFallback(session)}` });
       if (terminal) {
         banner.createEl("button", { cls: "terminus-btn-solid", text: "Answer in terminal" }).addEventListener(
           "click",
@@ -19209,6 +19414,25 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
       );
     }
   }
+  /** Tokens, context % and ≈ cost. `usage` is what's counted (a card's lead
+   *  plus its subagents); `contextOf` is the one conversation whose context
+   *  fill is shown. Nothing renders without usage, e.g. when Claude Code
+   *  isn't saving transcripts. */
+  renderUsage(parent, usage, contextOf) {
+    if (!usage)
+      return;
+    parent.createSpan({ text: `${formatTokens(totalTokens(usage))} tokens`, attr: { title: tokenBreakdown(usage) } });
+    if ((contextOf == null ? void 0 : contextOf.contextTokens) != null && contextOf.contextWindow) {
+      const percent = Math.round(contextOf.contextTokens / contextOf.contextWindow * 100);
+      parent.createSpan({
+        text: `ctx ${percent}%`,
+        attr: { title: `${formatTokens(contextOf.contextTokens)} of ${formatTokens(contextOf.contextWindow)} context used` }
+      });
+    }
+    if (this.plugin.settings.multiAgent.showEstimatedCost && usage.costUsd !== null) {
+      parent.createSpan({ text: `\u2248 ${formatCost(usage.costUsd)}`, attr: { title: COST_TITLE } });
+    }
+  }
   /** Two lines under the header: what Claude is doing, or what it said last. */
   quoteFor(card) {
     const session = card.session;
@@ -19217,12 +19441,12 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     if (!card.ended && session.status === "working") {
       if (!session.currentFile)
         return "Working\u2026";
-      return `Editing ${(0, import_terminus_node_bridge21.pathRelative)(this.plugin.getVaultBasePath(), session.currentFile)}\u2026`;
+      return `Editing ${(0, import_terminus_node_bridge22.pathRelative)(this.plugin.getVaultBasePath(), session.currentFile)}\u2026`;
     }
     return session.lastMessage === null ? null : plainPreview(session.lastMessage);
   }
   renderSubagent(el2, sub) {
-    var _a8, _b, _c2, _d, _e4, _f;
+    var _a8, _b, _c2, _d, _e4, _f, _g, _h, _i3, _j;
     const row = el2.createDiv({ cls: "terminus-inbox-subagent" });
     const line = row.createDiv({ cls: "terminus-inbox-subagent-line" });
     const running = (_b = (_a8 = sub.run) == null ? void 0 : _a8.running) != null ? _b : false;
@@ -19236,10 +19460,11 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     const time = subagentTime(sub.run);
     if (time)
       details.createSpan({ text: time });
+    this.renderUsage(details, (_e4 = (_d = sub.run) == null ? void 0 : _d.usage) != null ? _e4 : null, (_g = (_f = sub.run) == null ? void 0 : _f.usage) != null ? _g : null);
     details.createSpan({ text: changeCount(sub.changes.length) });
-    if (((_d = sub.run) == null ? void 0 : _d.outcome) === "failed" && sub.run.error) {
-      row.createDiv({ cls: "terminus-inbox-subagent-error", text: (_e4 = sub.run.error.split("\n")[0]) != null ? _e4 : "", attr: { title: sub.run.error } });
-    } else if (((_f = sub.run) == null ? void 0 : _f.lastMessage) && !running) {
+    if (((_h = sub.run) == null ? void 0 : _h.outcome) === "failed" && sub.run.error) {
+      row.createDiv({ cls: "terminus-inbox-subagent-error", text: (_i3 = sub.run.error.split("\n")[0]) != null ? _i3 : "", attr: { title: sub.run.error } });
+    } else if (((_j = sub.run) == null ? void 0 : _j.lastMessage) && !running) {
       row.setAttr("title", sub.run.lastMessage);
     }
     if (sub.changes.length > 0) {
@@ -19255,6 +19480,37 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
       renderChangeRow(this.rows, list, change, computeDiffStats(change.diff));
   }
 };
+var COST_TITLE = "Estimated from Terminus's built-in API price table, not a bill. On a Claude subscription, usage counts against your plan instead.";
+function sessionUsage(session) {
+  if (!session)
+    return null;
+  let total = session.usage;
+  for (const run of session.subagents) {
+    if (run.usage)
+      total = total ? addUsage(total, run.usage) : run.usage;
+  }
+  return total;
+}
+function tokenBreakdown(usage) {
+  return [
+    `Input: ${formatTokens(usage.inputTokens)}`,
+    `Output: ${formatTokens(usage.outputTokens)}`,
+    `Cache reads: ${formatTokens(usage.cacheReadTokens)}`,
+    `Cache writes: ${formatTokens(usage.cacheWriteTokens)}`
+  ].join("\n");
+}
+function formatTokens(n) {
+  if (n < 1e3)
+    return String(n);
+  if (n < 1e6)
+    return `${(n / 1e3).toFixed(n < 1e4 ? 1 : 0)}k`;
+  return `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)}M`;
+}
+function formatCost(usd) {
+  if (usd < 0.01)
+    return "<$0.01";
+  return `$${usd.toFixed(2)}`;
+}
 function statusPill(card) {
   const session = card.session;
   if (card.ended || !session)
@@ -19342,7 +19598,7 @@ function formatClock(at3) {
 }
 
 // src/state/PendingChangesStore.ts
-var import_terminus_node_bridge22 = __toESM(require_dist());
+var import_terminus_node_bridge23 = __toESM(require_dist());
 var MAX_HISTORY = 20;
 var PendingChangesStore = class extends TypedEmitter {
   constructor() {
@@ -19472,9 +19728,9 @@ var PendingChangesStore = class extends TypedEmitter {
     const newOldText = diff.oldText.slice(0, hunk.oldStart) + chosen + diff.oldText.slice(hunk.oldEnd);
     const newNewText = diff.newText.slice(0, hunk.newStart) + chosen + diff.newText.slice(hunk.newEnd);
     if (!diff.existedBefore && newOldText === "") {
-      await (0, import_terminus_node_bridge22.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge23.deleteFileIfExists)(diff.filePath);
     } else {
-      await (0, import_terminus_node_bridge22.writeTextFile)(diff.filePath, newOldText);
+      await (0, import_terminus_node_bridge23.writeTextFile)(diff.filePath, newOldText);
     }
     entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
     if (newOldText === newNewText) {
@@ -19518,18 +19774,18 @@ var PendingChangesStore = class extends TypedEmitter {
   }
   async applyOldState(diff) {
     if (!diff.existedBefore) {
-      await (0, import_terminus_node_bridge22.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge23.deleteFileIfExists)(diff.filePath);
       return;
     }
-    await (0, import_terminus_node_bridge22.writeTextFile)(diff.filePath, diff.revertText);
+    await (0, import_terminus_node_bridge23.writeTextFile)(diff.filePath, diff.revertText);
   }
   async applyNewState(diff) {
-    await (0, import_terminus_node_bridge22.writeTextFile)(diff.filePath, diff.newText);
+    await (0, import_terminus_node_bridge23.writeTextFile)(diff.filePath, diff.newText);
   }
 };
 
 // src/state/ActionLog.ts
-var import_terminus_node_bridge23 = __toESM(require_dist());
+var import_terminus_node_bridge24 = __toESM(require_dist());
 function isActionLogEntryArray(value) {
   return Array.isArray(value);
 }
@@ -19543,7 +19799,7 @@ var ActionLog = class {
   async load() {
     if (this.loaded)
       return;
-    const raw = await (0, import_terminus_node_bridge23.readTextFileIfExists)(this.logFilePath);
+    const raw = await (0, import_terminus_node_bridge24.readTextFileIfExists)(this.logFilePath);
     if (raw && raw.trim()) {
       const parsed = JSON.parse(raw);
       this.entries = isActionLogEntryArray(parsed) ? parsed : [];
@@ -19569,8 +19825,8 @@ var ActionLog = class {
     return result;
   }
   async persist() {
-    await (0, import_terminus_node_bridge23.makeDirRecursive)((0, import_terminus_node_bridge23.pathDirname)(this.logFilePath));
-    await (0, import_terminus_node_bridge23.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
+    await (0, import_terminus_node_bridge24.makeDirRecursive)((0, import_terminus_node_bridge24.pathDirname)(this.logFilePath));
+    await (0, import_terminus_node_bridge24.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
   }
 };
 
@@ -19641,7 +19897,8 @@ var AgentSessionStore = class extends TypedEmitter {
       startedAt: at3,
       endedAt: null,
       lastMessage: null,
-      transcriptPath: null
+      transcriptPath: null,
+      usage: null
     };
     this.update({ ...s15, subagents: capSubagents([...s15.subagents, run]) });
   }
@@ -19667,7 +19924,8 @@ var AgentSessionStore = class extends TypedEmitter {
       startedAt: at3,
       endedAt: null,
       lastMessage: null,
-      transcriptPath: null
+      transcriptPath: null,
+      usage: null
     };
     const run = {
       ...base,
@@ -19766,6 +20024,21 @@ var AgentSessionStore = class extends TypedEmitter {
       this.update({ ...s15, status: "idle", needs: null, needsMessage: null, currentFile: null, turnStartedAt: null });
     }
   }
+  /** Usage read from the lead's transcript. */
+  usageRead(token, usage) {
+    const s15 = this.sessions.get(token);
+    if (!s15 || sameUsage(s15.usage, usage))
+      return;
+    this.update({ ...s15, usage });
+  }
+  /** Usage read from a subagent's transcript. */
+  subagentUsageRead(token, agentId, usage) {
+    const s15 = this.sessions.get(token);
+    const run = s15 == null ? void 0 : s15.subagents.find((r) => r.agentId === agentId);
+    if (!s15 || !run || sameUsage(run.usage, usage))
+      return;
+    this.update({ ...s15, subagents: s15.subagents.map((r) => r === run ? { ...r, usage } : r) });
+  }
   /** The git branch read for this session's folder; see AgentSession.branch. */
   branchRead(token, branch) {
     const s15 = this.sessions.get(token);
@@ -19852,6 +20125,7 @@ var AgentSessionStore = class extends TypedEmitter {
       cwd: null,
       branch: null,
       endedAt: null,
+      usage: null,
       subagents: []
     };
   }
@@ -19860,6 +20134,9 @@ var AgentSessionStore = class extends TypedEmitter {
     this.emit("change", session);
   }
 };
+function sameUsage(a, b3) {
+  return JSON.stringify(a) === JSON.stringify(b3);
+}
 function capSubagents(runs) {
   let excess = runs.length - MAX_SUBAGENTS;
   if (excess <= 0)
@@ -19941,7 +20218,7 @@ var import_obsidian18 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian17 = require("obsidian");
-var import_terminus_node_bridge24 = __toESM(require_dist());
+var import_terminus_node_bridge25 = __toESM(require_dist());
 
 // src/terminal/fontCatalog.ts
 var CANDIDATE_MONOSPACE_FONTS = [
@@ -20174,12 +20451,14 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
       (toggle) => toggle.setValue(multiAgent.showEstimatedCost).onChange(async (value) => {
         multiAgent.showEstimatedCost = value;
         await this.plugin.saveSettings();
+        this.plugin.refreshAgentInbox();
       })
     );
     new import_obsidian17.Setting(containerEl).setName("Show git branch on cards").setDesc("When a session's folder is a git repository, show its current branch on the session's card.").addToggle(
       (toggle) => toggle.setValue(multiAgent.showGitBranch).onChange(async (value) => {
         multiAgent.showGitBranch = value;
         await this.plugin.saveSettings();
+        this.plugin.refreshAgentInbox();
       })
     );
   }
@@ -20258,7 +20537,7 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
     }
     new import_obsidian17.Setting(containerEl).setName("Advanced").setHeading();
     new import_obsidian17.Setting(containerEl).setName("Shell binary override").setDesc(
-      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge24.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
+      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge25.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
     ).addText(
       (text) => text.setPlaceholder("e.g. /bin/zsh").setValue(this.plugin.settings.shellBinOverride).onChange(async (value) => {
         this.plugin.settings.shellBinOverride = value.trim();
@@ -20590,6 +20869,9 @@ var TerminusPlugin = class extends import_obsidian21.Plugin {
     this.pendingChangesStore = new PendingChangesStore();
     /** Each terminal's Claude session status, for the Agent inbox. */
     this.agentSessionStore = new AgentSessionStore();
+    this.transcriptUsage = new TranscriptUsageReader();
+    /** Subagents whose usage was read after they ended: final, never re-read. */
+    this.finalSubagentUsage = /* @__PURE__ */ new Set();
     this.closedTerminals = new ClosedTerminalBuffer();
     this.settings = DEFAULT_SETTINGS;
     this.python3Bin = null;
@@ -20602,7 +20884,7 @@ var TerminusPlugin = class extends import_obsidian21.Plugin {
     await this.loadSettings();
     this.addSettingTab(new TerminusSettingTab(this.app, this));
     await provisionResources(this.getPluginDir());
-    this.actionLog = new ActionLog((0, import_terminus_node_bridge25.pathJoin)(this.getPluginDir(), "action-log.json"));
+    this.actionLog = new ActionLog((0, import_terminus_node_bridge26.pathJoin)(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.pendingChangesStore.on("resolved", (item) => {
       const stats = computeDiffStats(item.diff);
@@ -20933,9 +21215,9 @@ var TerminusPlugin = class extends import_obsidian21.Plugin {
       return;
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian21.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge25.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian21.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge26.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian21.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge25.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian21.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge26.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -20964,7 +21246,7 @@ var TerminusPlugin = class extends import_obsidian21.Plugin {
     return getHookBridgePath(this.app, this.manifest);
   }
   getPluginDir() {
-    return (0, import_terminus_node_bridge25.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return (0, import_terminus_node_bridge26.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
   /** Pending Changes in Classic, the Agent inbox in Multi-agent. */
   get reviewViewType() {
@@ -20982,6 +21264,40 @@ var TerminusPlugin = class extends import_obsidian21.Plugin {
       await leaf.setViewState({ type, active: true });
     }
     await workspace.revealLeaf(leaf);
+  }
+  /**
+   * Re-reads a session's usage from its transcripts: the lead's, and each
+   * subagent's that's running or hasn't had a read since it ended. Called
+   * from TerminalView on the hooks that mark progress (prompt, Stop,
+   * SubagentStop, StopFailure, SessionStart); nothing polls. Multi-agent
+   * only, since only the inbox shows usage.
+   */
+  async refreshUsage(token) {
+    var _a8, _b, _c2, _d;
+    if (this.experience !== "multi-agent")
+      return;
+    const store = this.agentSessionStore;
+    const leadPath = (_a8 = store.get(token)) == null ? void 0 : _a8.transcriptPath;
+    if (!leadPath)
+      return;
+    try {
+      store.usageRead(token, await this.transcriptUsage.read(leadPath, "lead"));
+      for (const run of (_c2 = (_b = store.get(token)) == null ? void 0 : _b.subagents) != null ? _c2 : []) {
+        const key = `${token}:${run.agentId}`;
+        if (this.finalSubagentUsage.has(key))
+          continue;
+        const path = (_d = run.transcriptPath) != null ? _d : subagentTranscriptPath(leadPath, run.agentId);
+        if (!path)
+          continue;
+        store.subagentUsageRead(token, run.agentId, await this.transcriptUsage.read(path, "subagent"));
+        if (!run.running) {
+          this.finalSubagentUsage.add(key);
+          this.transcriptUsage.forget(path);
+        }
+      }
+    } catch (err) {
+      console.error("Terminus: could not read Claude's transcript usage", err);
+    }
   }
   /** Re-renders open Agent inboxes for changes the stores don't see, such
    *  as a terminal being renamed or recoloured. */

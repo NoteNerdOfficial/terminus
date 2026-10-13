@@ -12,6 +12,7 @@ import { AGENT_INBOX_VIEW_TYPE, AgentInboxView } from "./views/AgentInboxView";
 import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore";
 import { ActionLog } from "./state/ActionLog";
 import { AgentSessionStore } from "./state/AgentSessionStore";
+import { TranscriptUsageReader, subagentTranscriptPath } from "./claude/transcriptUsage";
 import { ClosedTerminalBuffer, ClosedTerminalEntry } from "./state/ClosedTerminalBuffer";
 import { ActionLogModal } from "./modals/ActionLogModal";
 import { ConfirmModal } from "./modals/ConfirmModal";
@@ -42,6 +43,9 @@ export default class TerminusPlugin extends Plugin {
   readonly pendingChangesStore = new PendingChangesStore();
   /** Each terminal's Claude session status, for the Agent inbox. */
   readonly agentSessionStore = new AgentSessionStore();
+  private readonly transcriptUsage = new TranscriptUsageReader();
+  /** Subagents whose usage was read after they ended: final, never re-read. */
+  private finalSubagentUsage = new Set<string>();
   readonly closedTerminals = new ClosedTerminalBuffer();
   // Constructed in onload(), not as a field initializer: the log file path
   // depends on the vault base path, which needs `this.app` to be ready --
@@ -479,6 +483,38 @@ export default class TerminusPlugin extends Plugin {
       await leaf.setViewState({ type, active: true });
     }
     await workspace.revealLeaf(leaf);
+  }
+
+  /**
+   * Re-reads a session's usage from its transcripts: the lead's, and each
+   * subagent's that's running or hasn't had a read since it ended. Called
+   * from TerminalView on the hooks that mark progress (prompt, Stop,
+   * SubagentStop, StopFailure, SessionStart); nothing polls. Multi-agent
+   * only, since only the inbox shows usage.
+   */
+  async refreshUsage(token: string): Promise<void> {
+    if (this.experience !== "multi-agent") return;
+    const store = this.agentSessionStore;
+    const leadPath = store.get(token)?.transcriptPath;
+    if (!leadPath) return;
+    try {
+      store.usageRead(token, await this.transcriptUsage.read(leadPath, "lead"));
+      for (const run of store.get(token)?.subagents ?? []) {
+        const key = `${token}:${run.agentId}`;
+        if (this.finalSubagentUsage.has(key)) continue;
+        const path = run.transcriptPath ?? subagentTranscriptPath(leadPath, run.agentId);
+        if (!path) continue;
+        store.subagentUsageRead(token, run.agentId, await this.transcriptUsage.read(path, "subagent"));
+        if (!run.running) {
+          this.finalSubagentUsage.add(key);
+          this.transcriptUsage.forget(path);
+        }
+      }
+    } catch (err) {
+      // Usage is a nicety: a transcript that can't be read just leaves the
+      // last numbers showing.
+      console.error("Terminus: could not read Claude's transcript usage", err);
+    }
   }
 
   /** Re-renders open Agent inboxes for changes the stores don't see, such

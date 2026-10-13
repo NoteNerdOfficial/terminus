@@ -1,6 +1,7 @@
 import { ItemView, Menu, WorkspaceLeaf } from "obsidian";
 import { pathRelative } from "terminus-node-bridge";
 import type { AgentSession, SubagentRun } from "../state/AgentSessionStore";
+import { addUsage, totalTokens, UsageTotals } from "../claude/transcriptUsage";
 import { PendingChange } from "../state/PendingChangesStore";
 import { buildInbox, InboxCard, InboxSubagent } from "../state/inboxModel";
 import { computeDiffStats } from "../diff/renderDiff";
@@ -62,6 +63,7 @@ export class AgentInboxView extends ItemView {
     const inbox = buildInbox(this.plugin.agentSessionStore.list(), this.plugin.pendingChangesStore.list());
     const allChanges = this.plugin.pendingChangesStore.list();
     this.renderHeader(container, inbox.needsAttention.length, allChanges);
+    this.renderTotals(container, [...inbox.needsAttention, ...inbox.working, ...inbox.finished]);
 
     const body = container.createDiv({ cls: "terminus-inbox-body" });
     const cardCount = inbox.needsAttention.length + inbox.working.length + inbox.finished.length;
@@ -120,6 +122,26 @@ export class AgentInboxView extends ItemView {
     });
   }
 
+  /** Tiles under the header, for every card shown: ≈ cost (unless hidden in
+   *  settings), tokens, and how many sessions are running. */
+  private renderTotals(container: HTMLElement, cards: InboxCard[]): void {
+    if (cards.length === 0) return;
+    const usages = cards.map((card) => sessionUsage(card.session)).filter((u): u is UsageTotals => u !== null);
+    const total = usages.reduce<UsageTotals | null>((sum, u) => (sum ? addUsage(sum, u) : u), null);
+    const tiles = container.createDiv({ cls: "terminus-inbox-totals" });
+    const tile = (label: string, value: string, title?: string) => {
+      const el = tiles.createDiv({ cls: "terminus-inbox-tile", attr: title ? { title } : {} });
+      el.createDiv({ cls: "terminus-inbox-tile-label", text: label });
+      el.createDiv({ cls: "terminus-inbox-tile-value", text: value });
+    };
+    if (this.plugin.settings.multiAgent.showEstimatedCost) {
+      tile("Cost", total?.costUsd != null ? `≈ ${formatCost(total.costUsd)}` : "—", COST_TITLE);
+    }
+    tile("Tokens", total ? formatTokens(totalTokens(total)) : "—", total ? tokenBreakdown(total) : undefined);
+    const live = cards.filter((card) => !card.ended).length;
+    tile("Sessions", `${live} live`);
+  }
+
   private renderSection(body: HTMLElement, label: string, cards: InboxCard[]): void {
     if (cards.length === 0) return;
     this.renderSectionHeading(body, label, cards.length, null);
@@ -172,6 +194,7 @@ export class AgentInboxView extends ItemView {
     if (session?.lastTurnMs != null && session.status !== "working") {
       meta.createSpan({ text: `turn ${formatDuration(session.lastTurnMs)}` });
     }
+    this.renderUsage(meta, sessionUsage(session), session?.usage ?? null);
     if (card.changes.length > 0) {
       const { added, removed } = sumStats(card.changes);
       meta.createSpan({ text: `${card.changes.length} pending` });
@@ -240,6 +263,25 @@ export class AgentInboxView extends ItemView {
     }
   }
 
+  /** Tokens, context % and ≈ cost. `usage` is what's counted (a card's lead
+   *  plus its subagents); `contextOf` is the one conversation whose context
+   *  fill is shown. Nothing renders without usage, e.g. when Claude Code
+   *  isn't saving transcripts. */
+  private renderUsage(parent: HTMLElement, usage: UsageTotals | null, contextOf: UsageTotals | null): void {
+    if (!usage) return;
+    parent.createSpan({ text: `${formatTokens(totalTokens(usage))} tokens`, attr: { title: tokenBreakdown(usage) } });
+    if (contextOf?.contextTokens != null && contextOf.contextWindow) {
+      const percent = Math.round((contextOf.contextTokens / contextOf.contextWindow) * 100);
+      parent.createSpan({
+        text: `ctx ${percent}%`,
+        attr: { title: `${formatTokens(contextOf.contextTokens)} of ${formatTokens(contextOf.contextWindow)} context used` },
+      });
+    }
+    if (this.plugin.settings.multiAgent.showEstimatedCost && usage.costUsd !== null) {
+      parent.createSpan({ text: `≈ ${formatCost(usage.costUsd)}`, attr: { title: COST_TITLE } });
+    }
+  }
+
   /** Two lines under the header: what Claude is doing, or what it said last. */
   private quoteFor(card: InboxCard): string | null {
     const session = card.session;
@@ -264,6 +306,7 @@ export class AgentInboxView extends ItemView {
     const details = row.createDiv({ cls: "terminus-inbox-subagent-details" });
     const time = subagentTime(sub.run);
     if (time) details.createSpan({ text: time });
+    this.renderUsage(details, sub.run?.usage ?? null, sub.run?.usage ?? null);
     details.createSpan({ text: changeCount(sub.changes.length) });
     if (sub.run?.outcome === "failed" && sub.run.error) {
       // First line only; the full error is on hover.
@@ -283,6 +326,39 @@ export class AgentInboxView extends ItemView {
     const list = parent.createDiv({ cls: "terminus-pending-list" });
     for (const change of changes) renderChangeRow(this.rows, list, change, computeDiffStats(change.diff));
   }
+}
+
+const COST_TITLE =
+  "Estimated from Terminus's built-in API price table, not a bill. On a Claude subscription, usage counts against your plan instead.";
+
+/** A session's usage: its lead plus every subagent. Null with no usage. */
+function sessionUsage(session: AgentSession | null): UsageTotals | null {
+  if (!session) return null;
+  let total = session.usage;
+  for (const run of session.subagents) {
+    if (run.usage) total = total ? addUsage(total, run.usage) : run.usage;
+  }
+  return total;
+}
+
+function tokenBreakdown(usage: UsageTotals): string {
+  return [
+    `Input: ${formatTokens(usage.inputTokens)}`,
+    `Output: ${formatTokens(usage.outputTokens)}`,
+    `Cache reads: ${formatTokens(usage.cacheReadTokens)}`,
+    `Cache writes: ${formatTokens(usage.cacheWriteTokens)}`,
+  ].join("\n");
+}
+
+export function formatTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
+}
+
+export function formatCost(usd: number): string {
+  if (usd < 0.01) return "<$0.01";
+  return `$${usd.toFixed(2)}`;
 }
 
 function statusPill(card: InboxCard): { kind: string; label: string } {

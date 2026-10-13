@@ -1,4 +1,5 @@
 import { TypedEmitter } from "../node/emitter";
+import type { UsageTotals } from "../claude/transcriptUsage";
 
 /**
  * - `working`: Claude is mid-turn.
@@ -46,6 +47,10 @@ export interface AgentSession {
    *  a repo, with git missing, or before the first read. */
   branch: string | null;
   endedAt: number | null;
+  /** The lead's own usage from its transcript, as of the last read
+   *  (subagents' are on their runs). Null before one, or when Claude Code
+   *  isn't saving transcripts. */
+  usage: UsageTotals | null;
   /** Subagents this session started, oldest first. Empty unless subagents
    *  are tracked (Multi-agent, "Track subagents" on). */
   subagents: SubagentRun[];
@@ -73,6 +78,8 @@ export interface SubagentRun {
   endedAt: number | null;
   lastMessage: string | null;
   transcriptPath: string | null;
+  /** From its own transcript, as of the last read; null before one. */
+  usage: UsageTotals | null;
 }
 
 /**
@@ -187,6 +194,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       endedAt: null,
       lastMessage: null,
       transcriptPath: null,
+      usage: null,
     };
     this.update({ ...s, subagents: capSubagents([...s.subagents, run]) });
   }
@@ -229,6 +237,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       endedAt: null,
       lastMessage: null,
       transcriptPath: null,
+      usage: null,
     };
     const run: SubagentRun = {
       ...base,
@@ -332,6 +341,21 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
     }
   }
 
+  /** Usage read from the lead's transcript. */
+  usageRead(token: string, usage: UsageTotals | null): void {
+    const s = this.sessions.get(token);
+    if (!s || sameUsage(s.usage, usage)) return;
+    this.update({ ...s, usage });
+  }
+
+  /** Usage read from a subagent's transcript. */
+  subagentUsageRead(token: string, agentId: string, usage: UsageTotals | null): void {
+    const s = this.sessions.get(token);
+    const run = s?.subagents.find((r) => r.agentId === agentId);
+    if (!s || !run || sameUsage(run.usage, usage)) return;
+    this.update({ ...s, subagents: s.subagents.map((r) => (r === run ? { ...r, usage } : r)) });
+  }
+
   /** The git branch read for this session's folder; see AgentSession.branch. */
   branchRead(token: string, branch: string | null): void {
     const s = this.sessions.get(token);
@@ -419,6 +443,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       cwd: null,
       branch: null,
       endedAt: null,
+      usage: null,
       subagents: [],
     };
   }
@@ -427,6 +452,10 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
     this.sessions.set(session.token, session);
     this.emit("change", session);
   }
+}
+
+function sameUsage(a: UsageTotals | null, b: UsageTotals | null): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function capSubagents(runs: SubagentRun[]): SubagentRun[] {

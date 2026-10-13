@@ -1726,3 +1726,34 @@
 .terminus-inbox-quote.is-failed {
   color: var(--color-red, #e5534b);
 }
+
+.terminus-inbox-totals {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.terminus-inbox-tile {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background-color: var(--background-secondary);
+}
+
+.terminus-inbox-tile-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.terminus-inbox-tile-value {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

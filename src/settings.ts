@@ -289,6 +289,7 @@ export class TerminusSettingTab extends PluginSettingTab {
         toggle.setValue(multiAgent.showEstimatedCost).onChange(async (value) => {
           multiAgent.showEstimatedCost = value;
           await this.plugin.saveSettings();
+          this.plugin.refreshAgentInbox();
         })
       );
 
@@ -299,6 +300,7 @@ export class TerminusSettingTab extends PluginSettingTab {
         toggle.setValue(multiAgent.showGitBranch).onChange(async (value) => {
           multiAgent.showGitBranch = value;
           await this.plugin.saveSettings();
+          this.plugin.refreshAgentInbox();
         })
       );
   }
