@@ -1649,8 +1649,32 @@
   background-color: var(--nav-item-background-active, var(--background-modifier-active-hover));
 }
 
+.terminus-sidebar-group-row {
+  padding-left: 2px;
+}
+
 .terminus-sidebar-group-row.is-ungrouped {
   cursor: default;
+}
+
+/* The fold chevron: the same ▸/▾ glyph and size as the change rows'. */
+.terminus-sidebar .terminus-sidebar-chevron {
+  flex: none;
+  width: 18px;
+  height: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  font-size: 18px;
+  line-height: 1;
+  text-align: center;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.terminus-sidebar .terminus-sidebar-chevron:hover {
+  color: var(--text-normal);
 }
 
 .terminus-sidebar-group-row.is-ungrouped:hover {
@@ -1753,7 +1777,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 2px 12px;
-  padding: 0 8px 4px 23px;
+  padding: 0 8px 4px 40px;
   font-size: var(--font-ui-smaller);
   color: var(--text-faint);
 }
@@ -1807,13 +1831,10 @@
   animation: terminus-tab-pending-pulse 1.4s ease-in-out infinite;
 }
 
-/* Terminals sit indented under their group. */
+/* Terminals sit indented under their group, their colour stroke under the
+   group's dot. */
 .terminus-sidebar-terminal {
-  margin-left: 12px;
-}
-
-.terminus-sidebar-group.is-ungrouped .terminus-sidebar-terminal {
-  margin-left: 0;
+  margin-left: 22px;
 }
 
 .terminus-sidebar-terminal.is-focused {
@@ -1900,7 +1921,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--tm-gap);
-  margin: 2px 4px 6px 22px;
+  margin: 2px 4px 6px 26px;
   padding: 8px 10px;
   border-radius: var(--radius-s);
   font-size: var(--font-ui-smaller);
@@ -1932,7 +1953,7 @@
 }
 
 .terminus-sidebar-empty {
-  padding: 2px 8px 6px 23px;
+  padding: 2px 8px 6px 26px;
   font-size: var(--font-ui-smaller);
   color: var(--text-faint);
 }
@@ -2257,6 +2278,105 @@
 
 .terminus-inbox-agent-changes .terminus-pending-list {
   padding: 2px 0 2px 12px;
+}
+
+/* The inbox's change row (Multi-agent only; Classic keeps the original):
+   the name with its counts on the right, the path, then the actions on a
+   line of their own, always shown -- Split diff and Open as small
+   icon-and-label buttons on the left, Reject and Keep as plain icons on the
+   right that take their colour only on hover. A card is a narrow column,
+   so the actions get their own line rather than squeezing the name. */
+.terminus-pending-row.is-inbox .terminus-pending-row-summary {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0 6px;
+  padding: 6px 4px 4px 6px;
+}
+
+.terminus-pending-row.is-inbox .terminus-pending-chevron {
+  line-height: 18px;
+}
+
+.terminus-pending-row.is-inbox .terminus-pending-filename-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.terminus-pending-row.is-inbox .terminus-pending-filename {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-pending-stats {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.terminus-pending-warning {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.terminus-pending-warning .terminus-meta-icon {
+  color: inherit;
+}
+
+.terminus-pending-row.is-inbox .terminus-pending-row-actions {
+  display: flex;
+  flex: 1 0 100%;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  /* Under the name: the chevron's width (20px) plus the gap (6px). */
+  padding-left: 26px;
+}
+
+.terminus-pending-row.is-inbox .terminus-row-resolve.is-reject {
+  margin-left: auto;
+}
+
+.terminus-inbox-view .terminus-row-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  background: transparent;
+}
+
+.terminus-inbox-view .terminus-row-action:hover {
+  color: var(--text-normal);
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-inbox-view .terminus-row-action .terminus-meta-icon {
+  color: inherit;
+}
+
+.terminus-inbox-view .terminus-row-resolve {
+  --icon-size: 15px;
+  padding: 4px;
+  color: var(--text-muted);
+}
+
+.terminus-inbox-view .terminus-row-resolve.is-reject:hover {
+  color: var(--tm-bad);
+  background-color: rgba(var(--color-red-rgb, 233, 49, 71), 0.1);
+}
+
+.terminus-inbox-view .terminus-row-resolve.is-keep:hover {
+  color: var(--tm-ok);
+  background-color: rgba(var(--color-green-rgb, 8, 185, 78), 0.12);
 }
 
 /* One agent on a card -- the lead or a subagent -- always the same shape. */

@@ -32,7 +32,7 @@ export class AgentInboxView extends ItemView {
   }
 
   private get rows(): ChangeRowContext {
-    return { plugin: this.plugin, component: this };
+    return { plugin: this.plugin, component: this, variant: "inbox" };
   }
 
   getViewType(): string {

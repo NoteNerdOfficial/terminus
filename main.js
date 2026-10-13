@@ -19179,28 +19179,36 @@ async function runBulkAction(ctx, accepted, changes, action, scopeLabel) {
 function renderChangeRow(ctx, list, change, stats) {
   const row = list.createDiv({ cls: "terminus-pending-row" });
   const summary = row.createDiv({ cls: "terminus-pending-row-summary" });
+  const inbox = ctx.variant === "inbox";
+  row.toggleClass("is-inbox", inbox);
   const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "\u25B8" });
   const info = summary.createDiv({ cls: "terminus-pending-info" });
   const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
   nameRow.createSpan({ cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge21.pathBasename)(change.diff.filePath) });
-  nameRow.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
-  nameRow.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
   if (change.editCount > 1) {
     nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
   }
+  const statsEl = inbox ? nameRow.createSpan({ cls: "terminus-pending-stats" }) : nameRow;
+  statsEl.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
+  statsEl.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
   const vaultName = (0, import_terminus_node_bridge21.pathBasename)(ctx.plugin.getVaultBasePath());
   const relativePath = (0, import_terminus_node_bridge21.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
   info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
+  const warning = (cls, text) => {
+    if (!inbox) {
+      info.createDiv({ cls, text: `\u26A0 ${text}` });
+      return;
+    }
+    const el2 = info.createDiv({ cls: `${cls} terminus-pending-warning` });
+    (0, import_obsidian16.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), "alert-triangle");
+    el2.createSpan({ text });
+  };
   const collision = collisionLabel(change);
-  if (collision) {
-    info.createDiv({ cls: "terminus-collision-warning", text: `\u26A0 ${collision}` });
-  }
+  if (collision)
+    warning("terminus-collision-warning", collision);
   if (change.brokenBacklinks.length > 0) {
     const count = change.brokenBacklinks.length;
-    info.createDiv({
-      cls: "terminus-backlink-warning",
-      text: `\u26A0 may break ${count} incoming ${count === 1 ? "link" : "links"}`
-    });
+    warning("terminus-backlink-warning", `may break ${count} incoming ${count === 1 ? "link" : "links"}`);
   }
   const stop = (e, fn3) => {
     e.stopPropagation();
@@ -19216,29 +19224,67 @@ function renderChangeRow(ctx, list, change, stats) {
     });
   };
   const actions = summary.createDiv({ cls: "terminus-pending-row-actions" });
-  actions.createEl("button", { text: "Open", cls: "terminus-action-open" }).addEventListener(
-    "click",
-    (e) => stop(e, () => void openChangedFile(ctx.plugin, change))
-  );
-  if (change.payload.tool_name !== "NotebookEdit") {
-    actions.createEl("button", { text: "Split Diff", cls: "terminus-action-open terminus-action-split-diff" }).addEventListener(
+  if (inbox) {
+    renderInboxRowActions(actions, ctx, change, stop, resolve);
+  } else {
+    actions.createEl("button", { text: "Open", cls: "terminus-action-open" }).addEventListener(
       "click",
-      (e) => stop(e, () => void openDiffSplitView(ctx.plugin, change.id))
+      (e) => stop(e, () => void openChangedFile(ctx.plugin, change))
     );
+    if (change.payload.tool_name !== "NotebookEdit") {
+      actions.createEl("button", { text: "Split Diff", cls: "terminus-action-open terminus-action-split-diff" }).addEventListener(
+        "click",
+        (e) => stop(e, () => void openDiffSplitView(ctx.plugin, change.id))
+      );
+    }
+    actions.createEl("button", { text: "\u2715", cls: "terminus-icon-btn terminus-icon-btn-reject", attr: { "aria-label": "Reject" } }).addEventListener("click", (e) => stop(e, () => void resolve(false)));
+    actions.createEl("button", { text: "\u2713", cls: "terminus-icon-btn terminus-icon-btn-accept", attr: { "aria-label": "Accept" } }).addEventListener("click", (e) => stop(e, () => void resolve(true)));
   }
-  actions.createEl("button", { text: "\u2715", cls: "terminus-icon-btn terminus-icon-btn-reject", attr: { "aria-label": "Reject" } }).addEventListener("click", (e) => stop(e, () => void resolve(false)));
-  actions.createEl("button", { text: "\u2713", cls: "terminus-icon-btn terminus-icon-btn-accept", attr: { "aria-label": "Accept" } }).addEventListener("click", (e) => stop(e, () => void resolve(true)));
   const body = row.createDiv({ cls: "terminus-pending-row-body" });
   body.hide();
   renderRowBody(ctx, body, change);
   let expanded = false;
-  summary.addEventListener("click", () => {
+  const toggle = () => {
     expanded = !expanded;
     body.toggle(expanded);
     chevron.setText(expanded ? "\u25BE" : "\u25B8");
     row.toggleClass("is-expanded", expanded);
     summary.toggleClass("is-expanded", expanded);
-  });
+    if (inbox)
+      summary.setAttr("aria-expanded", String(expanded));
+  };
+  summary.addEventListener("click", toggle);
+  if (inbox) {
+    summary.setAttr("role", "button");
+    summary.setAttr("tabindex", "0");
+    summary.setAttr("aria-expanded", "false");
+    summary.addEventListener("keydown", (evt) => {
+      if (evt.target !== summary || evt.key !== "Enter" && evt.key !== " ")
+        return;
+      evt.preventDefault();
+      toggle();
+    });
+  }
+}
+function renderInboxRowActions(actions, ctx, change, stop, resolve) {
+  const labelled = (icon, label, tooltip, run) => {
+    const button = actions.createEl("button", { cls: "terminus-row-action" });
+    (0, import_obsidian16.setIcon)(button.createSpan({ cls: "terminus-meta-icon" }), icon);
+    button.createSpan({ text: label });
+    (0, import_obsidian16.setTooltip)(button, tooltip);
+    button.addEventListener("click", (e) => stop(e, run));
+  };
+  const iconOnly = (icon, cls, label, run) => {
+    const button = actions.createEl("button", { cls: `clickable-icon terminus-row-resolve ${cls}`, attr: { "aria-label": label } });
+    (0, import_obsidian16.setIcon)(button, icon);
+    button.addEventListener("click", (e) => stop(e, run));
+  };
+  if (change.payload.tool_name !== "NotebookEdit") {
+    labelled("columns-2", "Split diff", "Review it side by side, change by change", () => void openDiffSplitView(ctx.plugin, change.id));
+  }
+  labelled("arrow-up-right", "Open", "Open the file with the change shown inline", () => void openChangedFile(ctx.plugin, change));
+  iconOnly("x", "is-reject", "Reject: revert this file", () => void resolve(false));
+  iconOnly("check", "is-keep", "Keep this change", () => void resolve(true));
 }
 function renderRowBody(ctx, body, change) {
   if (change.brokenBacklinks.length > 0) {
@@ -19829,7 +19875,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.render = () => this.guardedRender();
   }
   get rows() {
-    return { plugin: this.plugin, component: this };
+    return { plugin: this.plugin, component: this, variant: "inbox" };
   }
   getViewType() {
     return AGENT_INBOX_VIEW_TYPE;
@@ -20527,6 +20573,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     this.makeDropTarget(row, group.id);
     makeActivatable(row, () => void this.plugin.groups.selectGroup(group.id), (evt) => this.showGroupMenu(evt, group));
     row.setAttr("aria-current", active ? "true" : "false");
+    this.renderFoldChevron(row, group.id, group.collapsed);
     row.createSpan({ cls: "terminus-group-dot" });
     if (this.renamingGroupId === group.id) {
       this.renderRenameInput(row, group);
@@ -20549,6 +20596,8 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     this.renderCloseButton(actions, group.id, members, "Close this group and its terminals", () => this.plugin.groups.closeGroup(group.id), row);
     row.addEventListener("click", () => void this.plugin.groups.selectGroup(group.id));
     row.addEventListener("contextmenu", (evt) => this.showGroupMenu(evt, group));
+    if (group.collapsed)
+      return;
     const note = noteFile(this.plugin, group.note);
     const meta = group.folder || note ? section.createDiv({ cls: "terminus-sidebar-group-meta" }) : null;
     if (meta && group.folder) {
@@ -20571,6 +20620,32 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     }
     for (const view of members)
       this.renderTerminal(section, view);
+  }
+  /** The ▸/▾ that folds a group (null: Ungrouped), the same chevron the
+   *  change rows use. It's its own control, so a click on it folds without
+   *  also selecting the group; from the keyboard, ← folds and → unfolds the
+   *  focused row. */
+  renderFoldChevron(row, groupId, collapsed) {
+    const fold = (next) => this.plugin.groupStore.setCollapsed(groupId, next);
+    const chevron = row.createEl("button", {
+      cls: "terminus-sidebar-chevron",
+      text: collapsed ? "\u25B8" : "\u25BE",
+      // A group row is itself focusable (← and → fold it), so its chevron
+      // stays out of the tab order; Ungrouped's row isn't, so its is in it.
+      attr: { "aria-label": collapsed ? "Expand" : "Collapse", "aria-expanded": String(!collapsed), tabindex: groupId === null ? "0" : "-1" }
+    });
+    chevron.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      fold(!collapsed);
+    });
+    row.addEventListener("keydown", (evt) => {
+      if (evt.target !== row)
+        return;
+      if (evt.key === "ArrowLeft" && !collapsed)
+        fold(true);
+      else if (evt.key === "ArrowRight" && collapsed)
+        fold(false);
+    });
   }
   /** "Turn finished. Move the note to review?" -- a suggestion only; the
    *  note changes only if the user says so. */
@@ -20627,9 +20702,13 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
   renderUngrouped(list, members) {
     const section = list.createDiv({ cls: "terminus-sidebar-group is-ungrouped" });
     const row = section.createDiv({ cls: "terminus-sidebar-group-row is-ungrouped" });
+    const collapsed = this.plugin.groupStore.ungroupedCollapsed;
+    this.renderFoldChevron(row, null, collapsed);
     row.createSpan({ cls: "terminus-sidebar-group-name", text: "Ungrouped" });
     row.createSpan({ cls: "terminus-sidebar-group-state", text: "Shown in every group" });
     this.makeDropTarget(row, null);
+    if (collapsed)
+      return;
     if (members.length === 0) {
       section.createDiv({ cls: "terminus-sidebar-empty", text: "Drag a terminal here to show it in every group." });
       return;
@@ -20799,6 +20878,7 @@ var DEFAULT_GROUPS_DATA = {
   activeGroupId: null,
   lastLeafByGroup: {},
   tabGroups: {},
+  ungroupedCollapsed: false,
   nextNumber: 1
 };
 function resolveGroupsData(saved) {
@@ -20812,11 +20892,13 @@ function resolveGroupsData(saved) {
       // anything else was typed.
       nameSource: isNameSource(g2.nameSource) ? g2.nameSource : /^Group \d+$/.test(g2.name) ? "placeholder" : "user",
       folder: typeof g2.folder === "string" ? g2.folder : null,
-      note: typeof g2.note === "string" ? g2.note : null
+      note: typeof g2.note === "string" ? g2.note : null,
+      collapsed: g2.collapsed === true
     })),
     activeGroupId: typeof s15.activeGroupId === "string" && ids.has(s15.activeGroupId) ? s15.activeGroupId : null,
     lastLeafByGroup: isStringRecord(s15.lastLeafByGroup) ? s15.lastLeafByGroup : {},
     tabGroups: isStringRecord(s15.tabGroups) ? s15.tabGroups : {},
+    ungroupedCollapsed: s15.ungroupedCollapsed === true,
     nextNumber: typeof s15.nextNumber === "number" && s15.nextNumber >= 1 ? s15.nextNumber : groups.length + 1
   };
 }
@@ -20853,7 +20935,8 @@ var GroupStore = class extends TypedEmitter {
       nameSource: "placeholder",
       color: (_a8 = this.palette[(n - 1) % this.palette.length]) != null ? _a8 : "",
       folder: null,
-      note: null
+      note: null,
+      collapsed: false
     };
     this.data.groups.push(group);
     this.data.nextNumber = n + 1;
@@ -20895,6 +20978,23 @@ var GroupStore = class extends TypedEmitter {
       return;
     group.folder = folder;
     this.changed();
+  }
+  /** Folds or unfolds a group (null: the Ungrouped section) in the sidebar. */
+  setCollapsed(id, collapsed) {
+    if (id === null) {
+      if (this.data.ungroupedCollapsed === collapsed)
+        return;
+      this.data.ungroupedCollapsed = collapsed;
+    } else {
+      const group = this.get(id);
+      if (!group || group.collapsed === collapsed)
+        return;
+      group.collapsed = collapsed;
+    }
+    this.changed();
+  }
+  get ungroupedCollapsed() {
+    return this.data.ungroupedCollapsed;
   }
   setNote(id, path) {
     const group = this.get(id);

@@ -213,6 +213,7 @@ export class TerminusSidebarView extends ItemView {
     this.makeDropTarget(row, group.id);
     makeActivatable(row, () => void this.plugin.groups.selectGroup(group.id), (evt) => this.showGroupMenu(evt, group));
     row.setAttr("aria-current", active ? "true" : "false");
+    this.renderFoldChevron(row, group.id, group.collapsed);
 
     // A group's colour is a dot; a terminal's is a stroke, like its tab.
     row.createSpan({ cls: "terminus-group-dot" });
@@ -239,6 +240,9 @@ export class TerminusSidebarView extends ItemView {
     row.addEventListener("click", () => void this.plugin.groups.selectGroup(group.id));
     row.addEventListener("contextmenu", (evt) => this.showGroupMenu(evt, group));
 
+    // Folded: just the row (and a pending close question).
+    if (group.collapsed) return;
+
     // Only what's particular to this group: its own folder (the vault root
     // is every group's default) and its linked note.
     const note = noteFile(this.plugin, group.note);
@@ -262,6 +266,30 @@ export class TerminusSidebarView extends ItemView {
     }
 
     for (const view of members) this.renderTerminal(section, view);
+  }
+
+  /** The ▸/▾ that folds a group (null: Ungrouped), the same chevron the
+   *  change rows use. It's its own control, so a click on it folds without
+   *  also selecting the group; from the keyboard, ← folds and → unfolds the
+   *  focused row. */
+  private renderFoldChevron(row: HTMLElement, groupId: string | null, collapsed: boolean): void {
+    const fold = (next: boolean) => this.plugin.groupStore.setCollapsed(groupId, next);
+    const chevron = row.createEl("button", {
+      cls: "terminus-sidebar-chevron",
+      text: collapsed ? "▸" : "▾",
+      // A group row is itself focusable (← and → fold it), so its chevron
+      // stays out of the tab order; Ungrouped's row isn't, so its is in it.
+      attr: { "aria-label": collapsed ? "Expand" : "Collapse", "aria-expanded": String(!collapsed), tabindex: groupId === null ? "0" : "-1" },
+    });
+    chevron.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      fold(!collapsed);
+    });
+    row.addEventListener("keydown", (evt) => {
+      if (evt.target !== row) return;
+      if (evt.key === "ArrowLeft" && !collapsed) fold(true);
+      else if (evt.key === "ArrowRight" && collapsed) fold(false);
+    });
   }
 
   /** "Turn finished. Move the note to review?" -- a suggestion only; the
@@ -318,9 +346,12 @@ export class TerminusSidebarView extends ItemView {
   private renderUngrouped(list: HTMLElement, members: TerminalView[]): void {
     const section = list.createDiv({ cls: "terminus-sidebar-group is-ungrouped" });
     const row = section.createDiv({ cls: "terminus-sidebar-group-row is-ungrouped" });
+    const collapsed = this.plugin.groupStore.ungroupedCollapsed;
+    this.renderFoldChevron(row, null, collapsed);
     row.createSpan({ cls: "terminus-sidebar-group-name", text: "Ungrouped" });
     row.createSpan({ cls: "terminus-sidebar-group-state", text: "Shown in every group" });
     this.makeDropTarget(row, null);
+    if (collapsed) return;
     if (members.length === 0) {
       section.createDiv({ cls: "terminus-sidebar-empty", text: "Drag a terminal here to show it in every group." });
       return;

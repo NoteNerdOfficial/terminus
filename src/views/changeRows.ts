@@ -1,4 +1,4 @@
-import { Component, MarkdownRenderer, Notice } from "obsidian";
+import { Component, MarkdownRenderer, Notice, setIcon, setTooltip } from "obsidian";
 import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { PendingChange, ResolvedChange } from "../state/PendingChangesStore";
 import { renderDiffBody } from "../diff/renderDiff";
@@ -21,6 +21,10 @@ export interface ChangeRowContext {
   plugin: TerminusPlugin;
   /** Owns the Markdown preview's render lifecycle: the hosting view. */
   component: Component;
+  /** "inbox" draws the Agent inbox's redesigned row (Multi-agent): counts
+   *  on the right, Lucide icons, quiet Reject/Keep icons. Classic's
+   *  Pending Changes keeps the original row until that design is settled. */
+  variant?: "classic" | "inbox";
 }
 
 /** Shared by both the global and per-terminal Reject/Keep all buttons.
@@ -64,16 +68,21 @@ export function renderChangeRow(ctx: ChangeRowContext, list: HTMLElement, change
   const row = list.createDiv({ cls: "terminus-pending-row" });
   const summary = row.createDiv({ cls: "terminus-pending-row-summary" });
 
+  const inbox = ctx.variant === "inbox";
+  row.toggleClass("is-inbox", inbox);
   const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "▸" });
 
   const info = summary.createDiv({ cls: "terminus-pending-info" });
   const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
   nameRow.createSpan({ cls: "terminus-pending-filename", text: pathBasename(change.diff.filePath) });
-  nameRow.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
-  nameRow.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
   if (change.editCount > 1) {
     nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
   }
+  // Classic puts the counts beside the name; the inbox row sets them apart
+  // on the right of the name line.
+  const statsEl = inbox ? nameRow.createSpan({ cls: "terminus-pending-stats" }) : nameRow;
+  statsEl.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
+  statsEl.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
   // Cut down from the system root, not the vault root: keeps the vault
   // folder name as a recognizable anchor ("Test1/notes/File 8.md")
   // instead of either the full "/Users/.../Test1/..." prefix or a bare
@@ -81,16 +90,20 @@ export function renderChangeRow(ctx: ChangeRowContext, list: HTMLElement, change
   const vaultName = pathBasename(ctx.plugin.getVaultBasePath());
   const relativePath = pathRelative(ctx.plugin.getVaultBasePath(), change.diff.filePath);
   info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
+  const warning = (cls: string, text: string) => {
+    if (!inbox) {
+      info.createDiv({ cls, text: `⚠ ${text}` });
+      return;
+    }
+    const el = info.createDiv({ cls: `${cls} terminus-pending-warning` });
+    setIcon(el.createSpan({ cls: "terminus-meta-icon" }), "alert-triangle");
+    el.createSpan({ text });
+  };
   const collision = collisionLabel(change);
-  if (collision) {
-    info.createDiv({ cls: "terminus-collision-warning", text: `⚠ ${collision}` });
-  }
+  if (collision) warning("terminus-collision-warning", collision);
   if (change.brokenBacklinks.length > 0) {
     const count = change.brokenBacklinks.length;
-    info.createDiv({
-      cls: "terminus-backlink-warning",
-      text: `⚠ may break ${count} incoming ${count === 1 ? "link" : "links"}`,
-    });
+    warning("terminus-backlink-warning", `may break ${count} incoming ${count === 1 ? "link" : "links"}`);
   }
 
   const stop = (e: MouseEvent, fn: () => void) => {
@@ -110,37 +123,86 @@ export function renderChangeRow(ctx: ChangeRowContext, list: HTMLElement, change
   // expanded -- no swap to bigger full-text buttons on expand, so the
   // row doesn't visually jump as you review it.
   const actions = summary.createDiv({ cls: "terminus-pending-row-actions" });
-  actions.createEl("button", { text: "Open", cls: "terminus-action-open" }).addEventListener("click", (e) =>
-    stop(e, () => void openChangedFile(ctx.plugin, change))
-  );
-  // NotebookEdit's oldText/newText are a display-only approximation (not
-  // the real file content, see server/diff.ts) -- per-hunk accept/reject
-  // would splice that approximation and write it to disk, corrupting the
-  // notebook, so the Split Diff entry point is hidden for those changes.
-  if (change.payload.tool_name !== "NotebookEdit") {
-    actions.createEl("button", { text: "Split Diff", cls: "terminus-action-open terminus-action-split-diff" }).addEventListener("click", (e) =>
-      stop(e, () => void openDiffSplitView(ctx.plugin, change.id))
+  if (inbox) {
+    renderInboxRowActions(actions, ctx, change, stop, resolve);
+  } else {
+    actions.createEl("button", { text: "Open", cls: "terminus-action-open" }).addEventListener("click", (e) =>
+      stop(e, () => void openChangedFile(ctx.plugin, change))
     );
+    // NotebookEdit's oldText/newText are a display-only approximation (not
+    // the real file content, see server/diff.ts) -- per-hunk accept/reject
+    // would splice that approximation and write it to disk, corrupting the
+    // notebook, so the Split Diff entry point is hidden for those changes.
+    if (change.payload.tool_name !== "NotebookEdit") {
+      actions.createEl("button", { text: "Split Diff", cls: "terminus-action-open terminus-action-split-diff" }).addEventListener("click", (e) =>
+        stop(e, () => void openDiffSplitView(ctx.plugin, change.id))
+      );
+    }
+    actions
+      .createEl("button", { text: "✕", cls: "terminus-icon-btn terminus-icon-btn-reject", attr: { "aria-label": "Reject" } })
+      .addEventListener("click", (e) => stop(e, () => void resolve(false)));
+    actions
+      .createEl("button", { text: "✓", cls: "terminus-icon-btn terminus-icon-btn-accept", attr: { "aria-label": "Accept" } })
+      .addEventListener("click", (e) => stop(e, () => void resolve(true)));
   }
-  actions
-    .createEl("button", { text: "✕", cls: "terminus-icon-btn terminus-icon-btn-reject", attr: { "aria-label": "Reject" } })
-    .addEventListener("click", (e) => stop(e, () => void resolve(false)));
-  actions
-    .createEl("button", { text: "✓", cls: "terminus-icon-btn terminus-icon-btn-accept", attr: { "aria-label": "Accept" } })
-    .addEventListener("click", (e) => stop(e, () => void resolve(true)));
 
   const body = row.createDiv({ cls: "terminus-pending-row-body" });
   body.hide();
   renderRowBody(ctx, body, change);
 
   let expanded = false;
-  summary.addEventListener("click", () => {
+  const toggle = () => {
     expanded = !expanded;
     body.toggle(expanded);
     chevron.setText(expanded ? "▾" : "▸");
     row.toggleClass("is-expanded", expanded);
     summary.toggleClass("is-expanded", expanded);
-  });
+    if (inbox) summary.setAttr("aria-expanded", String(expanded));
+  };
+  summary.addEventListener("click", toggle);
+  if (inbox) {
+    summary.setAttr("role", "button");
+    summary.setAttr("tabindex", "0");
+    summary.setAttr("aria-expanded", "false");
+    summary.addEventListener("keydown", (evt) => {
+      if (evt.target !== summary || (evt.key !== "Enter" && evt.key !== " ")) return;
+      evt.preventDefault();
+      toggle();
+    });
+  }
+}
+
+/**
+ * The inbox row's actions, always shown: Split diff and Open as small
+ * icon-and-label buttons, then Reject and Keep as plain icons that take
+ * their colour (red, green) only on hover, each named in a tooltip.
+ */
+function renderInboxRowActions(
+  actions: HTMLElement,
+  ctx: ChangeRowContext,
+  change: PendingChange,
+  stop: (e: MouseEvent, fn: () => void) => void,
+  resolve: (accepted: boolean) => Promise<void>
+): void {
+  const labelled = (icon: string, label: string, tooltip: string, run: () => void) => {
+    const button = actions.createEl("button", { cls: "terminus-row-action" });
+    setIcon(button.createSpan({ cls: "terminus-meta-icon" }), icon);
+    button.createSpan({ text: label });
+    setTooltip(button, tooltip);
+    button.addEventListener("click", (e) => stop(e, run));
+  };
+  const iconOnly = (icon: string, cls: string, label: string, run: () => void) => {
+    const button = actions.createEl("button", { cls: `clickable-icon terminus-row-resolve ${cls}`, attr: { "aria-label": label } });
+    setIcon(button, icon);
+    button.addEventListener("click", (e) => stop(e, run));
+  };
+  // See the Classic branch above for why NotebookEdit has no Split Diff.
+  if (change.payload.tool_name !== "NotebookEdit") {
+    labelled("columns-2", "Split diff", "Review it side by side, change by change", () => void openDiffSplitView(ctx.plugin, change.id));
+  }
+  labelled("arrow-up-right", "Open", "Open the file with the change shown inline", () => void openChangedFile(ctx.plugin, change));
+  iconOnly("x", "is-reject", "Reject: revert this file", () => void resolve(false));
+  iconOnly("check", "is-keep", "Keep this change", () => void resolve(true));
 }
 
 /** Three views over the same change, switched lazily (only rendered on
