@@ -8,8 +8,14 @@ import { TypedEmitter } from "../node/emitter";
  */
 export type AgentStatus = "working" | "needs-attention" | "finished-unread" | "idle";
 
-/** Why a session needs attention, when the Notification payload says. */
-export type NeedsKind = "permission" | "input";
+/**
+ * Why a session needs attention, when the Notification payload says:
+ * - `permission`: a permission prompt is open.
+ * - `input`: Claude is waiting on input mid-turn.
+ * - `unread-turn`: the turn ended, nobody has looked, and Claude has since
+ *   reported it's idle. Looking at the terminal clears it.
+ */
+export type NeedsKind = "permission" | "input" | "unread-turn";
 
 export interface AgentSession {
   /** The terminal's hook/review token: one entry per terminal. */
@@ -211,12 +217,35 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
   /** Notification: Claude needs permission or is waiting on input. */
   needsAttention(token: string, notificationType: string | undefined, message: string | undefined, identity: SessionIdentity): void {
     const s = this.ensure(token, identity);
+    let needs = needsKindOf(notificationType);
     // Claude Code sends idle_prompt about a minute after every finished turn
-    // (seen in a live 2.1.296 session). After a Stop that's no news: the
-    // card already says Finished, and moving every finished session into
-    // Needs attention would empty the Finished section.
-    if (notificationType === "idle_prompt" && s.status !== "working") return;
-    this.update({ ...s, status: "needs-attention", needs: needsKindOf(notificationType), needsMessage: message?.trim() || null });
+    // (seen in a live 2.1.296 session). A turn nobody has looked at yet is
+    // escalated; one already looked at stays in Finished, or every finished
+    // session would end up in Needs attention.
+    if (notificationType === "idle_prompt" && s.status !== "working") {
+      if (s.status !== "finished-unread") return;
+      needs = "unread-turn";
+    }
+    this.update({ ...s, status: "needs-attention", needs, needsMessage: message?.trim() || null });
+  }
+
+  /**
+   * The user answered an open prompt in the terminal (see TerminalView's
+   * answer keys). No hook reports a denied or cancelled permission prompt,
+   * and an approval only after the tool has finished, so the keystroke is
+   * the earliest signal. `proceed` (Enter or an option number) assumes the
+   * common case, an approval, and the next hook corrects it; `cancel` (Esc
+   * or Ctrl+C) means the turn was interrupted.
+   */
+  promptAnswered(token: string, answer: "proceed" | "cancel"): void {
+    const s = this.sessions.get(token);
+    // An unread turn is cleared by seen() instead: typing there is a new prompt.
+    if (!s || s.status !== "needs-attention" || s.needs === "unread-turn") return;
+    if (answer === "proceed") {
+      this.update({ ...s, status: "working", needs: null, needsMessage: null, turnStartedAt: s.turnStartedAt ?? Date.now() });
+    } else {
+      this.update({ ...s, status: "idle", needs: null, needsMessage: null, currentFile: null, turnStartedAt: null });
+    }
   }
 
   /** The git branch read for this session's folder; see AgentSession.branch. */
@@ -226,12 +255,15 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
     this.update({ ...s, branch });
   }
 
-  /** The user looked at the terminal: a finished turn counts as read. A
-   *  session that needs attention still does until Claude moves on. */
+  /** The user looked at the terminal: a finished turn counts as read,
+   *  including one escalated by idle_prompt. A prompt that needs an answer
+   *  still does until it's answered or Claude moves on. */
   seen(token: string): void {
     const s = this.sessions.get(token);
-    if (!s || s.status !== "finished-unread") return;
-    this.update({ ...s, status: "idle" });
+    if (!s) return;
+    const unreadTurn = s.status === "finished-unread" || (s.status === "needs-attention" && s.needs === "unread-turn");
+    if (!unreadTurn) return;
+    this.update({ ...s, status: "idle", needs: null, needsMessage: null });
   }
 
   /** SessionEnd, the shell exiting, or the terminal closing -- SessionEnd

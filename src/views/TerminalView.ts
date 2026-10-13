@@ -340,7 +340,10 @@ export class TerminalView extends ItemView {
       onInsert: (text) => this.pty?.write(text),
       onPassthrough: (text) => this.pty?.write(text),
     });
-    this.term.onData((data) => this.wikiLinkAutocomplete?.handleData(data));
+    this.term.onData((data) => {
+      this.noteAnswerKey(data);
+      this.wikiLinkAutocomplete?.handleData(data);
+    });
     this.term.onResize(({ cols, rows }) => this.pty?.resize(cols, rows));
 
     // xterm.js's default key handling sends the same \r for Shift+Enter as
@@ -489,7 +492,21 @@ export class TerminalView extends ItemView {
     this.clearActivity();
     this.clearPendingAttention();
     this.plugin.agentSessionStore.turnEnded(this.token, payload?.last_assistant_message, sessionIdentity(payload));
+    // Watching the terminal as the turn ends counts as reading it, or a
+    // minute later idle_prompt would flag a turn already being looked at.
+    if (this.app.workspace.getActiveViewOfType(TerminalView) === this && document.hasFocus()) {
+      this.plugin.agentSessionStore.seen(this.token);
+    }
     void this.readGitBranch();
+  }
+
+  /** A key that answers an open prompt takes the session out of Needs
+   *  attention (see AgentSessionStore.promptAnswered). Exact matches only:
+   *  focusing or clicking the terminal can send escape sequences of its own
+   *  (focus reports are ESC [ I), and those must not count as an answer. */
+  private noteAnswerKey(data: string): void {
+    const answer = data === "\x1b" || data === "\x03" ? "cancel" : data === "\r" || /^[1-9]$/.test(data) ? "proceed" : null;
+    if (answer) this.plugin.agentSessionStore.promptAnswered(this.token, answer);
   }
 
   /** Reads the session folder's git branch for its inbox card -- at

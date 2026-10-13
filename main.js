@@ -16683,7 +16683,8 @@ var TerminalView = class extends import_obsidian7.ItemView {
     });
     this.term.onData((data) => {
       var _a9;
-      return (_a9 = this.wikiLinkAutocomplete) == null ? void 0 : _a9.handleData(data);
+      this.noteAnswerKey(data);
+      (_a9 = this.wikiLinkAutocomplete) == null ? void 0 : _a9.handleData(data);
     });
     this.term.onResize(({ cols, rows }) => {
       var _a9;
@@ -16801,7 +16802,19 @@ var TerminalView = class extends import_obsidian7.ItemView {
     this.clearActivity();
     this.clearPendingAttention();
     this.plugin.agentSessionStore.turnEnded(this.token, payload == null ? void 0 : payload.last_assistant_message, sessionIdentity(payload));
+    if (this.app.workspace.getActiveViewOfType(TerminalView) === this && document.hasFocus()) {
+      this.plugin.agentSessionStore.seen(this.token);
+    }
     void this.readGitBranch();
+  }
+  /** A key that answers an open prompt takes the session out of Needs
+   *  attention (see AgentSessionStore.promptAnswered). Exact matches only:
+   *  focusing or clicking the terminal can send escape sequences of its own
+   *  (focus reports are ESC [ I), and those must not count as an answer. */
+  noteAnswerKey(data) {
+    const answer = data === "\x1B" || data === "" ? "cancel" : data === "\r" || /^[1-9]$/.test(data) ? "proceed" : null;
+    if (answer)
+      this.plugin.agentSessionStore.promptAnswered(this.token, answer);
   }
   /** Reads the session folder's git branch for its inbox card -- at
    *  SessionStart and on Stop only, since a turn is what switches branches. */
@@ -19115,7 +19128,8 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
           () => void this.plugin.focusTerminal(card.token)
         );
       }
-    } else {
+    }
+    if (!needsAttention || (session == null ? void 0 : session.needs) === "unread-turn") {
       const quote = this.quoteFor(card);
       if (quote)
         el2.createDiv({ cls: "terminus-inbox-quote", text: quote, attr: { title: quote } });
@@ -19212,7 +19226,7 @@ function statusPill(card) {
     return { kind: "ended", label: "Session ended" };
   switch (session.status) {
     case "needs-attention":
-      return { kind: "needs-attention", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" ? "Waiting for you" : "Needs attention" };
+      return { kind: "needs-attention", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" || session.needs === "unread-turn" ? "Waiting for you" : "Needs attention" };
     case "working":
       return { kind: "working", label: "Working" };
     case "finished-unread":
@@ -19232,7 +19246,7 @@ function plainPreview(markdown) {
 function needsFallback(session) {
   if (session.needs === "permission")
     return "Claude needs your permission.";
-  if (session.needs === "input")
+  if (session.needs === "input" || session.needs === "unread-turn")
     return "Claude is waiting for your input.";
   return "Claude needs your attention.";
 }
@@ -19617,9 +19631,32 @@ var AgentSessionStore = class extends TypedEmitter {
   /** Notification: Claude needs permission or is waiting on input. */
   needsAttention(token, notificationType, message, identity) {
     const s15 = this.ensure(token, identity);
-    if (notificationType === "idle_prompt" && s15.status !== "working")
+    let needs = needsKindOf(notificationType);
+    if (notificationType === "idle_prompt" && s15.status !== "working") {
+      if (s15.status !== "finished-unread")
+        return;
+      needs = "unread-turn";
+    }
+    this.update({ ...s15, status: "needs-attention", needs, needsMessage: (message == null ? void 0 : message.trim()) || null });
+  }
+  /**
+   * The user answered an open prompt in the terminal (see TerminalView's
+   * answer keys). No hook reports a denied or cancelled permission prompt,
+   * and an approval only after the tool has finished, so the keystroke is
+   * the earliest signal. `proceed` (Enter or an option number) assumes the
+   * common case, an approval, and the next hook corrects it; `cancel` (Esc
+   * or Ctrl+C) means the turn was interrupted.
+   */
+  promptAnswered(token, answer) {
+    var _a8;
+    const s15 = this.sessions.get(token);
+    if (!s15 || s15.status !== "needs-attention" || s15.needs === "unread-turn")
       return;
-    this.update({ ...s15, status: "needs-attention", needs: needsKindOf(notificationType), needsMessage: (message == null ? void 0 : message.trim()) || null });
+    if (answer === "proceed") {
+      this.update({ ...s15, status: "working", needs: null, needsMessage: null, turnStartedAt: (_a8 = s15.turnStartedAt) != null ? _a8 : Date.now() });
+    } else {
+      this.update({ ...s15, status: "idle", needs: null, needsMessage: null, currentFile: null, turnStartedAt: null });
+    }
   }
   /** The git branch read for this session's folder; see AgentSession.branch. */
   branchRead(token, branch) {
@@ -19628,13 +19665,17 @@ var AgentSessionStore = class extends TypedEmitter {
       return;
     this.update({ ...s15, branch });
   }
-  /** The user looked at the terminal: a finished turn counts as read. A
-   *  session that needs attention still does until Claude moves on. */
+  /** The user looked at the terminal: a finished turn counts as read,
+   *  including one escalated by idle_prompt. A prompt that needs an answer
+   *  still does until it's answered or Claude moves on. */
   seen(token) {
     const s15 = this.sessions.get(token);
-    if (!s15 || s15.status !== "finished-unread")
+    if (!s15)
       return;
-    this.update({ ...s15, status: "idle" });
+    const unreadTurn = s15.status === "finished-unread" || s15.status === "needs-attention" && s15.needs === "unread-turn";
+    if (!unreadTurn)
+      return;
+    this.update({ ...s15, status: "idle", needs: null, needsMessage: null });
   }
   /** SessionEnd, the shell exiting, or the terminal closing -- SessionEnd
    *  alone can't be relied on, since a killed shell never sends it. */

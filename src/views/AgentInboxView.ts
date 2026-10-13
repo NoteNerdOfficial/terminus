@@ -188,7 +188,10 @@ export class AgentInboxView extends ItemView {
           void this.plugin.focusTerminal(card.token)
         );
       }
-    } else {
+    }
+    // An unread turn's banner says Claude is waiting; its closing message is
+    // what you'd want to read first, so it shows too.
+    if (!needsAttention || session?.needs === "unread-turn") {
       const quote = this.quoteFor(card);
       if (quote) el.createDiv({ cls: "terminus-inbox-quote", text: quote, attr: { title: quote } });
     }
@@ -280,7 +283,7 @@ function statusPill(card: InboxCard): { kind: string; label: string } {
   if (card.ended || !session) return { kind: "ended", label: "Session ended" };
   switch (session.status) {
     case "needs-attention":
-      return { kind: "needs-attention", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" ? "Waiting for you" : "Needs attention" };
+      return { kind: "needs-attention", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" || session.needs === "unread-turn" ? "Waiting for you" : "Needs attention" };
     case "working":
       return { kind: "working", label: "Working" };
     case "finished-unread":
@@ -308,7 +311,7 @@ function plainPreview(markdown: string): string {
 
 function needsFallback(session: AgentSession): string {
   if (session.needs === "permission") return "Claude needs your permission.";
-  if (session.needs === "input") return "Claude is waiting for your input.";
+  if (session.needs === "input" || session.needs === "unread-turn") return "Claude is waiting for your input.";
   return "Claude needs your attention.";
 }
 
