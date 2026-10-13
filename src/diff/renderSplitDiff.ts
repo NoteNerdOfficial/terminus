@@ -18,6 +18,7 @@ export interface HunkCommentContext {
   feedback: FeedbackStore;
   /** The session that gets the comments: the terminal that made the change. */
   token: string;
+  terminalLabel: string;
   drafts: Map<string, string>;
   open: Set<string>;
 }
@@ -240,6 +241,7 @@ function renderCommentBox(
   const queue = (rejected: boolean) =>
     comments.feedback.add({
       token: comments.token,
+      terminalLabel: comments.terminalLabel,
       filePath: change.diff.filePath,
       oldLines: lines.oldLines,
       newLines: lines.newLines,

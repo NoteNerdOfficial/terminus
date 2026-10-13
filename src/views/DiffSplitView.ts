@@ -96,10 +96,16 @@ export class DiffSplitView extends ItemView {
     const owner = change.contributors[0]?.token;
     let comments: HunkCommentContext | undefined;
     if (this.plugin.experience === "multi-agent" && owner) {
-      comments = { feedback: this.plugin.feedbackStore, token: owner, drafts: this.commentDrafts, open: this.openComments };
+      const recipient = this.plugin.findTerminalView(owner)?.getDisplayText() ?? change.panelLabel;
+      comments = {
+        feedback: this.plugin.feedbackStore,
+        token: owner,
+        terminalLabel: recipient,
+        drafts: this.commentDrafts,
+        open: this.openComments,
+      };
       const queued = this.plugin.feedbackStore.listForFile(change.diff.filePath).length;
       if (queued > 0) {
-        const recipient = this.plugin.findTerminalView(owner)?.getDisplayText() ?? change.panelLabel;
         header.createSpan({
           cls: "terminus-split-diff-queued",
           text: `💬 ${queued} ${queued === 1 ? "comment" : "comments"} queued for ${recipient}`,

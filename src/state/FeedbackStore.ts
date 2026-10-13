@@ -5,6 +5,9 @@ export interface FeedbackItem {
   id: number;
   /** The terminal whose session gets it: the one that made the change. */
   token: string;
+  /** That terminal's name when the comment was made, for a card whose
+   *  terminal has since closed. */
+  terminalLabel: string;
   filePath: string;
   /** 1-based, inclusive; null for a side the hunk has no lines on (a pure
    *  deletion has no new lines, a pure addition no old ones). */
@@ -52,6 +55,11 @@ export class FeedbackStore extends TypedEmitter<FeedbackStoreEvents> {
   /** A session's queued items, oldest first. */
   listFor(token: string): FeedbackItem[] {
     return this.items.filter((item) => item.token === token);
+  }
+
+  /** Every session with something queued. */
+  tokens(): Set<string> {
+    return new Set(this.items.map((item) => item.token));
   }
 
   /** Items on one file, for Split Diff's "N comments queued" note. */

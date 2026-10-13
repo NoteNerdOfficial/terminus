@@ -62,7 +62,11 @@ export class AgentInboxView extends ItemView {
     // terminus-pending-view brings the Pending Changes row styles with it.
     container.addClass("terminus-pending-view", "terminus-inbox-view");
 
-    const inbox = buildInbox(this.plugin.agentSessionStore.list(), this.plugin.pendingChangesStore.list());
+    const inbox = buildInbox(
+      this.plugin.agentSessionStore.list(),
+      this.plugin.pendingChangesStore.list(),
+      this.plugin.feedbackStore.tokens()
+    );
     const allChanges = this.plugin.pendingChangesStore.list();
     this.renderHeader(container, inbox.needsAttention.length, allChanges);
     this.renderTotals(container, [...inbox.needsAttention, ...inbox.working, ...inbox.finished]);
@@ -164,7 +168,11 @@ export class AgentInboxView extends ItemView {
   private renderCard(body: HTMLElement, card: InboxCard): void {
     const terminal = this.plugin.findTerminalView(card.token);
     const firstChange = card.changes[0];
-    const name = terminal?.getDisplayText() ?? firstChange?.panelLabel ?? "Closed terminal";
+    const name =
+      terminal?.getDisplayText() ??
+      firstChange?.panelLabel ??
+      this.plugin.feedbackStore.listFor(card.token)[0]?.terminalLabel ??
+      "Closed terminal";
     const color = terminal ? terminal.colorTag : (firstChange?.panelColor ?? null);
     const session = card.session;
     const needsAttention = !card.ended && session?.status === "needs-attention";
@@ -288,6 +296,9 @@ export class AgentInboxView extends ItemView {
     } else {
       row.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
     }
+    row
+      .createEl("button", { cls: "terminus-btn-ghost", text: "Discard", attr: { "aria-label": "Discard all queued feedback for this session" } })
+      .addEventListener("click", () => this.plugin.feedbackStore.clear(token));
 
     const list = section.createDiv({ cls: "terminus-inbox-feedback-list" });
     const base = this.plugin.getVaultBasePath();

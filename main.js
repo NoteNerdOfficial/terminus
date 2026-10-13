@@ -18499,6 +18499,7 @@ function renderCommentBox(bar, key, hunk, change, comments, lines, resolve) {
   };
   const queue = (rejected) => comments.feedback.add({
     token: comments.token,
+    terminalLabel: comments.terminalLabel,
     filePath: change.diff.filePath,
     oldLines: lines.oldLines,
     newLines: lines.newLines,
@@ -18606,10 +18607,16 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
       const owner = (_c2 = change.contributors[0]) == null ? void 0 : _c2.token;
       let comments;
       if (this.plugin.experience === "multi-agent" && owner) {
-        comments = { feedback: this.plugin.feedbackStore, token: owner, drafts: this.commentDrafts, open: this.openComments };
+        const recipient = (_e4 = (_d = this.plugin.findTerminalView(owner)) == null ? void 0 : _d.getDisplayText()) != null ? _e4 : change.panelLabel;
+        comments = {
+          feedback: this.plugin.feedbackStore,
+          token: owner,
+          terminalLabel: recipient,
+          drafts: this.commentDrafts,
+          open: this.openComments
+        };
         const queued = this.plugin.feedbackStore.listForFile(change.diff.filePath).length;
         if (queued > 0) {
-          const recipient = (_e4 = (_d = this.plugin.findTerminalView(owner)) == null ? void 0 : _d.getDisplayText()) != null ? _e4 : change.panelLabel;
           header.createSpan({
             cls: "terminus-split-diff-queued",
             text: `\u{1F4AC} ${queued} ${queued === 1 ? "comment" : "comments"} queued for ${recipient}`,
@@ -19234,7 +19241,7 @@ function subagentTranscriptPath(leadTranscriptPath, agentId) {
 
 // src/state/inboxModel.ts
 var VISIBLE_FINISHED_SUBAGENTS = 10;
-function buildInbox(sessions, changes) {
+function buildInbox(sessions, changes, feedbackTokens = /* @__PURE__ */ new Set()) {
   var _a8, _b, _c2, _d, _e4;
   const changesByToken = /* @__PURE__ */ new Map();
   for (const change of changes) {
@@ -19249,13 +19256,17 @@ function buildInbox(sessions, changes) {
   const cards = [];
   for (const session of sessions) {
     const cardChanges = (_c2 = changesByToken.get(session.token)) != null ? _c2 : [];
-    if (!session.running && cardChanges.length === 0)
+    if (!session.running && cardChanges.length === 0 && !feedbackTokens.has(session.token))
       continue;
     cards.push(buildCard(session.token, session, cardChanges));
   }
   for (const [token, cardChanges] of changesByToken) {
     if (!sessionTokens.has(token))
       cards.push(buildCard(token, null, cardChanges));
+  }
+  for (const token of feedbackTokens) {
+    if (!sessionTokens.has(token) && !changesByToken.has(token))
+      cards.push(buildCard(token, null, []));
   }
   const inbox = { needsAttention: [], working: [], finished: [] };
   for (const card of cards) {
@@ -19332,7 +19343,11 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
       const container = this.contentEl;
       container.empty();
       container.addClass("terminus-pending-view", "terminus-inbox-view");
-      const inbox = buildInbox(this.plugin.agentSessionStore.list(), this.plugin.pendingChangesStore.list());
+      const inbox = buildInbox(
+        this.plugin.agentSessionStore.list(),
+        this.plugin.pendingChangesStore.list(),
+        this.plugin.feedbackStore.tokens()
+      );
       const allChanges = this.plugin.pendingChangesStore.list();
       this.renderHeader(container, inbox.needsAttention.length, allChanges);
       this.renderTotals(container, [...inbox.needsAttention, ...inbox.working, ...inbox.finished]);
@@ -19450,11 +19465,11 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     return heading;
   }
   renderCard(body, card) {
-    var _a8, _b, _c2, _d, _e4;
+    var _a8, _b, _c2, _d, _e4, _f, _g;
     const terminal = this.plugin.findTerminalView(card.token);
     const firstChange = card.changes[0];
-    const name = (_b = (_a8 = terminal == null ? void 0 : terminal.getDisplayText()) != null ? _a8 : firstChange == null ? void 0 : firstChange.panelLabel) != null ? _b : "Closed terminal";
-    const color = terminal ? terminal.colorTag : (_c2 = firstChange == null ? void 0 : firstChange.panelColor) != null ? _c2 : null;
+    const name = (_d = (_c2 = (_a8 = terminal == null ? void 0 : terminal.getDisplayText()) != null ? _a8 : firstChange == null ? void 0 : firstChange.panelLabel) != null ? _c2 : (_b = this.plugin.feedbackStore.listFor(card.token)[0]) == null ? void 0 : _b.terminalLabel) != null ? _d : "Closed terminal";
+    const color = terminal ? terminal.colorTag : (_e4 = firstChange == null ? void 0 : firstChange.panelColor) != null ? _e4 : null;
     const session = card.session;
     const needsAttention = !card.ended && (session == null ? void 0 : session.status) === "needs-attention";
     const collapsed = this.collapsedCards.has(card.token);
@@ -19484,7 +19499,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     if ((session == null ? void 0 : session.lastTurnMs) != null && session.status !== "working") {
       meta.createSpan({ text: `turn ${formatDuration(session.lastTurnMs)}` });
     }
-    this.renderUsage(meta, sessionUsage(session), (_d = session == null ? void 0 : session.usage) != null ? _d : null);
+    this.renderUsage(meta, sessionUsage(session), (_f = session == null ? void 0 : session.usage) != null ? _f : null);
     if (card.changes.length > 0) {
       const { added, removed } = sumStats(card.changes);
       meta.createSpan({ text: `${card.changes.length} pending` });
@@ -19495,7 +19510,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
       return;
     if (needsAttention && session) {
       const banner = el2.createDiv({ cls: "terminus-inbox-banner" });
-      banner.createSpan({ text: `\u26A0 ${(_e4 = session.needsMessage) != null ? _e4 : needsFallback(session)}` });
+      banner.createSpan({ text: `\u26A0 ${(_g = session.needsMessage) != null ? _g : needsFallback(session)}` });
       if (terminal) {
         banner.createEl("button", { cls: "terminus-btn-solid", text: "Answer in terminal" }).addEventListener(
           "click",
@@ -19575,6 +19590,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     } else {
       row.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
     }
+    row.createEl("button", { cls: "terminus-btn-ghost", text: "Discard", attr: { "aria-label": "Discard all queued feedback for this session" } }).addEventListener("click", () => this.plugin.feedbackStore.clear(token));
     const list = section.createDiv({ cls: "terminus-inbox-feedback-list" });
     const base = this.plugin.getVaultBasePath();
     for (const item of items) {
@@ -20352,6 +20368,10 @@ var FeedbackStore = class extends TypedEmitter {
   listFor(token) {
     return this.items.filter((item) => item.token === token);
   }
+  /** Every session with something queued. */
+  tokens() {
+    return new Set(this.items.map((item) => item.token));
+  }
   /** Items on one file, for Split Diff's "N comments queued" note. */
   listForFile(filePath) {
     return this.items.filter((item) => item.filePath === filePath);
@@ -20370,7 +20390,7 @@ function composeFeedbackPrompt(items, relativePath) {
   const lines = [items.length === 1 ? "Feedback on one of your edits:" : "Feedback on your edits:", ""];
   items.forEach((item, i8) => {
     var _a8;
-    lines.push(`${i8 + 1}. ${relativePath(item.filePath)}, ${describeLocation(item)}${item.rejected ? " (rejected: I reverted this part to the original)" : ""}`);
+    lines.push(`${i8 + 1}. ${relativePath(item.filePath)}, ${describeLocation(item)}${item.rejected ? ". I rejected this change and reverted it" : ""}`);
     for (const line of excerptLines(item.excerpt))
       lines.push(`   > ${line}`);
     const comment = item.comment.trim().split("\n");
@@ -20387,9 +20407,9 @@ function describeLocation(item) {
   const range = item.rejected ? (_a8 = item.oldLines) != null ? _a8 : item.newLines : (_b = item.newLines) != null ? _b : item.oldLines;
   if (!range)
     return "an edit";
-  const side = item.rejected || !item.newLines ? "original" : "your version";
+  const side = item.rejected || !item.newLines ? "the original" : "your version";
   const span = range.start === range.end ? `line ${range.start}` : `lines ${range.start}\u2013${range.end}`;
-  return `${span} (${side})`;
+  return `${span} of ${side}`;
 }
 function excerptLines(excerpt) {
   const all = excerpt.replace(/\r/g, "").replace(/\n$/, "").split("\n");

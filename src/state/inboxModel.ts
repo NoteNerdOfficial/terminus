@@ -45,9 +45,10 @@ export const VISIBLE_FINISHED_SUBAGENTS = 10;
  * goes on the card of the terminal that first edited it (the same terminal
  * its row has always been labelled with), under the lead or the subagent
  * that made that first edit. A session is listed while Claude runs in it,
- * or after it ended while it still has pending changes.
+ * or after it ended while it still has pending changes or queued feedback
+ * (`feedbackTokens`), so that feedback can still be seen and discarded.
  */
-export function buildInbox(sessions: AgentSession[], changes: PendingChange[]): Inbox {
+export function buildInbox(sessions: AgentSession[], changes: PendingChange[], feedbackTokens: ReadonlySet<string> = new Set()): Inbox {
   const changesByToken = new Map<string, PendingChange[]>();
   for (const change of changes) {
     const owner = change.contributors[0]?.token;
@@ -61,11 +62,14 @@ export function buildInbox(sessions: AgentSession[], changes: PendingChange[]): 
   const cards: InboxCard[] = [];
   for (const session of sessions) {
     const cardChanges = changesByToken.get(session.token) ?? [];
-    if (!session.running && cardChanges.length === 0) continue;
+    if (!session.running && cardChanges.length === 0 && !feedbackTokens.has(session.token)) continue;
     cards.push(buildCard(session.token, session, cardChanges));
   }
   for (const [token, cardChanges] of changesByToken) {
     if (!sessionTokens.has(token)) cards.push(buildCard(token, null, cardChanges));
+  }
+  for (const token of feedbackTokens) {
+    if (!sessionTokens.has(token) && !changesByToken.has(token)) cards.push(buildCard(token, null, []));
   }
 
   const inbox: Inbox = { needsAttention: [], working: [], finished: [] };
