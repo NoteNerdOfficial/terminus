@@ -173,7 +173,7 @@ export class AgentInboxView extends ItemView {
       firstChange?.panelLabel ??
       this.plugin.feedbackStore.listFor(card.token)[0]?.terminalLabel ??
       "Closed terminal";
-    const color = terminal ? terminal.colorTag : (firstChange?.panelColor ?? null);
+    const color = terminal ? terminal.effectiveColor : (firstChange?.panelColor ?? null);
     const session = card.session;
     const needsAttention = !card.ended && session?.status === "needs-attention";
     const collapsed = this.collapsedCards.has(card.token);

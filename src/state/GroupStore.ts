@@ -1,0 +1,188 @@
+import { TypedEmitter } from "../node/emitter";
+
+/** A set of terminals for one piece of work (Multi-agent experience). Which
+ *  terminals are in it lives on each terminal (TerminalView's `groupId`, in
+ *  its view state), so it travels with the tab across restarts; this holds
+ *  the group itself. */
+export interface TerminalGroup {
+  id: string;
+  name: string;
+  /** A colour tag value (see colorPalette.ts); terminals without their own
+   *  colour show it. */
+  color: string;
+  /** Where its new terminals start; null for the vault folder. */
+  folder: string | null;
+}
+
+/** What's saved in the plugin's data. */
+export interface GroupsData {
+  groups: TerminalGroup[];
+  activeGroupId: string | null;
+  /** Group id → leaf id of the terminal last used in it, to refocus when
+   *  the group is selected. Leaf ids survive restarts; tokens don't. */
+  lastLeafByGroup: Record<string, string>;
+  /** Leaf id → group id for non-terminal tabs that belong to a group. */
+  tabGroups: Record<string, string>;
+  /** For "Group N" names; never reused, so a new group can't repeat the name
+   *  of one just closed. */
+  nextNumber: number;
+}
+
+export const DEFAULT_GROUPS_DATA: GroupsData = {
+  groups: [],
+  activeGroupId: null,
+  lastLeafByGroup: {},
+  tabGroups: {},
+  nextNumber: 1,
+};
+
+/** Fills in whatever an older or hand-edited data.json is missing. */
+export function resolveGroupsData(saved: unknown): GroupsData {
+  const s = (typeof saved === "object" && saved !== null ? saved : {}) as Partial<GroupsData>;
+  const groups = Array.isArray(s.groups)
+    ? s.groups.filter((g): g is TerminalGroup => typeof g?.id === "string" && typeof g.name === "string" && typeof g.color === "string")
+    : [];
+  const ids = new Set(groups.map((g) => g.id));
+  return {
+    groups: groups.map((g) => ({ ...g, folder: typeof g.folder === "string" ? g.folder : null })),
+    activeGroupId: typeof s.activeGroupId === "string" && ids.has(s.activeGroupId) ? s.activeGroupId : null,
+    lastLeafByGroup: isStringRecord(s.lastLeafByGroup) ? s.lastLeafByGroup : {},
+    tabGroups: isStringRecord(s.tabGroups) ? s.tabGroups : {},
+    nextNumber: typeof s.nextNumber === "number" && s.nextNumber >= 1 ? s.nextNumber : groups.length + 1,
+  };
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return typeof value === "object" && value !== null && Object.values(value).every((v) => typeof v === "string");
+}
+
+type GroupStoreEvents = {
+  change: [];
+};
+
+/**
+ * Groups, the selected one, and which non-terminal tabs belong to which.
+ * Changed only by the user's actions (create, rename, move, close, select);
+ * nothing here polls. Every change is saved through `save` and announced.
+ */
+export class GroupStore extends TypedEmitter<GroupStoreEvents> {
+  constructor(
+    private data: GroupsData,
+    private readonly save: () => Promise<void>,
+    private readonly palette: readonly string[]
+  ) {
+    super();
+  }
+
+  list(): TerminalGroup[] {
+    return [...this.data.groups];
+  }
+
+  get(id: string | null | undefined): TerminalGroup | undefined {
+    return id ? this.data.groups.find((g) => g.id === id) : undefined;
+  }
+
+  get activeGroupId(): string | null {
+    return this.data.activeGroupId;
+  }
+
+  /** A new group named "Group N", in the next palette colour. */
+  create(): TerminalGroup {
+    const n = this.data.nextNumber;
+    const group: TerminalGroup = {
+      id: `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      name: `Group ${n}`,
+      color: this.palette[(n - 1) % this.palette.length] ?? "",
+      folder: null,
+    };
+    this.data.groups.push(group);
+    this.data.nextNumber = n + 1;
+    this.changed();
+    return group;
+  }
+
+  rename(id: string, name: string): void {
+    const group = this.get(id);
+    const trimmed = name.trim();
+    if (!group || !trimmed || trimmed === group.name) return;
+    group.name = trimmed;
+    this.changed();
+  }
+
+  setColor(id: string, color: string): void {
+    const group = this.get(id);
+    if (!group || group.color === color) return;
+    group.color = color;
+    this.changed();
+  }
+
+  setFolder(id: string, folder: string | null): void {
+    const group = this.get(id);
+    if (!group || group.folder === folder) return;
+    group.folder = folder;
+    this.changed();
+  }
+
+  /** Removes a group. Its tabs become global; its terminals' own `groupId`
+   *  is the caller's to clear or close. */
+  remove(id: string): void {
+    if (!this.get(id)) return;
+    this.data.groups = this.data.groups.filter((g) => g.id !== id);
+    if (this.data.activeGroupId === id) this.data.activeGroupId = null;
+    delete this.data.lastLeafByGroup[id];
+    for (const [leafId, groupId] of Object.entries(this.data.tabGroups)) {
+      if (groupId === id) delete this.data.tabGroups[leafId];
+    }
+    this.changed();
+  }
+
+  /** Null selects no group: only ungrouped terminals and global tabs show. */
+  setActive(id: string | null): void {
+    const next = id && this.get(id) ? id : null;
+    if (next === this.data.activeGroupId) return;
+    this.data.activeGroupId = next;
+    this.changed();
+  }
+
+  lastLeaf(groupId: string): string | undefined {
+    return this.data.lastLeafByGroup[groupId];
+  }
+
+  /** Remembered quietly: focusing a terminal is too frequent to save and
+   *  re-render for, and losing it only means refocusing the first terminal. */
+  setLastLeaf(groupId: string, leafId: string): void {
+    this.data.lastLeafByGroup[groupId] = leafId;
+  }
+
+  tabGroup(leafId: string): string | undefined {
+    const groupId = this.data.tabGroups[leafId];
+    return groupId && this.get(groupId) ? groupId : undefined;
+  }
+
+  /** Puts a non-terminal tab in a group, or (null) back in every group. */
+  setTabGroup(leafId: string, groupId: string | null): void {
+    const current = this.data.tabGroups[leafId] ?? null;
+    if (current === groupId) return;
+    if (groupId && this.get(groupId)) this.data.tabGroups[leafId] = groupId;
+    else delete this.data.tabGroups[leafId];
+    this.changed();
+  }
+
+  /** Forgets tabs that no longer exist (closed while Terminus wasn't
+   *  looking, e.g. with Obsidian quit). */
+  pruneTabs(liveLeafIds: ReadonlySet<string>): void {
+    let changed = false;
+    for (const leafId of Object.keys(this.data.tabGroups)) {
+      if (!liveLeafIds.has(leafId)) {
+        delete this.data.tabGroups[leafId];
+        changed = true;
+      }
+    }
+    if (changed) this.changed();
+  }
+
+  private changed(): void {
+    void this.save();
+    this.emit("change");
+  }
+}

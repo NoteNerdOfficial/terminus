@@ -4,6 +4,8 @@ export interface ClosedTerminalEntry {
   cwd: string | null;
   customName: string | null;
   color: string | null;
+  /** Restored on rescue only if that group still exists. */
+  groupId: string | null;
   closedAt: number;
 }
 

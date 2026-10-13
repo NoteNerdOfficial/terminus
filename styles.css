@@ -1839,6 +1839,274 @@
   cursor: default;
 }
 
+/* Terminus sidebar (Multi-agent): terminals under their groups. */
+.terminus-sidebar {
+  padding: 0;
+  font-size: var(--font-ui-small);
+}
+
+.terminus-sidebar-header {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.terminus-sidebar-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.terminus-sidebar-title {
+  font-weight: 700;
+  font-size: var(--font-ui-medium);
+}
+
+.terminus-sidebar-version {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminus-sidebar-version:hover {
+  color: var(--text-muted);
+  text-decoration: underline;
+}
+
+.terminus-sidebar-version.is-outdated {
+  color: var(--text-accent);
+  font-weight: 600;
+}
+
+.terminus-sidebar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.terminus-sidebar-selected {
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+.terminus-sidebar-group {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.terminus-sidebar-group-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 12px;
+  cursor: pointer;
+  border-radius: var(--radius-s);
+}
+
+.terminus-sidebar-group-row:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-sidebar-group-row.is-active {
+  background-color: var(--background-modifier-active-hover);
+}
+
+.terminus-sidebar-group-row.is-ungrouped {
+  cursor: default;
+}
+
+.terminus-sidebar-group-row.is-drop-target {
+  outline: 2px dashed var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+.terminus-sidebar-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background-color: var(--terminus-group-color);
+}
+
+.terminus-sidebar-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-sidebar-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-ui-small);
+}
+
+.terminus-sidebar-group-state {
+  flex: none;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+.terminus-sidebar-group-row.is-active .terminus-sidebar-group-state {
+  color: var(--text-accent);
+}
+
+.terminus-sidebar-group-meta {
+  padding: 0 12px 2px 28px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-sidebar-attention {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--color-orange, #e8871e);
+  animation: terminus-tab-pending-pulse 1.2s ease-in-out infinite;
+}
+
+.terminus-sidebar-terminal {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 28px;
+  cursor: pointer;
+  border-radius: var(--radius-s);
+}
+
+.terminus-sidebar-terminal:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-sidebar-terminal.is-focused .terminus-sidebar-terminal-name {
+  font-weight: 600;
+}
+
+.terminus-sidebar-terminal.is-selected {
+  background-color: var(--background-modifier-active-hover);
+  box-shadow: inset 2px 0 0 var(--interactive-accent);
+}
+
+.terminus-sidebar-terminal-color {
+  flex: none;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background-color: var(--terminus-terminal-color, var(--background-modifier-border));
+}
+
+.terminus-sidebar-terminal-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-sidebar-pending {
+  flex: none;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 10px;
+  text-align: center;
+  background-color: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+.terminus-sidebar-status {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.terminus-sidebar-status.is-working {
+  background-color: var(--interactive-accent);
+}
+
+.terminus-sidebar-status.is-needs-attention {
+  background-color: var(--color-orange, #e8871e);
+  animation: terminus-tab-pending-pulse 1.2s ease-in-out infinite;
+}
+
+.terminus-sidebar-status.is-finished-unread {
+  background-color: var(--color-blue, #3e83f8);
+}
+
+.terminus-sidebar-status.is-idle {
+  border: 1.5px solid var(--text-faint);
+}
+
+.terminus-sidebar-shell-tag {
+  flex: none;
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-faint);
+}
+
+.terminus-sidebar-icon-btn {
+  flex: none;
+  padding: 0 4px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+  font-size: 13px;
+  height: auto;
+}
+
+.terminus-sidebar-icon-btn:hover {
+  color: var(--text-normal);
+}
+
+.terminus-sidebar-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 8px 4px 28px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: var(--font-ui-smaller);
+  background-color: rgba(var(--color-orange-rgb, 232, 135, 30), 0.12);
+}
+
+.terminus-sidebar-empty {
+  padding: 2px 12px 6px 28px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminus-sidebar-attention,
+  .terminus-sidebar-status.is-needs-attention {
+    animation: none;
+  }
+}
+
+.terminus-sidebar-plus {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.terminus-sidebar-plus svg {
+  width: 14px;
+  height: 14px;
+}
+
 /**
  * Copyright (c) 2014 The xterm.js authors. All rights reserved.
  * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)

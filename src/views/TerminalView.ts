@@ -179,6 +179,9 @@ export class TerminalView extends ItemView {
   // string (see terminal/colorPalette.ts), not an indirect id.
   private customName: string | null = null;
   private color: string | null = null;
+  /** The group this terminal belongs to (Multi-agent); null when ungrouped.
+   *  Saved in view state, so it survives restarts with the tab. */
+  private groupIdValue: string | null = null;
   // Live "Claude is editing X" chip, floating over the terminal's
   // bottom-right corner (see mountActivityIndicator). Raised by
   // onChangeApplied (once per file this terminal's PreToolUse hook reports)
@@ -630,7 +633,7 @@ export class TerminalView extends ItemView {
    *  when several are running. Falls back to the vault accent. */
   private refreshActivityColor(): void {
     this.activityEl?.setCssProps({
-      "--terminus-activity-color": this.color ?? "var(--interactive-accent)",
+      "--terminus-activity-color": this.effectiveColor ?? "var(--interactive-accent)",
     });
   }
 
@@ -647,9 +650,9 @@ export class TerminalView extends ItemView {
   }
 
   private refreshIdentity(): void {
-    refreshTabHeader(this.leaf, this.color);
+    refreshTabHeader(this.leaf, this.effectiveColor);
     refreshPaneTitle(this, this.getDisplayText());
-    this.plugin.refreshAgentInbox();
+    this.plugin.refreshTerminusViews();
   }
 
   /**
@@ -672,8 +675,34 @@ export class TerminalView extends ItemView {
     return this.token;
   }
 
-  get colorTag(): string | null {
-    return this.color;
+  /** Its own colour tag, else its group's (Multi-agent). */
+  get effectiveColor(): string | null {
+    if (this.color) return this.color;
+    if (this.plugin.experience !== "multi-agent") return null;
+    return this.plugin.groupStore.get(this.groupIdValue)?.color ?? null;
+  }
+
+  get groupId(): string | null {
+    return this.groupIdValue;
+  }
+
+  /** Moves this terminal into a group, or (null) out of any. Callers tidy
+   *  up a group left empty (see main.ts moveTerminals). */
+  setGroup(groupId: string | null): void {
+    if (groupId === this.groupIdValue) return;
+    this.groupIdValue = groupId;
+    // Obsidian saves the layout on its own schedule; ask for it now so the
+    // new group survives a quit soon after.
+    this.app.workspace.requestSaveLayout();
+    this.refreshIdentity();
+    this.refreshActivityColor();
+  }
+
+  /** Re-applies colour after a group's colour changes or the experience
+   *  switches. */
+  refreshGroupColor(): void {
+    this.refreshIdentity();
+    this.refreshActivityColor();
   }
 
   /** Inserts a dropped file's absolute path into the terminal's input line
@@ -747,6 +776,7 @@ export class TerminalView extends ItemView {
     this.plugin.reviewServer.unregister(this.token);
     // Closing the terminal ends its session even if SessionEnd never comes.
     this.plugin.agentSessionStore.sessionEnded(this.token);
+    this.plugin.onTerminalClosed();
     this.pty?.kill();
     this.commandTracker?.dispose();
 
@@ -762,6 +792,7 @@ export class TerminalView extends ItemView {
       cwd: this.cwdTracker?.getCwd() ?? this.restoredCwd,
       customName: this.customName,
       color: this.color,
+      groupId: this.groupIdValue,
       closedAt: Date.now(),
     });
 
@@ -781,6 +812,7 @@ export class TerminalView extends ItemView {
       cwd: this.cwdTracker?.getCwd() ?? this.restoredCwd ?? undefined,
       customName: this.customName ?? undefined,
       color: this.color ?? undefined,
+      groupId: this.groupIdValue ?? undefined,
     };
   }
 
@@ -832,7 +864,7 @@ export class TerminalView extends ItemView {
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
-    const typedState = state as { scrollback?: unknown; cwd?: unknown; customName?: unknown; color?: unknown } | null;
+    const typedState = state as { scrollback?: unknown; cwd?: unknown; customName?: unknown; color?: unknown; groupId?: unknown } | null;
     const scrollback = typedState?.scrollback;
     if (typeof scrollback === "string" && scrollback.length > 0) {
       if (this.term) {
@@ -856,6 +888,10 @@ export class TerminalView extends ItemView {
     }
     if (typeof typedState?.color === "string" && typedState.color.length > 0) {
       this.color = typedState.color;
+    }
+    // A group that no longer exists leaves the terminal ungrouped.
+    if (typeof typedState?.groupId === "string" && this.plugin.groupStore.get(typedState.groupId)) {
+      this.groupIdValue = typedState.groupId;
     }
     this.refreshIdentity();
     await super.setState(state, result);
@@ -1064,7 +1100,7 @@ export class TerminalView extends ItemView {
       diff,
       token: this.token,
       panelLabel: this.getDisplayText(),
-      panelColor: this.color,
+      panelColor: this.effectiveColor,
       // PreToolUse is a Classic hook, so agent_id arrives either way; it's
       // only kept while subagents are tracked.
       agent: this.plugin.tracksSubagents && payload.agent_id ? { id: payload.agent_id, type: payload.agent_type ?? "" } : null,

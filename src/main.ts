@@ -9,6 +9,12 @@ import { TERMINUS_VIEW_TYPE, TerminalView } from "./views/TerminalView";
 import { PENDING_CHANGES_VIEW_TYPE, PendingChangesView } from "./views/PendingChangesView";
 import { DIFF_SPLIT_VIEW_TYPE, DiffSplitView } from "./views/DiffSplitView";
 import { AGENT_INBOX_VIEW_TYPE, AgentInboxView } from "./views/AgentInboxView";
+import { TERMINUS_SIDEBAR_VIEW_TYPE, TerminusSidebarView } from "./views/TerminusSidebarView";
+import { GroupStore } from "./state/GroupStore";
+import { GroupController } from "./groups/GroupController";
+import { GroupSuggestModal } from "./groups/GroupSuggestModal";
+import { TERMINAL_COLOR_PALETTE } from "./terminal/colorPalette";
+import { fetchLatestPluginVersion, PluginVersionStatus, versionStatus } from "./pluginVersion";
 import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore";
 import { ActionLog } from "./state/ActionLog";
 import { AgentSessionStore } from "./state/AgentSessionStore";
@@ -47,6 +53,14 @@ export default class TerminusPlugin extends Plugin {
   readonly agentSessionStore = new AgentSessionStore();
   /** Review comments queued per session (Multi-agent only). */
   readonly feedbackStore = new FeedbackStore();
+  /** Multi-agent's terminal groups; created once settings are loaded. */
+  groupStore!: GroupStore;
+  readonly groups = new GroupController(this);
+  /** Latest release on GitHub, once checked (Multi-agent only). */
+  private latestPluginVersion: string | null = null;
+  /** Set first thing in onunload: views closing then aren't the user
+   *  closing terminals, so groups mustn't be tidied away. */
+  private unloading = false;
   private readonly transcriptUsage = new TranscriptUsageReader();
   /** Subagents whose usage was read after they ended: final, never re-read. */
   private finalSubagentUsage = new Set<string>();
@@ -65,6 +79,11 @@ export default class TerminusPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    this.groupStore = new GroupStore(
+      this.settings.groups,
+      () => this.saveSettings(),
+      TERMINAL_COLOR_PALETTE.map((option) => option.value)
+    );
     this.addSettingTab(new TerminusSettingTab(this.app, this));
 
     // Obsidian's own installer never delivers resources/ (see
@@ -115,6 +134,16 @@ export default class TerminusPlugin extends Plugin {
     this.registerView(PENDING_CHANGES_VIEW_TYPE, (leaf) => new PendingChangesView(leaf, this));
     this.registerView(DIFF_SPLIT_VIEW_TYPE, (leaf) => new DiffSplitView(leaf, this));
     this.registerView(AGENT_INBOX_VIEW_TYPE, (leaf) => new AgentInboxView(leaf, this));
+    this.registerView(TERMINUS_SIDEBAR_VIEW_TYPE, (leaf) => new TerminusSidebarView(leaf, this));
+
+    // Opening a terminal from another group switches to that group.
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", (leaf) => {
+        if (this.experience === "multi-agent") this.groups.onActiveLeaf(leaf);
+      })
+    );
+    // Twice a day, while the sidebar that shows it is in use.
+    this.registerInterval(window.setInterval(() => void this.checkPluginVersion(), 12 * 60 * 60 * 1000));
 
     this.ribbonIconEl = this.addRibbonIcon(this.settings.ribbonIcon, "Open Terminus", (evt) => {
       void this.openTerminal(evt);
@@ -149,6 +178,56 @@ export default class TerminusPlugin extends Plugin {
       checkCallback: (checking) => {
         if (this.experience !== "multi-agent") return false;
         if (!checking) void this.revealReviewView();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "new-group",
+      name: "New group",
+      checkCallback: (checking) => {
+        if (this.experience !== "multi-agent") return false;
+        if (!checking) {
+          void this.groups.createGroup().then(async (group) => (await this.revealSidebar())?.startRename(group.id));
+        }
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "switch-group",
+      name: "Switch group…",
+      checkCallback: (checking) => {
+        if (this.experience !== "multi-agent" || this.groupStore.list().length === 0) return false;
+        if (!checking) new GroupSuggestModal(this, "Switch to group", false, (choice) => {
+            if (choice.kind === "group") void this.groups.selectGroup(choice.target);
+          }).open();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "move-terminal-to-group",
+      name: "Move terminal to group…",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(TerminalView);
+        if (this.experience !== "multi-agent" || !view) return false;
+        if (!checking) {
+          new GroupSuggestModal(this, "Move this terminal to", true, (choice) => {
+            if (choice.kind === "new") {
+              void this.groups.createGroup([view]).then(async (group) => (await this.revealSidebar())?.startRename(group.id));
+            } else {
+              this.groups.moveTerminals([view], choice.target);
+            }
+          }).open();
+        }
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "close-group",
+      name: "Close group",
+      checkCallback: (checking) => {
+        const groupId = this.groupStore?.activeGroupId;
+        if (this.experience !== "multi-agent" || !groupId) return false;
+        if (!checking) void this.closeGroupAsking(groupId);
         return true;
       },
     });
@@ -230,6 +309,7 @@ export default class TerminusPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       void this.revealReviewView();
       void this.showWelcomeIfFirstRun();
+      if (this.experience === "multi-agent") void this.startMultiAgentViews();
     });
   }
 
@@ -245,6 +325,7 @@ export default class TerminusPlugin extends Plugin {
   }
 
   onunload(): void {
+    this.unloading = true;
     if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
     void this.reviewServer.stop();
   }
@@ -281,6 +362,68 @@ export default class TerminusPlugin extends Plugin {
     // started with.
     await this.provisionHooks();
     await this.swapReviewView();
+    if (this.experience === "multi-agent") {
+      await this.startMultiAgentViews();
+    } else {
+      for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_SIDEBAR_VIEW_TYPE)) leaf.detach();
+    }
+    // Group colours apply only in Multi-agent.
+    for (const view of this.groups.terminals()) view.refreshGroupColor();
+  }
+
+  /** Multi-agent's left sidebar, with every terminal loaded so its group is
+   *  known, groups emptied while Classic was selected removed, and the
+   *  version check that the sidebar's header shows. */
+  private async startMultiAgentViews(): Promise<void> {
+    await this.groups.loadDeferredTerminals();
+    this.groups.removeEmptyGroups();
+    for (const view of this.groups.terminals()) view.refreshGroupColor();
+    await this.revealSidebar(false);
+    void this.checkPluginVersion();
+  }
+
+  /** Opens the Terminus sidebar in the left sidebar if it isn't open. */
+  async revealSidebar(focus = true): Promise<TerminusSidebarView | null> {
+    const { workspace } = this.app;
+    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(TERMINUS_SIDEBAR_VIEW_TYPE)[0] ?? null;
+    if (!leaf) {
+      leaf = workspace.getLeftLeaf(false);
+      if (!leaf) return null;
+      await leaf.setViewState({ type: TERMINUS_SIDEBAR_VIEW_TYPE, active: focus });
+    }
+    if (focus) await workspace.revealLeaf(leaf);
+    return leaf.view instanceof TerminusSidebarView ? leaf.view : null;
+  }
+
+  pluginVersionStatus(): PluginVersionStatus {
+    return versionStatus(this.manifest.version, this.latestPluginVersion);
+  }
+
+  /** One request to GitHub's releases API (the README's "Network use").
+   *  Only in Multi-agent, whose sidebar is the only place it shows. A
+   *  failed check keeps the last result. */
+  private async checkPluginVersion(): Promise<void> {
+    if (this.experience !== "multi-agent") return;
+    const latest = await fetchLatestPluginVersion();
+    if (latest && latest !== this.latestPluginVersion) {
+      this.latestPluginVersion = latest;
+      this.refreshTerminusViews();
+    }
+  }
+
+  setGroupColor(groupId: string, color: string): void {
+    this.groupStore.setColor(groupId, color);
+    for (const view of this.groups.terminalsIn(groupId)) view.refreshGroupColor();
+  }
+
+  /** A terminal's tab closed. A group it emptied is removed -- except while
+   *  Terminus itself is unloading, when every view closes at once. */
+  onTerminalClosed(): void {
+    if (this.unloading || this.experience !== "multi-agent") return;
+    // After the leaf has left the workspace.
+    window.setTimeout(() => {
+      if (!this.unloading) this.groups.removeEmptyGroups();
+    }, 0);
   }
 
   /** Each experience has its own review view: closes the other one's
@@ -554,12 +697,27 @@ export default class TerminusPlugin extends Plugin {
     new Notice(`Terminus: feedback added to ${terminal.getDisplayText()} — press Enter to send it`);
   }
 
-  /** Re-renders open Agent inboxes for changes the stores don't see, such
-   *  as a terminal being renamed or recoloured. */
-  refreshAgentInbox(): void {
+  /** Re-renders open Agent inboxes and Terminus sidebars for changes the
+   *  stores don't see, such as a terminal being renamed or recoloured. */
+  refreshTerminusViews(): void {
     for (const leaf of this.app.workspace.getLeavesOfType(AGENT_INBOX_VIEW_TYPE)) {
       if (leaf.view instanceof AgentInboxView) leaf.view.render();
     }
+    for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_SIDEBAR_VIEW_TYPE)) {
+      if (leaf.view instanceof TerminusSidebarView) leaf.view.render();
+    }
+  }
+
+  /** The command's version of a group's ×: asks first only when a session
+   *  in it is mid-turn or waiting on an answer. */
+  private async closeGroupAsking(groupId: string): Promise<void> {
+    const group = this.groupStore.get(groupId);
+    if (!group) return;
+    if (this.groups.busy(this.groups.terminalsIn(groupId)).length > 0) {
+      const ok = await ConfirmModal.confirm(this.app, `Close ${group.name}?`, "Claude is mid-turn here. Close anyway?", "Close");
+      if (!ok) return;
+    }
+    this.groups.closeGroup(groupId);
   }
 
   findTerminalView(token: string): TerminalView | null {
@@ -667,6 +825,8 @@ export default class TerminusPlugin extends Plugin {
         cwd: entry.cwd ?? undefined,
         customName: entry.customName ?? undefined,
         color: entry.color ?? undefined,
+        // Dropped by setState if the group has gone since.
+        groupId: entry.groupId ?? undefined,
       },
     });
     await this.app.workspace.revealLeaf(leaf);

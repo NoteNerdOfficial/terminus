@@ -1,4 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
+import { DEFAULT_GROUPS_DATA, GroupsData, resolveGroupsData } from "./state/GroupStore";
 import { getEnvVar } from "terminus-node-bridge";
 import { isFontAvailable, isFontMonospaced, listAvailableMonospaceFonts } from "./terminal/fontCatalog";
 import { testClaudeConnection } from "./claude/headlessAssist";
@@ -96,6 +97,9 @@ export interface TerminusSettings {
   /** Same one-time gate as hasSeenWelcome, for the invite to try
    *  Multi-agent. Set whether it was accepted or dismissed. */
   hasSeenMultiAgentInvite: boolean;
+  /** Multi-agent's terminal groups (see GroupStore). Kept while Classic is
+   *  selected, like the per-mode settings. */
+  groups: GroupsData;
 }
 
 export const DEFAULT_CLASSIC_SETTINGS: ClassicSettings = {
@@ -131,6 +135,7 @@ export const DEFAULT_SETTINGS: TerminusSettings = {
   wikiLinkInsertFormat: "wikilink",
   hasSeenWelcome: false,
   hasSeenMultiAgentInvite: false,
+  groups: DEFAULT_GROUPS_DATA,
 };
 
 /** Fields that lived at the top level before the per-mode split, and now
@@ -149,7 +154,7 @@ interface LegacyFlatSettings {
  */
 export function resolveSettings(saved: unknown): TerminusSettings {
   const data = (typeof saved === "object" && saved !== null ? saved : {}) as Partial<TerminusSettings> & LegacyFlatSettings;
-  const { autoRevealPendingChanges, autoRevealDelayMs, classic, multiAgent, ...rest } = data;
+  const { autoRevealPendingChanges, autoRevealDelayMs, classic, multiAgent, groups, ...rest } = data;
 
   const legacyClassic: Partial<ClassicSettings> = {};
   if (autoRevealPendingChanges !== undefined) legacyClassic.autoRevealPendingChanges = autoRevealPendingChanges;
@@ -160,6 +165,7 @@ export function resolveSettings(saved: unknown): TerminusSettings {
     ...rest,
     classic: { ...DEFAULT_CLASSIC_SETTINGS, ...legacyClassic, ...classic },
     multiAgent: { ...DEFAULT_MULTI_AGENT_SETTINGS, ...multiAgent },
+    groups: resolveGroupsData(groups),
   };
 }
 
@@ -289,7 +295,7 @@ export class TerminusSettingTab extends PluginSettingTab {
         toggle.setValue(multiAgent.showEstimatedCost).onChange(async (value) => {
           multiAgent.showEstimatedCost = value;
           await this.plugin.saveSettings();
-          this.plugin.refreshAgentInbox();
+          this.plugin.refreshTerminusViews();
         })
       );
 
@@ -300,7 +306,7 @@ export class TerminusSettingTab extends PluginSettingTab {
         toggle.setValue(multiAgent.showGitBranch).onChange(async (value) => {
           multiAgent.showGitBranch = value;
           await this.plugin.saveSettings();
-          this.plugin.refreshAgentInbox();
+          this.plugin.refreshTerminusViews();
         })
       );
   }
