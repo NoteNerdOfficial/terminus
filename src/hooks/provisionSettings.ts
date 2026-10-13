@@ -1,6 +1,7 @@
 import { App, FileSystemAdapter, PluginManifest } from "obsidian";
 import { appendTextFile, makeDirRecursive, pathJoin, readTextFileIfExists, writeTextFile } from "terminus-node-bridge";
 import type { Experience } from "../settings";
+import { hookCommand, quoteLegacyCommands } from "./hookCommand";
 
 interface HookCommandEntry {
   type: "command";
@@ -128,25 +129,33 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
 
   const hooks = (settings.hooks ??= {});
 
+  // Entries written before commands were quoted fail for a path with a space.
+  const quotedLegacy = quoteLegacyCommands(hooks as Record<string, Array<{ hooks?: Array<{ command?: string }> }>>, [
+    getHookBridgePath(app, manifest),
+    getTurnEndBridgePath(app, manifest),
+    getNotificationBridgePath(app, manifest),
+    getSessionEventBridgePath(app, manifest),
+  ]);
+
   // Separate ensure calls rather than one loop over a table: the events
   // differ in more than their command string (Stop and Notification take no
   // matcher, since neither is tied to a tool), and the table would be longer
   // than this.
   const preToolUseChanged = ensureHook(hooks, "PreToolUse", {
     matcher: MATCHER,
-    command: getHookBridgePath(app, manifest),
+    command: hookCommand(getHookBridgePath(app, manifest)),
     timeout: DEFAULT_TIMEOUT_SECONDS,
   });
   const stopChanged = ensureHook(hooks, "Stop", {
-    command: getTurnEndBridgePath(app, manifest),
+    command: hookCommand(getTurnEndBridgePath(app, manifest)),
     timeout: TURN_END_TIMEOUT_SECONDS,
   });
   const notificationChanged = ensureHook(hooks, "Notification", {
-    command: getNotificationBridgePath(app, manifest),
+    command: hookCommand(getNotificationBridgePath(app, manifest)),
     timeout: NOTIFICATION_TIMEOUT_SECONDS,
   });
 
-  const sessionEventBridge = getSessionEventBridgePath(app, manifest);
+  const sessionEventBridge = hookCommand(getSessionEventBridgePath(app, manifest));
   const sessionHook = { command: sessionEventBridge, timeout: SESSION_EVENT_TIMEOUT_SECONDS };
   let sessionHooksChanged = false;
   for (const event of MULTI_AGENT_ONLY_EVENTS) {
@@ -164,7 +173,7 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
     : removeHook(hooks, "PreToolUse", sessionEventBridge);
   sessionHooksChanged ||= agentToolChanged;
 
-  if (preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged) {
+  if (quotedLegacy || preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged) {
     await writeTextFile(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
 

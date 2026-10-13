@@ -537,6 +537,30 @@ function readBody(req, maxBytes) {
 // src/hooks/provisionSettings.ts
 var import_obsidian = require("obsidian");
 var import_terminus_node_bridge2 = __toESM(require_dist());
+
+// src/hooks/hookCommand.ts
+var SAFE_PATH = /^[A-Za-z0-9_/.:@%+=,-]+$/;
+function hookCommand(path) {
+  return SAFE_PATH.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`;
+}
+function quoteLegacyCommands(hooks, paths) {
+  var _a8;
+  let changed = false;
+  for (const entries of Object.values(hooks)) {
+    for (const entry of entries != null ? entries : []) {
+      for (const hook of (_a8 = entry.hooks) != null ? _a8 : []) {
+        const path = paths.find((p2) => p2 === hook.command);
+        if (path && hookCommand(path) !== path) {
+          hook.command = hookCommand(path);
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed;
+}
+
+// src/hooks/provisionSettings.ts
 function isClaudeSettingsFile(value) {
   return typeof value === "object" && value !== null;
 }
@@ -588,20 +612,26 @@ async function provisionClaudeSettings(app, manifest, options) {
       settings = parsed;
   }
   const hooks = (_a8 = settings.hooks) != null ? _a8 : settings.hooks = {};
+  const quotedLegacy = quoteLegacyCommands(hooks, [
+    getHookBridgePath(app, manifest),
+    getTurnEndBridgePath(app, manifest),
+    getNotificationBridgePath(app, manifest),
+    getSessionEventBridgePath(app, manifest)
+  ]);
   const preToolUseChanged = ensureHook(hooks, "PreToolUse", {
     matcher: MATCHER,
-    command: getHookBridgePath(app, manifest),
+    command: hookCommand(getHookBridgePath(app, manifest)),
     timeout: DEFAULT_TIMEOUT_SECONDS
   });
   const stopChanged = ensureHook(hooks, "Stop", {
-    command: getTurnEndBridgePath(app, manifest),
+    command: hookCommand(getTurnEndBridgePath(app, manifest)),
     timeout: TURN_END_TIMEOUT_SECONDS
   });
   const notificationChanged = ensureHook(hooks, "Notification", {
-    command: getNotificationBridgePath(app, manifest),
+    command: hookCommand(getNotificationBridgePath(app, manifest)),
     timeout: NOTIFICATION_TIMEOUT_SECONDS
   });
-  const sessionEventBridge = getSessionEventBridgePath(app, manifest);
+  const sessionEventBridge = hookCommand(getSessionEventBridgePath(app, manifest));
   const sessionHook = { command: sessionEventBridge, timeout: SESSION_EVENT_TIMEOUT_SECONDS };
   let sessionHooksChanged = false;
   for (const event of MULTI_AGENT_ONLY_EVENTS) {
@@ -614,7 +644,7 @@ async function provisionClaudeSettings(app, manifest, options) {
   }
   const agentToolChanged = trackSubagents ? ensureHook(hooks, "PreToolUse", { ...sessionHook, matcher: AGENT_MATCHER }) : removeHook(hooks, "PreToolUse", sessionEventBridge);
   sessionHooksChanged || (sessionHooksChanged = agentToolChanged);
-  if (preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged) {
+  if (quotedLegacy || preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged) {
     await (0, import_terminus_node_bridge2.writeTextFile)(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
   await ensureGitignoreEntry(basePath);
