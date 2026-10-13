@@ -23,6 +23,10 @@ export const AGENT_INBOX_VIEW_TYPE = "terminus-agent-inbox";
 export class AgentInboxView extends ItemView {
   /** Per-view UI state, kept across re-renders. */
   private collapsedCards = new Set<string>();
+  /** Finished cards dismissed (by token) until their session's next turn. */
+  private dismissed = new Set<string>();
+  /** Cards whose "nothing to review" agents are unfolded. */
+  private expandedQuiet = new Set<string>();
   private finishedCollapsed = false;
   /** Set in onOpen: holds renders while a mouse button is down here. */
   private guardedRender: () => void = () => this.renderNow();
@@ -98,8 +102,12 @@ export class AgentInboxView extends ItemView {
 
     this.renderSection(body, "Needs attention", inbox.needsAttention);
     this.renderSection(body, "Working", inbox.working);
-    if (inbox.finished.length > 0) {
-      const heading = this.renderSectionHeading(body, "Finished", inbox.finished.length, this.finishedCollapsed);
+    // A dismissed card stays away until its session starts another turn
+    // (it leaves Finished), or gets something to review again.
+    for (const card of [...inbox.needsAttention, ...inbox.working]) this.dismissed.delete(card.token);
+    const finished = inbox.finished.filter((card) => !(this.dismissed.has(card.token) && this.dismissible(card)));
+    if (finished.length > 0) {
+      const heading = this.renderSectionHeading(body, "Finished", finished.length, this.finishedCollapsed);
       const toggle = () => {
         this.finishedCollapsed = !this.finishedCollapsed;
         this.render();
@@ -107,7 +115,17 @@ export class AgentInboxView extends ItemView {
       heading.addEventListener("click", toggle);
       makeActivatable(heading, toggle, () => undefined);
       heading.setAttr("aria-expanded", String(!this.finishedCollapsed));
-      if (!this.finishedCollapsed) for (const card of inbox.finished) this.renderCard(body, card);
+      const clearable = finished.filter((card) => this.dismissible(card));
+      if (clearable.length > 0) {
+        const clear = heading.createEl("button", { cls: "terminus-inbox-clear", text: "Clear" });
+        setTooltip(clear, "Dismiss finished sessions with nothing left to review");
+        clear.addEventListener("click", (evt) => {
+          evt.stopPropagation();
+          this.dismiss(clearable);
+        });
+        clear.addEventListener("keydown", (evt) => evt.stopPropagation());
+      }
+      if (!this.finishedCollapsed) for (const card of finished) this.renderCard(body, card, true);
     }
 
     const history = this.plugin.pendingChangesStore.listHistory();
@@ -182,7 +200,21 @@ export class AgentInboxView extends ItemView {
     return heading;
   }
 
-  private renderCard(body: HTMLElement, card: InboxCard): void {
+  /** A finished card can be dismissed once nothing on it is waiting on
+   *  you: no pending changes (Keep or Reject them) and no queued comments. */
+  private dismissible(card: InboxCard): boolean {
+    return card.changes.length === 0 && this.plugin.feedbackStore.listFor(card.token).length === 0;
+  }
+
+  private dismiss(cards: InboxCard[]): void {
+    for (const card of cards) {
+      this.dismissed.add(card.token);
+      this.plugin.agentSessionStore.seen(card.token);
+    }
+    this.render();
+  }
+
+  private renderCard(body: HTMLElement, card: InboxCard, inFinished = false): void {
     const terminal = this.plugin.findTerminalView(card.token);
     const firstChange = card.changes[0];
     const name =
@@ -270,28 +302,10 @@ export class AgentInboxView extends ItemView {
     // below a rule and on the alternate surface, as a group card's
     // terminals are in the sidebar.
     const workEl = el.createDiv({ cls: "terminus-inbox-card-body" });
-    if (card.leadChanges.length > 0 || card.subagents.length > 0) {
-      if (card.subagents.length > 0) {
-        // With subagents, the lead is one agent among them, in the same
-        // shape of row, so the card reads as a list of agents, each with
-        // its own changes underneath.
-        this.renderAgent(workEl, {
-          mark: { kind: "lead", icon: "bot", label: "Lead session" },
-          name: "Lead",
-          description: "Main session",
-          details: [changeCount(card.leadChanges.length)],
-          changes: card.leadChanges,
-        });
-      } else {
-        this.renderChangeList(workEl.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges);
-      }
-      for (const sub of card.subagents) this.renderSubagent(workEl, sub);
-      if (card.hiddenSubagents > 0) {
-        workEl.createDiv({
-          cls: "terminus-inbox-more",
-          text: `${card.hiddenSubagents} earlier ${card.hiddenSubagents === 1 ? "subagent" : "subagents"} finished`,
-        });
-      }
+    if (card.subagents.length === 0) {
+      if (card.leadChanges.length > 0) this.renderChangeList(workEl.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges, card, null);
+    } else {
+      this.renderAgents(workEl, card);
     }
 
     this.renderFeedback(workEl, card.token, name);
@@ -307,6 +321,10 @@ export class AgentInboxView extends ItemView {
       foot.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Keep all" }).addEventListener("click", () =>
         void runBulkAction(this.rows, true, card.changes, () => this.plugin.pendingChangesStore.resolveAll(true, inCard), name)
       );
+    } else if (inFinished && this.dismissible(card)) {
+      const dismiss = foot.createEl("button", { cls: "terminus-btn-ghost", text: "Dismiss" });
+      setTooltip(dismiss, "Hide this card until the session's next turn");
+      dismiss.addEventListener("click", () => this.dismiss([card]));
     } else {
       foot.createSpan({ cls: "terminus-inbox-foot-note", text: "No pending changes" });
     }
@@ -382,21 +400,75 @@ export class AgentInboxView extends ItemView {
     return session.lastMessage === null ? null : plainPreview(session.lastMessage);
   }
 
-  private renderSubagent(el: HTMLElement, sub: InboxSubagent): void {
+  /**
+   * A card with subagents, as a list of agents, each with the files it
+   * changed hanging under it: first the agents that changed something (the
+   * lead too, when it did), then ones still running or that failed. Agents
+   * that finished with nothing pending fold into one line, so they don't
+   * sit between an agent and the next one's files.
+   */
+  private renderAgents(el: HTMLElement, card: InboxCard): void {
+    const needsRow = (sub: InboxSubagent) => sub.changes.length > 0 || sub.run?.running === true || sub.run?.outcome === "failed";
+    const withChanges = card.subagents.filter((sub) => sub.changes.length > 0);
+    const busy = card.subagents.filter((sub) => sub.changes.length === 0 && needsRow(sub));
+    const quiet = card.subagents.filter((sub) => !needsRow(sub));
+
+    if (card.leadChanges.length > 0) {
+      this.renderAgent(el, card, {
+        agentId: null,
+        mark: { kind: "lead", icon: "bot", label: "Lead session" },
+        name: "Lead",
+        secondary: "main session",
+        details: [],
+        changes: card.leadChanges,
+      });
+    }
+    for (const sub of [...withChanges, ...busy]) this.renderSubagent(el, card, sub, false);
+
+    const quietCount = quiet.length + card.hiddenSubagents;
+    if (quietCount === 0) return;
+    const expanded = this.expandedQuiet.has(card.token);
+    const fold = el.createDiv({ cls: "terminus-inbox-quiet" });
+    const toggle = fold.createDiv({ cls: "terminus-inbox-quiet-toggle" });
+    setIcon(toggle.createSpan({ cls: "terminus-inbox-chevron" }), expanded ? "chevron-down" : "chevron-right");
+    // "Nothing to review" rather than "no changes": an agent whose changes
+    // were kept or rejected folds here too.
+    toggle.createSpan({ text: `${quietCount} ${quietCount === 1 ? "agent" : "agents"} with nothing to review` });
+    const flip = () => {
+      if (expanded) this.expandedQuiet.delete(card.token);
+      else this.expandedQuiet.add(card.token);
+      this.render();
+    };
+    toggle.addEventListener("click", flip);
+    makeActivatable(toggle, flip, () => undefined);
+    toggle.setAttr("aria-expanded", String(expanded));
+    if (!expanded) return;
+    for (const sub of quiet) this.renderSubagent(fold, card, sub, true);
+    if (card.hiddenSubagents > 0) {
+      fold.createDiv({ cls: "terminus-inbox-more", text: `and ${card.hiddenSubagents} earlier` });
+    }
+  }
+
+  private renderSubagent(el: HTMLElement, card: InboxCard, sub: InboxSubagent, compact: boolean): void {
     const running = sub.run?.running ?? false;
     const details: string[] = [];
     const time = subagentTime(sub.run);
     if (time) details.push(time);
     const failed = sub.run?.outcome === "failed" && sub.run.error ? sub.run.error : null;
-    this.renderAgent(el, {
+    // Named by its task ("Division note long form"), which is what tells
+    // one agent from another; the type ("general-purpose") is secondary.
+    const task = sub.run?.description ?? null;
+    this.renderAgent(el, card, {
+      agentId: sub.agentId,
       mark: subagentMark(sub.run),
-      name: sub.agentType,
-      description: sub.run?.description ?? null,
-      details,
-      usage: sub.run?.usage ?? null,
+      name: task ?? sub.agentType,
+      secondary: task ? sub.agentType : null,
+      details: compact ? [] : details,
+      usage: compact ? null : (sub.run?.usage ?? null),
       changes: sub.changes,
       error: failed,
       title: !failed && sub.run?.lastMessage && !running ? sub.run.lastMessage : null,
+      compact,
     });
   }
 
@@ -405,29 +477,44 @@ export class AgentInboxView extends ItemView {
    *  changes indented underneath. */
   private renderAgent(
     el: HTMLElement,
+    card: InboxCard,
     agent: {
+      agentId: string | null;
       mark: { kind: string; icon: string | null; label: string };
       name: string;
-      description: string | null;
+      secondary: string | null;
       details: string[];
       usage?: UsageTotals | null;
       changes: PendingChange[];
       error?: string | null;
       title?: string | null;
+      compact?: boolean;
     }
   ): void {
     const row = el.createDiv({ cls: "terminus-inbox-agent" });
+    row.toggleClass("is-compact", agent.compact === true);
+    row.toggleClass("has-changes", agent.changes.length > 0);
     const line = row.createDiv({ cls: "terminus-inbox-agent-line" });
     const markEl = line.createSpan({ cls: `terminus-inbox-agent-mark is-${agent.mark.kind}`, attr: { "aria-label": agent.mark.label } });
     // Running is a pulsing dot drawn in CSS; the rest are icons.
     if (agent.mark.icon) setIcon(markEl, agent.mark.icon);
-    line.createSpan({ cls: "terminus-inbox-agent-name", text: agent.name });
-    if (agent.description) line.createSpan({ cls: "terminus-inbox-agent-desc", text: agent.description, attr: { title: agent.description } });
+    // The task gets the line to itself: it's what tells agents apart.
+    line.createSpan({ cls: "terminus-inbox-agent-name", text: agent.name, attr: { title: agent.name } });
+    // Totals only over several files; one file's own row has its counts.
+    if (agent.changes.length > 1) {
+      const { added, removed } = sumStats(agent.changes);
+      const stats = line.createSpan({ cls: "terminus-inbox-agent-stats" });
+      stats.createSpan({ text: changeCount(agent.changes.length) });
+      stats.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
+      stats.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
+    }
 
-    const details = row.createDiv({ cls: "terminus-inbox-agent-details" });
-    for (const detail of agent.details) details.createSpan({ text: detail });
-    if (agent.usage) this.renderUsage(details, agent.usage, agent.usage);
-    if (agent.mark.kind !== "lead") details.createSpan({ text: changeCount(agent.changes.length) });
+    const detailText = [...(agent.secondary && !agent.compact ? [agent.secondary] : []), ...agent.details];
+    if (detailText.length > 0 || agent.usage) {
+      const details = row.createDiv({ cls: "terminus-inbox-agent-details" });
+      for (const detail of detailText) details.createSpan({ text: detail });
+      if (agent.usage) this.renderUsage(details, agent.usage, agent.usage);
+    }
     if (agent.error) {
       // First line only; the full error is on hover.
       row.createDiv({ cls: "terminus-inbox-agent-error", text: agent.error.split("\n")[0] ?? "", attr: { title: agent.error } });
@@ -435,13 +522,18 @@ export class AgentInboxView extends ItemView {
       row.setAttr("title", agent.title);
     }
 
-    if (agent.changes.length > 0) this.renderChangeList(row.createDiv({ cls: "terminus-inbox-agent-changes" }), agent.changes);
+    if (agent.changes.length > 0) this.renderChangeList(row.createDiv({ cls: "terminus-inbox-agent-changes" }), agent.changes, card, agent.agentId);
   }
 
-  private renderChangeList(parent: HTMLElement, changes: PendingChange[]): void {
+  /** `owner` is the agent the rows sit under (null: the lead); a file that
+   *  other agents in this session also edited says which. */
+  private renderChangeList(parent: HTMLElement, changes: PendingChange[], card: InboxCard, owner: string | null): void {
     if (changes.length === 0) return;
     const list = parent.createDiv({ cls: "terminus-pending-list" });
-    for (const change of changes) renderChangeRow(this.rows, list, change, computeDiffStats(change.diff));
+    for (const change of changes) {
+      const others = change.agents.filter((a) => a.token === card.token && a.agentId !== owner).map((a) => agentLabel(card, a.agentId, a.agentType));
+      renderChangeRow(this.rows, list, change, computeDiffStats(change.diff), { alsoEditedBy: others });
+    }
   }
 }
 
@@ -540,6 +632,13 @@ function subagentTime(run: SubagentRun | null): string | null {
   if (run.outcome === "failed") return `Failed after ${duration}`;
   if (run.outcome === "stopped") return `Stopped after ${duration}`;
   return duration;
+}
+
+/** What a card calls one of its agents: "Lead", or a subagent's task. */
+function agentLabel(card: InboxCard, agentId: string | null, agentType: string | null): string {
+  if (!agentId) return "Lead";
+  const run = card.session?.subagents.find((r) => r.agentId === agentId);
+  return run?.description ?? run?.agentType ?? agentType ?? "a subagent";
 }
 
 function changeCount(n: number): string {

@@ -1543,7 +1543,6 @@
 
 .terminus-sidebar-header {
   padding: 12px 12px 10px;
-  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .terminus-sidebar-brand {
@@ -1763,8 +1762,34 @@
   font-variant-numeric: tabular-nums;
 }
 
-.terminus-sidebar-group-row.is-active .terminus-sidebar-group-state {
+/* The summary's parts take their status colours (see the inbox pills);
+   "Showing" the accent, a turn not yet read a little louder. */
+.terminus-sidebar-group-state.is-showing {
   color: var(--text-accent);
+}
+
+.terminus-sidebar-group-state .is-needs-attention {
+  font-weight: 600;
+  color: var(--tm-attention);
+}
+
+.terminus-sidebar-group-state .is-working {
+  color: var(--tm-working);
+}
+
+.terminus-sidebar-group-state.is-unread {
+  color: var(--text-muted);
+}
+
+.terminus-sidebar-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* A row's own actions appear where the pointer or keyboard is, at the end
@@ -1856,15 +1881,6 @@
   color: var(--tm-ok);
 }
 
-.terminus-sidebar-attention {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background-color: var(--tm-attention);
-  animation: terminus-tab-pending-pulse 1.4s ease-in-out infinite;
-}
-
 /* Terminals sit indented under their group, their colour stroke under the
    group's dot. */
 .terminus-sidebar-terminal {
@@ -1882,6 +1898,23 @@
 .terminus-sidebar-terminal.is-selected {
   color: var(--text-normal);
   background-color: var(--nav-item-background-selected, var(--background-modifier-active-hover));
+}
+
+/* A note open in a group: its tab's icon where a terminal has its stroke,
+   the name in the same place. */
+.terminus-sidebar-tab-icon {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 13px;
+  /* Takes the stroke's 3px, centred on it, so names line up. */
+  margin: 0 -2px 0 -8px;
+  color: var(--text-faint);
+}
+
+.terminus-sidebar-tab-icon svg {
+  width: 13px;
+  height: 13px;
 }
 
 /* A terminal's colour, everywhere: a short stroke, like the one on its
@@ -2310,8 +2343,16 @@
   padding: 0 6px 6px 8px;
 }
 
+/* An agent's files hang off it on a hairline guide that runs down from
+   its mark, so each file reads as that agent's, however many agents the
+   card has. */
+.terminus-inbox-agent-changes {
+  margin: 4px 0 2px 6px;
+  border-left: 1px solid var(--background-modifier-border-hover);
+}
+
 .terminus-inbox-agent-changes .terminus-pending-list {
-  padding: 2px 0 2px 12px;
+  padding: 0 0 0 6px;
 }
 
 /* The inbox's change row (Multi-agent only; Classic keeps the original):
@@ -2469,18 +2510,113 @@
   color: var(--text-faint);
 }
 
+/* The agent's task, then its type, quieter; its change count and stats
+   at the end of the line, like a file's. */
 .terminus-inbox-agent-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   color: var(--text-normal);
 }
 
 .terminus-inbox-agent-desc {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+.terminus-inbox-agent-stats {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  margin-left: auto;
+  padding-left: 6px;
+  font-size: var(--font-ui-smaller);
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* An agent that finished without changes, inside the folded line: one
+   quiet line, no rule above it. */
+.terminus-inbox-agent.is-compact {
+  padding: 3px 10px 3px 16px;
+  border-top: none;
+}
+
+.terminus-inbox-agent.is-compact .terminus-inbox-agent-name {
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.terminus-inbox-quiet {
+  padding: 2px 0 4px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.terminus-inbox-card-body > .terminus-inbox-quiet:first-child {
+  border-top: none;
+}
+
+.terminus-inbox-quiet-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 6px;
+  padding: 3px 4px 3px 10px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.terminus-inbox-quiet-toggle:hover {
+  color: var(--text-normal);
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-inbox-quiet .terminus-inbox-more {
+  padding-left: 36px;
+}
+
+/* A file other agents in the session also edited: who, under its path. */
+.terminus-pending-coeditors {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.terminus-pending-coeditors .terminus-meta-icon {
+  color: inherit;
+}
+
+/* "Clear" on the Finished heading: dismisses what's done. */
+.terminus-inbox-view .terminus-inbox-clear {
+  height: auto;
+  margin-left: auto;
+  padding: 1px 6px;
+  border: none;
+  box-shadow: none;
+  background: none;
+  font-size: var(--font-ui-smaller);
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.terminus-inbox-view .terminus-inbox-clear:hover {
+  color: var(--text-normal);
+  background-color: var(--background-modifier-hover);
 }
 
 .terminus-inbox-agent-details {
@@ -2681,7 +2817,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .terminus-sidebar-attention,
   .terminus-sidebar-status.is-working,
   .terminus-sidebar-status.is-needs-attention,
   .terminus-inbox-agent-mark.is-running::before {

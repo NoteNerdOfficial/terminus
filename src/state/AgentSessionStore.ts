@@ -36,6 +36,8 @@ export interface AgentSession {
   turnStartedAt: number | null;
   /** How long the last finished turn took. */
   lastTurnMs: number | null;
+  /** When the last turn finished (Stop or StopFailure). */
+  lastTurnEndedAt: number | null;
   /** The last file Claude edited in the current turn; cleared when the turn ends. */
   currentFile: string | null;
   transcriptPath: string | null;
@@ -303,6 +305,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       currentFile: null,
       lastMessage: lastMessage === undefined ? s.lastMessage : truncate(lastMessage),
       lastTurnMs: s.turnStartedAt === null ? s.lastTurnMs : at - s.turnStartedAt,
+      lastTurnEndedAt: at,
       turnStartedAt: null,
     });
   }
@@ -438,6 +441,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       lastTurnFailed: false,
       turnStartedAt: null,
       lastTurnMs: null,
+      lastTurnEndedAt: null,
       currentFile: null,
       transcriptPath: null,
       cwd: null,

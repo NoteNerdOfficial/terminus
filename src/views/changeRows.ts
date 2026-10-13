@@ -64,7 +64,16 @@ export async function runBulkAction(
   }
 }
 
-export function renderChangeRow(ctx: ChangeRowContext, list: HTMLElement, change: PendingChange, stats: { added: number; removed: number }): void {
+/** `alsoEditedBy`: the other agents in the same session that edited the
+ *  file, named; the inbox lists a change under the agent that edited it
+ *  first, and this says who else did. */
+export function renderChangeRow(
+  ctx: ChangeRowContext,
+  list: HTMLElement,
+  change: PendingChange,
+  stats: { added: number; removed: number },
+  opts: { alsoEditedBy?: string[] } = {}
+): void {
   const row = list.createDiv({ cls: "terminus-pending-row" });
   const summary = row.createDiv({ cls: "terminus-pending-row-summary" });
 
@@ -99,6 +108,11 @@ export function renderChangeRow(ctx: ChangeRowContext, list: HTMLElement, change
     setIcon(el.createSpan({ cls: "terminus-meta-icon" }), "alert-triangle");
     el.createSpan({ text });
   };
+  if (inbox && opts.alsoEditedBy && opts.alsoEditedBy.length > 0) {
+    const el = info.createDiv({ cls: "terminus-pending-coeditors" });
+    setIcon(el.createSpan({ cls: "terminus-meta-icon" }), "users");
+    el.createSpan({ text: `Also edited by ${opts.alsoEditedBy.join(", ")}` });
+  }
   const collision = collisionLabel(change);
   if (collision) warning("terminus-collision-warning", collision);
   if (change.brokenBacklinks.length > 0) {

@@ -1,5 +1,6 @@
 import { setIcon, TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
 import { TERMINUS_VIEW_TYPE, TerminalView } from "../views/TerminalView";
+import { DIFF_SPLIT_VIEW_TYPE } from "../views/DiffSplitView";
 import type { TerminalGroup } from "../state/GroupStore";
 import { ConfirmModal } from "../modals/ConfirmModal";
 import { TabVisibility } from "./TabVisibility";
@@ -272,6 +273,32 @@ export class GroupController {
 
   terminalsIn(target: GroupTarget): TerminalView[] {
     return this.terminals().filter((view) => view.groupId === target);
+  }
+
+  /** The other tabs in a group (notes, mostly: opened from its terminals or
+   *  inbox card, or moved there), in workspace order. Its linked note is
+   *  left out when given, since the sidebar shows that one in the header;
+   *  Split Diff tabs are too, since they follow their change. */
+  tabsIn(groupId: string, except?: string | null): WorkspaceLeaf[] {
+    const leaves: WorkspaceLeaf[] = [];
+    this.plugin.app.workspace.iterateRootLeaves((leaf) => {
+      const id = (leaf as WorkspaceLeaf & { id?: string }).id;
+      const type = leaf.view.getViewType();
+      if (!id || type === TERMINUS_VIEW_TYPE || type === DIFF_SPLIT_VIEW_TYPE) return;
+      if (this.store.tabGroup(id) !== groupId) return;
+      const file = (leaf.getViewState().state as { file?: unknown } | undefined)?.file;
+      if (except && file === except) return;
+      leaves.push(leaf);
+    });
+    return leaves;
+  }
+
+  /** Brings one of a group's tabs forward, switching to its group. */
+  async showTab(leaf: WorkspaceLeaf): Promise<void> {
+    const groupId = this.tabs.groupOf(leaf);
+    if (groupId && groupId !== this.store.activeGroupId) this.store.setActive(groupId);
+    await this.plugin.app.workspace.revealLeaf(leaf);
+    this.plugin.app.workspace.setActiveLeaf(leaf, { focus: true });
   }
 
   /** Obsidian defers loading background tabs until they're shown, and a

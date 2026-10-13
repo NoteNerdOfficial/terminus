@@ -19284,7 +19284,7 @@ async function runBulkAction(ctx, accepted, changes, action, scopeLabel) {
     new import_obsidian16.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage2(err)}`);
   }
 }
-function renderChangeRow(ctx, list, change, stats) {
+function renderChangeRow(ctx, list, change, stats, opts = {}) {
   const row = list.createDiv({ cls: "terminus-pending-row" });
   const summary = row.createDiv({ cls: "terminus-pending-row-summary" });
   const inbox = ctx.variant === "inbox";
@@ -19311,6 +19311,11 @@ function renderChangeRow(ctx, list, change, stats) {
     (0, import_obsidian16.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), "alert-triangle");
     el2.createSpan({ text });
   };
+  if (inbox && opts.alsoEditedBy && opts.alsoEditedBy.length > 0) {
+    const el2 = info.createDiv({ cls: "terminus-pending-coeditors" });
+    (0, import_obsidian16.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), "users");
+    el2.createSpan({ text: `Also edited by ${opts.alsoEditedBy.join(", ")}` });
+  }
   const collision = collisionLabel(change);
   if (collision)
     warning("terminus-collision-warning", collision);
@@ -19975,6 +19980,10 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.plugin = plugin;
     /** Per-view UI state, kept across re-renders. */
     this.collapsedCards = /* @__PURE__ */ new Set();
+    /** Finished cards dismissed (by token) until their session's next turn. */
+    this.dismissed = /* @__PURE__ */ new Set();
+    /** Cards whose "nothing to review" agents are unfolded. */
+    this.expandedQuiet = /* @__PURE__ */ new Set();
     this.finishedCollapsed = false;
     /** Set in onOpen: holds renders while a mouse button is down here. */
     this.guardedRender = () => this.renderNow();
@@ -20034,8 +20043,11 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
     this.renderSection(body, "Needs attention", inbox.needsAttention);
     this.renderSection(body, "Working", inbox.working);
-    if (inbox.finished.length > 0) {
-      const heading = this.renderSectionHeading(body, "Finished", inbox.finished.length, this.finishedCollapsed);
+    for (const card of [...inbox.needsAttention, ...inbox.working])
+      this.dismissed.delete(card.token);
+    const finished = inbox.finished.filter((card) => !(this.dismissed.has(card.token) && this.dismissible(card)));
+    if (finished.length > 0) {
+      const heading = this.renderSectionHeading(body, "Finished", finished.length, this.finishedCollapsed);
       const toggle = () => {
         this.finishedCollapsed = !this.finishedCollapsed;
         this.render();
@@ -20043,9 +20055,19 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       heading.addEventListener("click", toggle);
       makeActivatable(heading, toggle, () => void 0);
       heading.setAttr("aria-expanded", String(!this.finishedCollapsed));
+      const clearable = finished.filter((card) => this.dismissible(card));
+      if (clearable.length > 0) {
+        const clear = heading.createEl("button", { cls: "terminus-inbox-clear", text: "Clear" });
+        (0, import_obsidian19.setTooltip)(clear, "Dismiss finished sessions with nothing left to review");
+        clear.addEventListener("click", (evt) => {
+          evt.stopPropagation();
+          this.dismiss(clearable);
+        });
+        clear.addEventListener("keydown", (evt) => evt.stopPropagation());
+      }
       if (!this.finishedCollapsed)
-        for (const card of inbox.finished)
-          this.renderCard(body, card);
+        for (const card of finished)
+          this.renderCard(body, card, true);
     }
     const history = this.plugin.pendingChangesStore.listHistory();
     if (history.length > 0)
@@ -20116,7 +20138,19 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     heading.createSpan({ cls: "terminus-inbox-count", text: String(count) });
     return heading;
   }
-  renderCard(body, card) {
+  /** A finished card can be dismissed once nothing on it is waiting on
+   *  you: no pending changes (Keep or Reject them) and no queued comments. */
+  dismissible(card) {
+    return card.changes.length === 0 && this.plugin.feedbackStore.listFor(card.token).length === 0;
+  }
+  dismiss(cards) {
+    for (const card of cards) {
+      this.dismissed.add(card.token);
+      this.plugin.agentSessionStore.seen(card.token);
+    }
+    this.render();
+  }
+  renderCard(body, card, inFinished = false) {
     var _a8, _b, _c2, _d, _e4, _f, _g;
     const terminal = this.plugin.findTerminalView(card.token);
     const firstChange = card.changes[0];
@@ -20194,26 +20228,11 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       }
     }
     const workEl = el2.createDiv({ cls: "terminus-inbox-card-body" });
-    if (card.leadChanges.length > 0 || card.subagents.length > 0) {
-      if (card.subagents.length > 0) {
-        this.renderAgent(workEl, {
-          mark: { kind: "lead", icon: "bot", label: "Lead session" },
-          name: "Lead",
-          description: "Main session",
-          details: [changeCount(card.leadChanges.length)],
-          changes: card.leadChanges
-        });
-      } else {
-        this.renderChangeList(workEl.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges);
-      }
-      for (const sub of card.subagents)
-        this.renderSubagent(workEl, sub);
-      if (card.hiddenSubagents > 0) {
-        workEl.createDiv({
-          cls: "terminus-inbox-more",
-          text: `${card.hiddenSubagents} earlier ${card.hiddenSubagents === 1 ? "subagent" : "subagents"} finished`
-        });
-      }
+    if (card.subagents.length === 0) {
+      if (card.leadChanges.length > 0)
+        this.renderChangeList(workEl.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges, card, null);
+    } else {
+      this.renderAgents(workEl, card);
     }
     this.renderFeedback(workEl, card.token, name);
     if (!workEl.hasChildNodes())
@@ -20230,6 +20249,10 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
         "click",
         () => void runBulkAction(this.rows, true, card.changes, () => this.plugin.pendingChangesStore.resolveAll(true, inCard), name)
       );
+    } else if (inFinished && this.dismissible(card)) {
+      const dismiss = foot.createEl("button", { cls: "terminus-btn-ghost", text: "Dismiss" });
+      (0, import_obsidian19.setTooltip)(dismiss, "Hide this card until the session's next turn");
+      dismiss.addEventListener("click", () => this.dismiss([card]));
     } else {
       foot.createSpan({ cls: "terminus-inbox-foot-note", text: "No pending changes" });
     }
@@ -20307,7 +20330,60 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
     return session.lastMessage === null ? null : plainPreview(session.lastMessage);
   }
-  renderSubagent(el2, sub) {
+  /**
+   * A card with subagents, as a list of agents, each with the files it
+   * changed hanging under it: first the agents that changed something (the
+   * lead too, when it did), then ones still running or that failed. Agents
+   * that finished with nothing pending fold into one line, so they don't
+   * sit between an agent and the next one's files.
+   */
+  renderAgents(el2, card) {
+    const needsRow = (sub) => {
+      var _a8, _b;
+      return sub.changes.length > 0 || ((_a8 = sub.run) == null ? void 0 : _a8.running) === true || ((_b = sub.run) == null ? void 0 : _b.outcome) === "failed";
+    };
+    const withChanges = card.subagents.filter((sub) => sub.changes.length > 0);
+    const busy = card.subagents.filter((sub) => sub.changes.length === 0 && needsRow(sub));
+    const quiet = card.subagents.filter((sub) => !needsRow(sub));
+    if (card.leadChanges.length > 0) {
+      this.renderAgent(el2, card, {
+        agentId: null,
+        mark: { kind: "lead", icon: "bot", label: "Lead session" },
+        name: "Lead",
+        secondary: "main session",
+        details: [],
+        changes: card.leadChanges
+      });
+    }
+    for (const sub of [...withChanges, ...busy])
+      this.renderSubagent(el2, card, sub, false);
+    const quietCount = quiet.length + card.hiddenSubagents;
+    if (quietCount === 0)
+      return;
+    const expanded = this.expandedQuiet.has(card.token);
+    const fold = el2.createDiv({ cls: "terminus-inbox-quiet" });
+    const toggle = fold.createDiv({ cls: "terminus-inbox-quiet-toggle" });
+    (0, import_obsidian19.setIcon)(toggle.createSpan({ cls: "terminus-inbox-chevron" }), expanded ? "chevron-down" : "chevron-right");
+    toggle.createSpan({ text: `${quietCount} ${quietCount === 1 ? "agent" : "agents"} with nothing to review` });
+    const flip = () => {
+      if (expanded)
+        this.expandedQuiet.delete(card.token);
+      else
+        this.expandedQuiet.add(card.token);
+      this.render();
+    };
+    toggle.addEventListener("click", flip);
+    makeActivatable(toggle, flip, () => void 0);
+    toggle.setAttr("aria-expanded", String(expanded));
+    if (!expanded)
+      return;
+    for (const sub of quiet)
+      this.renderSubagent(fold, card, sub, true);
+    if (card.hiddenSubagents > 0) {
+      fold.createDiv({ cls: "terminus-inbox-more", text: `and ${card.hiddenSubagents} earlier` });
+    }
+  }
+  renderSubagent(el2, card, sub, compact) {
     var _a8, _b, _c2, _d, _e4, _f, _g, _h;
     const running = (_b = (_a8 = sub.run) == null ? void 0 : _a8.running) != null ? _b : false;
     const details = [];
@@ -20315,51 +20391,66 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     if (time)
       details.push(time);
     const failed = ((_c2 = sub.run) == null ? void 0 : _c2.outcome) === "failed" && sub.run.error ? sub.run.error : null;
-    this.renderAgent(el2, {
+    const task = (_e4 = (_d = sub.run) == null ? void 0 : _d.description) != null ? _e4 : null;
+    this.renderAgent(el2, card, {
+      agentId: sub.agentId,
       mark: subagentMark(sub.run),
-      name: sub.agentType,
-      description: (_e4 = (_d = sub.run) == null ? void 0 : _d.description) != null ? _e4 : null,
-      details,
-      usage: (_g = (_f = sub.run) == null ? void 0 : _f.usage) != null ? _g : null,
+      name: task != null ? task : sub.agentType,
+      secondary: task ? sub.agentType : null,
+      details: compact ? [] : details,
+      usage: compact ? null : (_g = (_f = sub.run) == null ? void 0 : _f.usage) != null ? _g : null,
       changes: sub.changes,
       error: failed,
-      title: !failed && ((_h = sub.run) == null ? void 0 : _h.lastMessage) && !running ? sub.run.lastMessage : null
+      title: !failed && ((_h = sub.run) == null ? void 0 : _h.lastMessage) && !running ? sub.run.lastMessage : null,
+      compact
     });
   }
   /** One agent on a card -- the lead or a subagent -- always in the same
    *  shape: a status mark, its name and task, a line of details, then its
    *  changes indented underneath. */
-  renderAgent(el2, agent) {
+  renderAgent(el2, card, agent) {
     var _a8;
     const row = el2.createDiv({ cls: "terminus-inbox-agent" });
+    row.toggleClass("is-compact", agent.compact === true);
+    row.toggleClass("has-changes", agent.changes.length > 0);
     const line = row.createDiv({ cls: "terminus-inbox-agent-line" });
     const markEl = line.createSpan({ cls: `terminus-inbox-agent-mark is-${agent.mark.kind}`, attr: { "aria-label": agent.mark.label } });
     if (agent.mark.icon)
       (0, import_obsidian19.setIcon)(markEl, agent.mark.icon);
-    line.createSpan({ cls: "terminus-inbox-agent-name", text: agent.name });
-    if (agent.description)
-      line.createSpan({ cls: "terminus-inbox-agent-desc", text: agent.description, attr: { title: agent.description } });
-    const details = row.createDiv({ cls: "terminus-inbox-agent-details" });
-    for (const detail of agent.details)
-      details.createSpan({ text: detail });
-    if (agent.usage)
-      this.renderUsage(details, agent.usage, agent.usage);
-    if (agent.mark.kind !== "lead")
-      details.createSpan({ text: changeCount(agent.changes.length) });
+    line.createSpan({ cls: "terminus-inbox-agent-name", text: agent.name, attr: { title: agent.name } });
+    if (agent.changes.length > 1) {
+      const { added, removed } = sumStats(agent.changes);
+      const stats = line.createSpan({ cls: "terminus-inbox-agent-stats" });
+      stats.createSpan({ text: changeCount(agent.changes.length) });
+      stats.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
+      stats.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
+    }
+    const detailText = [...agent.secondary && !agent.compact ? [agent.secondary] : [], ...agent.details];
+    if (detailText.length > 0 || agent.usage) {
+      const details = row.createDiv({ cls: "terminus-inbox-agent-details" });
+      for (const detail of detailText)
+        details.createSpan({ text: detail });
+      if (agent.usage)
+        this.renderUsage(details, agent.usage, agent.usage);
+    }
     if (agent.error) {
       row.createDiv({ cls: "terminus-inbox-agent-error", text: (_a8 = agent.error.split("\n")[0]) != null ? _a8 : "", attr: { title: agent.error } });
     } else if (agent.title) {
       row.setAttr("title", agent.title);
     }
     if (agent.changes.length > 0)
-      this.renderChangeList(row.createDiv({ cls: "terminus-inbox-agent-changes" }), agent.changes);
+      this.renderChangeList(row.createDiv({ cls: "terminus-inbox-agent-changes" }), agent.changes, card, agent.agentId);
   }
-  renderChangeList(parent, changes) {
+  /** `owner` is the agent the rows sit under (null: the lead); a file that
+   *  other agents in this session also edited says which. */
+  renderChangeList(parent, changes, card, owner) {
     if (changes.length === 0)
       return;
     const list = parent.createDiv({ cls: "terminus-pending-list" });
-    for (const change of changes)
-      renderChangeRow(this.rows, list, change, computeDiffStats(change.diff));
+    for (const change of changes) {
+      const others = change.agents.filter((a) => a.token === card.token && a.agentId !== owner).map((a) => agentLabel(card, a.agentId, a.agentType));
+      renderChangeRow(this.rows, list, change, computeDiffStats(change.diff), { alsoEditedBy: others });
+    }
   }
 };
 var COST_TITLE = "Estimated from Terminus's built-in API price table, not a bill. On a Claude subscription, usage counts against your plan instead.";
@@ -20451,6 +20542,13 @@ function subagentTime(run) {
     return `Stopped after ${duration}`;
   return duration;
 }
+function agentLabel(card, agentId, agentType) {
+  var _a8, _b, _c2, _d;
+  if (!agentId)
+    return "Lead";
+  const run = (_a8 = card.session) == null ? void 0 : _a8.subagents.find((r) => r.agentId === agentId);
+  return (_d = (_c2 = (_b = run == null ? void 0 : run.description) != null ? _b : run == null ? void 0 : run.agentType) != null ? _c2 : agentType) != null ? _d : "a subagent";
+}
 function changeCount(n) {
   if (n === 0)
     return "no changes";
@@ -20524,6 +20622,8 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     this.selected = /* @__PURE__ */ new Set();
     /** The group whose name is being edited inline. */
     this.renamingGroupId = null;
+    /** Git branches read for groups with no Claude session, by folder. */
+    this.branchByFolder = /* @__PURE__ */ new Map();
     /** The terminal token or group id whose × is asking "Close anyway?". */
     this.confirmingClose = null;
     /** Emptying the view blurs a focused rename field, whose handler renders
@@ -20557,6 +20657,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     this.registerEvent(this.app.workspace.on("layout-change", this.render));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshFocus()));
     this.focusedToken = (_b = (_a8 = this.app.workspace.getActiveViewOfType(TerminalView)) == null ? void 0 : _a8.hookToken) != null ? _b : null;
+    this.registerInterval(window.setInterval(() => this.refreshAges(), 6e4));
     this.render();
   }
   async onClose() {
@@ -20570,12 +20671,22 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     this.render();
   }
   refreshFocus() {
+    this.refreshTabFocus();
     const view = this.app.workspace.getActiveViewOfType(TerminalView);
     if (!view || view.hookToken === this.focusedToken)
       return;
     this.focusedToken = view.hookToken;
-    this.contentEl.querySelectorAll(".terminus-sidebar-terminal").forEach((row) => {
+    this.contentEl.querySelectorAll(".terminus-sidebar-terminal:not(.terminus-sidebar-tab)").forEach((row) => {
       row.toggleClass("is-focused", row.dataset.token === this.focusedToken);
+    });
+  }
+  /** A group's note rows: the one whose tab is in front is bold, as the
+   *  focused terminal is. */
+  refreshTabFocus() {
+    const leaf = this.app.workspace.getMostRecentLeaf();
+    const activeId = leaf == null ? void 0 : leaf.id;
+    this.contentEl.querySelectorAll(".terminus-sidebar-tab").forEach((row) => {
+      row.toggleClass("is-focused", !!activeId && row.dataset.leaf === activeId);
     });
   }
   renderSafely() {
@@ -20586,6 +20697,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     this.rendering = true;
     try {
       this.renderNow();
+      this.refreshTabFocus();
     } finally {
       this.rendering = false;
     }
@@ -20677,6 +20789,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     );
   }
   renderGroup(list, group, members) {
+    var _a8;
     const active = this.plugin.groupStore.activeGroupId === group.id;
     const section = list.createDiv({ cls: "terminus-sidebar-group terminus-sidebar-group-card" });
     section.style.setProperty("--terminus-group-color", group.color);
@@ -20699,12 +20812,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     }
     const needsAttention = members.some((t) => this.status(t) === "needs-attention");
     section.toggleClass("is-needs-attention", needsAttention && !active);
-    if (needsAttention && !active)
-      row.createSpan({ cls: "terminus-sidebar-attention", attr: { "aria-label": "A session here needs attention" } });
-    row.createSpan({
-      cls: "terminus-sidebar-group-state",
-      text: members.length === 0 ? "No terminals" : active ? "Showing" : `${members.length} in background`
-    });
+    this.renderGroupSummary(row, members, active);
     const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
     iconButton(actions, "plus", "New terminal in this group", () => void this.plugin.groups.newTerminal(group.id));
     this.renderCloseButton(actions, group.id, members, "Close this group and its terminals", () => this.plugin.groups.closeGroup(group.id), row);
@@ -20713,7 +20821,11 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     if (group.collapsed)
       return;
     const note = noteFile(this.plugin, group.note);
-    const meta = group.folder || note ? section.createDiv({ cls: "terminus-sidebar-group-meta" }) : null;
+    const branch = this.groupBranch(group, members);
+    const meta = branch || group.folder || note ? section.createDiv({ cls: "terminus-sidebar-group-meta" }) : null;
+    if (meta && branch) {
+      (0, import_obsidian21.setTooltip)(iconLabel(meta, "git-branch", branch, "terminus-sidebar-branch"), "Git branch");
+    }
     if (meta && group.folder) {
       const folder = iconLabel(meta, "folder", this.folderLabel(group.folder), "terminus-sidebar-folder");
       (0, import_obsidian21.setTooltip)(folder, "New terminals in this group start here");
@@ -20732,11 +20844,14 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
         meta.createSpan({ cls: `terminus-sidebar-note-status is-${isNoteStatus(status) ? status : "other"}`, text: status });
       this.renderNoteSuggestion(section, group.id, note);
     }
-    if (members.length === 0)
+    const tabs = this.plugin.groups.tabsIn(group.id, (_a8 = note == null ? void 0 : note.path) != null ? _a8 : null);
+    if (members.length === 0 && tabs.length === 0)
       return;
     const body = section.createDiv({ cls: "terminus-sidebar-group-terminals" });
     for (const view of members)
       this.renderTerminal(body, view);
+    for (const leaf of tabs)
+      this.renderTab(body, leaf, group);
   }
   /** The chevron that folds a group.
    *  It's its own control, so a click on it folds without also selecting
@@ -20944,6 +21059,44 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       this.plugin.groups.moveTerminals(views, target);
     });
   }
+  /** A note (or other tab) open in a group: click to bring it forward;
+   *  right-click to make it the group's note or move it; × closes it. */
+  renderTab(body, leaf, group) {
+    const row = body.createDiv({ cls: "terminus-sidebar-terminal terminus-sidebar-tab" });
+    const leafId = leaf.id;
+    if (leafId)
+      row.dataset.leaf = leafId;
+    const open = () => void this.plugin.groups.showTab(leaf);
+    const file = this.tabFile(leaf);
+    const menu = (evt) => {
+      evt.preventDefault();
+      const m2 = new import_obsidian21.Menu();
+      if ((file == null ? void 0 : file.extension) === "md") {
+        m2.addItem(
+          (item) => item.setTitle("Make this the group's note").setIcon("file-text").onClick(() => void linkNote(this.plugin, group.id, file))
+        );
+        m2.addSeparator();
+      }
+      addMoveItems(m2, this.plugin, { tab: leaf });
+      m2.addItem((item) => item.setTitle("Close tab").setIcon("x").onClick(() => leaf.detach()));
+      m2.showAtMouseEvent(evt);
+    };
+    makeActivatable(row, open, menu);
+    (0, import_obsidian21.setIcon)(row.createSpan({ cls: "terminus-sidebar-tab-icon" }), leaf.view.getIcon() || "file");
+    row.createSpan({ cls: "terminus-sidebar-terminal-name", text: leaf.getDisplayText() });
+    if (file)
+      (0, import_obsidian21.setTooltip)(row, file.path);
+    const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
+    iconButton(actions, "x", "Close tab", () => leaf.detach());
+    row.addEventListener("click", open);
+    row.addEventListener("contextmenu", menu);
+  }
+  tabFile(leaf) {
+    var _a8;
+    const path = (_a8 = leaf.getViewState().state) == null ? void 0 : _a8.file;
+    const file = typeof path === "string" ? this.app.vault.getAbstractFileByPath(path) : null;
+    return file instanceof import_obsidian21.TFile ? file : null;
+  }
   showMoveMenu(evt, views) {
     const menu = new import_obsidian21.Menu();
     addMoveItems(menu, this.plugin, { terminals: views }, () => this.selected.clear());
@@ -20964,6 +21117,88 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       }
     });
   }
+  /**
+   * What's happening in a group, at the end of its row, so a group says
+   * whether it needs you even folded: "Needs attention", "1 working",
+   * "4 pending"; with none of those, "Showing" for the group on screen,
+   * else when its last turn finished ("finished 5m ago").
+   */
+  renderGroupSummary(row, members, active) {
+    const el2 = row.createSpan({ cls: "terminus-sidebar-group-state" });
+    if (members.length === 0) {
+      el2.setText("No terminals");
+      return;
+    }
+    const sessions = members.map((t) => this.plugin.agentSessionStore.get(t.hookToken)).filter((s15) => s15 == null ? void 0 : s15.running);
+    const tokens = new Set(members.map((t) => t.hookToken));
+    const pending = this.plugin.pendingChangesStore.list().filter((c) => {
+      var _a8, _b;
+      return tokens.has((_b = (_a8 = c.contributors[0]) == null ? void 0 : _a8.token) != null ? _b : "");
+    }).length;
+    const needs = sessions.some((s15) => (s15 == null ? void 0 : s15.status) === "needs-attention");
+    const working = sessions.filter((s15) => (s15 == null ? void 0 : s15.status) === "working").length;
+    const parts = [];
+    if (needs)
+      parts.push(el2.createSpan({ cls: "is-needs-attention", text: "Needs attention" }));
+    if (working > 0)
+      parts.push(el2.createSpan({ cls: "is-working", text: `${working} working` }));
+    if (pending > 0)
+      parts.push(el2.createSpan({ text: `${pending} pending` }));
+    if (parts.length > 0) {
+      parts.slice(1).forEach((part) => part.before(" \xB7 "));
+      return;
+    }
+    if (active) {
+      el2.setText("Showing");
+      el2.addClass("is-showing");
+      return;
+    }
+    const finishedAt = Math.max(0, ...sessions.map((s15) => {
+      var _a8;
+      return (_a8 = s15 == null ? void 0 : s15.lastTurnEndedAt) != null ? _a8 : 0;
+    }));
+    if (finishedAt > 0) {
+      el2.addClass("terminus-sidebar-ago");
+      el2.dataset.at = String(finishedAt);
+      el2.setText(`finished ${timeAgo(finishedAt)}`);
+      el2.toggleClass("is-unread", sessions.some((s15) => (s15 == null ? void 0 : s15.status) === "finished-unread"));
+    }
+  }
+  /** "finished 5m ago" ages in place, once a minute, without a re-render
+   *  (which would reset a rename being typed). */
+  refreshAges() {
+    this.contentEl.querySelectorAll(".terminus-sidebar-ago").forEach((el2) => {
+      el2.setText(`finished ${timeAgo(Number(el2.dataset.at))}`);
+    });
+  }
+  /** The group's git branch: its Claude sessions' (read at SessionStart
+   *  and on Stop), else read for its folder (the vault's, by default) and
+   *  kept for a minute. Several branches show as "main +1". */
+  groupBranch(group, members) {
+    var _a8, _b, _c2;
+    if (!this.plugin.settings.multiAgent.showGitBranch)
+      return null;
+    const fromSessions = [
+      ...new Set(members.map((t) => {
+        var _a9;
+        return (_a9 = this.plugin.agentSessionStore.get(t.hookToken)) == null ? void 0 : _a9.branch;
+      }).filter((b3) => !!b3))
+    ];
+    if (fromSessions.length > 0)
+      return fromSessions.length === 1 ? fromSessions[0] : `${fromSessions[0]} +${fromSessions.length - 1}`;
+    const folder = (_a8 = group.folder) != null ? _a8 : this.plugin.getVaultBasePath();
+    const cached = this.branchByFolder.get(folder);
+    if (!cached || Date.now() - cached.at > BRANCH_TTL_MS) {
+      this.branchByFolder.set(folder, { branch: (_b = cached == null ? void 0 : cached.branch) != null ? _b : null, at: Date.now() });
+      void getGitBranch(folder).then((branch) => {
+        var _a9;
+        this.branchByFolder.set(folder, { branch, at: Date.now() });
+        if (branch !== ((_a9 = cached == null ? void 0 : cached.branch) != null ? _a9 : null))
+          this.render();
+      });
+    }
+    return (_c2 = cached == null ? void 0 : cached.branch) != null ? _c2 : null;
+  }
   status(view) {
     const session = this.plugin.agentSessionStore.get(view.hookToken);
     if (!(session == null ? void 0 : session.running))
@@ -20977,6 +21212,18 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     return relative.startsWith("..") ? folder : relative || (0, import_terminus_node_bridge24.pathBasename)(folder);
   }
 };
+var BRANCH_TTL_MS = 6e4;
+function timeAgo(at3) {
+  const minutes = Math.floor((Date.now() - at3) / 6e4);
+  if (minutes < 1)
+    return "just now";
+  if (minutes < 60)
+    return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24)
+    return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 var STATUS_LABELS = {
   working: "Working",
   "needs-attention": "Needs attention",
@@ -21520,6 +21767,35 @@ var GroupController = class {
   terminalsIn(target) {
     return this.terminals().filter((view) => view.groupId === target);
   }
+  /** The other tabs in a group (notes, mostly: opened from its terminals or
+   *  inbox card, or moved there), in workspace order. Its linked note is
+   *  left out when given, since the sidebar shows that one in the header;
+   *  Split Diff tabs are too, since they follow their change. */
+  tabsIn(groupId, except) {
+    const leaves = [];
+    this.plugin.app.workspace.iterateRootLeaves((leaf) => {
+      var _a8;
+      const id = leaf.id;
+      const type = leaf.view.getViewType();
+      if (!id || type === TERMINUS_VIEW_TYPE || type === DIFF_SPLIT_VIEW_TYPE)
+        return;
+      if (this.store.tabGroup(id) !== groupId)
+        return;
+      const file = (_a8 = leaf.getViewState().state) == null ? void 0 : _a8.file;
+      if (except && file === except)
+        return;
+      leaves.push(leaf);
+    });
+    return leaves;
+  }
+  /** Brings one of a group's tabs forward, switching to its group. */
+  async showTab(leaf) {
+    const groupId = this.tabs.groupOf(leaf);
+    if (groupId && groupId !== this.store.activeGroupId)
+      this.store.setActive(groupId);
+    await this.plugin.app.workspace.revealLeaf(leaf);
+    this.plugin.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
   /** Obsidian defers loading background tabs until they're shown, and a
    *  deferred terminal has no shell and no group yet. Groups are about
    *  terminals running in the background, so all of them are loaded. */
@@ -22032,6 +22308,7 @@ var AgentSessionStore = class extends TypedEmitter {
       currentFile: null,
       lastMessage: lastMessage === void 0 ? s15.lastMessage : truncate(lastMessage),
       lastTurnMs: s15.turnStartedAt === null ? s15.lastTurnMs : at3 - s15.turnStartedAt,
+      lastTurnEndedAt: at3,
       turnStartedAt: null
     });
   }
@@ -22161,6 +22438,7 @@ var AgentSessionStore = class extends TypedEmitter {
       lastTurnFailed: false,
       turnStartedAt: null,
       lastTurnMs: null,
+      lastTurnEndedAt: null,
       currentFile: null,
       transcriptPath: null,
       cwd: null,

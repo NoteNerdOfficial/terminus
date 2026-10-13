@@ -6,8 +6,9 @@ import { iconButton, iconLabel, makeActivatable } from "./uiHelpers";
 import type { TerminalGroup } from "../state/GroupStore";
 import type { GroupTarget } from "../groups/GroupController";
 import { refreshTabPendingDot } from "../terminal/tabHeaderColor";
+import { getGitBranch } from "../git/gitBranch";
 import { COMMUNITY_PLUGIN_URL } from "../pluginVersion";
-import { isNoteStatus, noteFile, noteStatus, openGroupNote, setNoteStatus } from "../groups/groupNotes";
+import { isNoteStatus, linkNote, noteFile, noteStatus, openGroupNote, setNoteStatus } from "../groups/groupNotes";
 import { addMoveItems, showGroupMenu } from "../groups/groupMenus";
 import type TerminusPlugin from "../main";
 
@@ -26,6 +27,8 @@ export class TerminusSidebarView extends ItemView {
   private selected = new Set<string>();
   /** The group whose name is being edited inline. */
   private renamingGroupId: string | null = null;
+  /** Git branches read for groups with no Claude session, by folder. */
+  private branchByFolder = new Map<string, { branch: string | null; at: number }>();
   /** The terminal token or group id whose × is asking "Close anyway?". */
   private confirmingClose: string | null = null;
   /** Emptying the view blurs a focused rename field, whose handler renders
@@ -66,6 +69,7 @@ export class TerminusSidebarView extends ItemView {
     // active, losing that click.
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshFocus()));
     this.focusedToken = this.app.workspace.getActiveViewOfType(TerminalView)?.hookToken ?? null;
+    this.registerInterval(window.setInterval(() => this.refreshAges(), 60_000));
     this.render();
   }
 
@@ -85,11 +89,22 @@ export class TerminusSidebarView extends ItemView {
   render = (): void => this.guardedRender();
 
   private refreshFocus(): void {
+    this.refreshTabFocus();
     const view = this.app.workspace.getActiveViewOfType(TerminalView);
     if (!view || view.hookToken === this.focusedToken) return;
     this.focusedToken = view.hookToken;
-    this.contentEl.querySelectorAll<HTMLElement>(".terminus-sidebar-terminal").forEach((row) => {
+    this.contentEl.querySelectorAll<HTMLElement>(".terminus-sidebar-terminal:not(.terminus-sidebar-tab)").forEach((row) => {
       row.toggleClass("is-focused", row.dataset.token === this.focusedToken);
+    });
+  }
+
+  /** A group's note rows: the one whose tab is in front is bold, as the
+   *  focused terminal is. */
+  private refreshTabFocus(): void {
+    const leaf: (WorkspaceLeaf & { id?: string }) | null = this.app.workspace.getMostRecentLeaf();
+    const activeId = leaf?.id;
+    this.contentEl.querySelectorAll<HTMLElement>(".terminus-sidebar-tab").forEach((row) => {
+      row.toggleClass("is-focused", !!activeId && row.dataset.leaf === activeId);
     });
   }
 
@@ -101,6 +116,7 @@ export class TerminusSidebarView extends ItemView {
     this.rendering = true;
     try {
       this.renderNow();
+      this.refreshTabFocus();
     } finally {
       this.rendering = false;
     }
@@ -229,11 +245,7 @@ export class TerminusSidebarView extends ItemView {
     }
     const needsAttention = members.some((t) => this.status(t) === "needs-attention");
     section.toggleClass("is-needs-attention", needsAttention && !active);
-    if (needsAttention && !active) row.createSpan({ cls: "terminus-sidebar-attention", attr: { "aria-label": "A session here needs attention" } });
-    row.createSpan({
-      cls: "terminus-sidebar-group-state",
-      text: members.length === 0 ? "No terminals" : active ? "Showing" : `${members.length} in background`,
-    });
+    this.renderGroupSummary(row, members, active);
 
     const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
     iconButton(actions, "plus", "New terminal in this group", () => void this.plugin.groups.newTerminal(group.id));
@@ -245,10 +257,14 @@ export class TerminusSidebarView extends ItemView {
     // Folded: just the row (and a pending close question).
     if (group.collapsed) return;
 
-    // Only what's particular to this group: its own folder (the vault root
-    // is every group's default) and its linked note.
+    // Where the group works: its git branch, its own folder (the vault root
+    // is every group's default, so it's left out) and its linked note.
     const note = noteFile(this.plugin, group.note);
-    const meta = group.folder || note ? section.createDiv({ cls: "terminus-sidebar-group-meta" }) : null;
+    const branch = this.groupBranch(group, members);
+    const meta = branch || group.folder || note ? section.createDiv({ cls: "terminus-sidebar-group-meta" }) : null;
+    if (meta && branch) {
+      setTooltip(iconLabel(meta, "git-branch", branch, "terminus-sidebar-branch"), "Git branch");
+    }
     if (meta && group.folder) {
       const folder = iconLabel(meta, "folder", this.folderLabel(group.folder), "terminus-sidebar-folder");
       setTooltip(folder, "New terminals in this group start here");
@@ -267,11 +283,14 @@ export class TerminusSidebarView extends ItemView {
       this.renderNoteSuggestion(section, group.id, note);
     }
 
-    // The terminals sit in the card's body, below a rule, apart from the
-    // group's own header.
-    if (members.length === 0) return;
+    // The card's body, below a rule: its terminals, then the notes open in
+    // it (opened from its terminals or card, or moved there), so whatever
+    // the group is working on is listed with it, not only the linked note.
+    const tabs = this.plugin.groups.tabsIn(group.id, note?.path ?? null);
+    if (members.length === 0 && tabs.length === 0) return;
     const body = section.createDiv({ cls: "terminus-sidebar-group-terminals" });
     for (const view of members) this.renderTerminal(body, view);
+    for (const leaf of tabs) this.renderTab(body, leaf, group);
   }
 
   /** The chevron that folds a group.
@@ -475,6 +494,46 @@ export class TerminusSidebarView extends ItemView {
     });
   }
 
+  /** A note (or other tab) open in a group: click to bring it forward;
+   *  right-click to make it the group's note or move it; × closes it. */
+  private renderTab(body: HTMLElement, leaf: WorkspaceLeaf, group: TerminalGroup): void {
+    const row = body.createDiv({ cls: "terminus-sidebar-terminal terminus-sidebar-tab" });
+    const leafId = (leaf as WorkspaceLeaf & { id?: string }).id;
+    if (leafId) row.dataset.leaf = leafId;
+    const open = () => void this.plugin.groups.showTab(leaf);
+    const file = this.tabFile(leaf);
+    const menu = (evt: MouseEvent) => {
+      evt.preventDefault();
+      const m = new Menu();
+      if (file?.extension === "md") {
+        m.addItem((item) =>
+          item
+            .setTitle("Make this the group's note")
+            .setIcon("file-text")
+            .onClick(() => void linkNote(this.plugin, group.id, file))
+        );
+        m.addSeparator();
+      }
+      addMoveItems(m, this.plugin, { tab: leaf });
+      m.addItem((item) => item.setTitle("Close tab").setIcon("x").onClick(() => leaf.detach()));
+      m.showAtMouseEvent(evt);
+    };
+    makeActivatable(row, open, menu);
+    setIcon(row.createSpan({ cls: "terminus-sidebar-tab-icon" }), leaf.view.getIcon() || "file");
+    row.createSpan({ cls: "terminus-sidebar-terminal-name", text: leaf.getDisplayText() });
+    if (file) setTooltip(row, file.path);
+    const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
+    iconButton(actions, "x", "Close tab", () => leaf.detach());
+    row.addEventListener("click", open);
+    row.addEventListener("contextmenu", menu);
+  }
+
+  private tabFile(leaf: WorkspaceLeaf): TFile | null {
+    const path = (leaf.getViewState().state as { file?: unknown } | undefined)?.file;
+    const file = typeof path === "string" ? this.app.vault.getAbstractFileByPath(path) : null;
+    return file instanceof TFile ? file : null;
+  }
+
   private showMoveMenu(evt: MouseEvent, views: TerminalView[]): void {
     const menu = new Menu();
     addMoveItems(menu, this.plugin, { terminals: views }, () => this.selected.clear());
@@ -497,6 +556,75 @@ export class TerminusSidebarView extends ItemView {
     });
   }
 
+  /**
+   * What's happening in a group, at the end of its row, so a group says
+   * whether it needs you even folded: "Needs attention", "1 working",
+   * "4 pending"; with none of those, "Showing" for the group on screen,
+   * else when its last turn finished ("finished 5m ago").
+   */
+  private renderGroupSummary(row: HTMLElement, members: TerminalView[], active: boolean): void {
+    const el = row.createSpan({ cls: "terminus-sidebar-group-state" });
+    if (members.length === 0) {
+      el.setText("No terminals");
+      return;
+    }
+    const sessions = members.map((t) => this.plugin.agentSessionStore.get(t.hookToken)).filter((s) => s?.running);
+    const tokens = new Set(members.map((t) => t.hookToken));
+    const pending = this.plugin.pendingChangesStore.list().filter((c) => tokens.has(c.contributors[0]?.token ?? "")).length;
+    const needs = sessions.some((s) => s?.status === "needs-attention");
+    const working = sessions.filter((s) => s?.status === "working").length;
+    const parts: HTMLElement[] = [];
+    if (needs) parts.push(el.createSpan({ cls: "is-needs-attention", text: "Needs attention" }));
+    if (working > 0) parts.push(el.createSpan({ cls: "is-working", text: `${working} working` }));
+    if (pending > 0) parts.push(el.createSpan({ text: `${pending} pending` }));
+    if (parts.length > 0) {
+      // " · " between them, as separate nodes so each keeps its colour.
+      parts.slice(1).forEach((part) => part.before(" · "));
+      return;
+    }
+    if (active) {
+      el.setText("Showing");
+      el.addClass("is-showing");
+      return;
+    }
+    const finishedAt = Math.max(0, ...sessions.map((s) => s?.lastTurnEndedAt ?? 0));
+    if (finishedAt > 0) {
+      el.addClass("terminus-sidebar-ago");
+      el.dataset.at = String(finishedAt);
+      el.setText(`finished ${timeAgo(finishedAt)}`);
+      el.toggleClass("is-unread", sessions.some((s) => s?.status === "finished-unread"));
+    }
+  }
+
+  /** "finished 5m ago" ages in place, once a minute, without a re-render
+   *  (which would reset a rename being typed). */
+  private refreshAges(): void {
+    this.contentEl.querySelectorAll<HTMLElement>(".terminus-sidebar-ago").forEach((el) => {
+      el.setText(`finished ${timeAgo(Number(el.dataset.at))}`);
+    });
+  }
+
+  /** The group's git branch: its Claude sessions' (read at SessionStart
+   *  and on Stop), else read for its folder (the vault's, by default) and
+   *  kept for a minute. Several branches show as "main +1". */
+  private groupBranch(group: TerminalGroup, members: TerminalView[]): string | null {
+    if (!this.plugin.settings.multiAgent.showGitBranch) return null;
+    const fromSessions = [
+      ...new Set(members.map((t) => this.plugin.agentSessionStore.get(t.hookToken)?.branch).filter((b): b is string => !!b)),
+    ];
+    if (fromSessions.length > 0) return fromSessions.length === 1 ? fromSessions[0]! : `${fromSessions[0]} +${fromSessions.length - 1}`;
+    const folder = group.folder ?? this.plugin.getVaultBasePath();
+    const cached = this.branchByFolder.get(folder);
+    if (!cached || Date.now() - cached.at > BRANCH_TTL_MS) {
+      this.branchByFolder.set(folder, { branch: cached?.branch ?? null, at: Date.now() });
+      void getGitBranch(folder).then((branch) => {
+        this.branchByFolder.set(folder, { branch, at: Date.now() });
+        if (branch !== (cached?.branch ?? null)) this.render();
+      });
+    }
+    return cached?.branch ?? null;
+  }
+
   private status(view: TerminalView): SidebarStatus | null {
     const session = this.plugin.agentSessionStore.get(view.hookToken);
     if (!session?.running) return null;
@@ -511,6 +639,18 @@ export class TerminusSidebarView extends ItemView {
 }
 
 type SidebarStatus = "working" | "needs-attention" | "finished-unread" | "idle";
+
+const BRANCH_TTL_MS = 60_000;
+
+/** "just now", "5m ago", "2h ago", "3d ago". */
+function timeAgo(at: number): string {
+  const minutes = Math.floor((Date.now() - at) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 const STATUS_LABELS: Record<SidebarStatus, string> = {
   working: "Working",
