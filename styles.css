@@ -1974,6 +1974,28 @@
   box-shadow: inset 0 0 0 1.5px var(--text-faint);
 }
 
+/* "Tell this session…": a box on a running session's card. */
+.terminus-inbox-steer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.terminus-inbox-steer-input {
+  width: 100%;
+  resize: vertical;
+  font-size: var(--font-ui-small);
+}
+
+.terminus-inbox-steer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 /* Tasks sent from a session to new terminals, on its card. */
 .terminus-inbox-delegations {
   display: flex;

@@ -1,4 +1,4 @@
-import { ItemView, Menu, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Platform, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
 import { pathRelative } from "terminus-node-bridge";
 import type { AgentSession, SubagentRun } from "../state/AgentSessionStore";
 import { addUsage, totalTokens, UsageTotals } from "../claude/transcriptUsage";
@@ -25,6 +25,8 @@ export const AGENT_INBOX_VIEW_TYPE = "terminus-agent-inbox";
 export class AgentInboxView extends ItemView {
   /** The terminal in front, whose card is marked; only that changes on a focus event. */
   private focusedToken: string | null = null;
+  /** A render was asked for while a guidance box had focus (see renderNow). */
+  private renderSkipped = false;
   /** Set in onOpen: holds renders while a mouse button is down here. */
   private guardedRender: () => void = () => this.renderNow();
 
@@ -118,6 +120,13 @@ export class AgentInboxView extends ItemView {
 
   private renderNow(): void {
     const container = this.contentEl;
+    // Rebuilding the view under a box someone is typing in would take its
+    // focus and caret; the render waits until the box loses focus.
+    const active = document.activeElement;
+    if (active instanceof HTMLTextAreaElement && active.hasClass("terminus-inbox-steer-input") && container.contains(active)) {
+      this.renderSkipped = true;
+      return;
+    }
     // Emptying the view resets its scroll; the stores re-render it often
     // while Claude works, so put the user back where they were.
     const scrollTop = container.scrollTop;
@@ -513,6 +522,7 @@ export class AgentInboxView extends ItemView {
 
     this.renderFeedback(workEl, card.token, name);
     this.renderDelegations(workEl, card.token, name);
+    this.renderSteer(workEl, card, name);
     if (!workEl.hasChildNodes()) workEl.remove();
 
     const foot = el.createDiv({ cls: "terminus-inbox-card-foot" });
@@ -538,6 +548,66 @@ export class AgentInboxView extends ItemView {
         void this.plugin.focusTerminal(card.token)
       );
     }
+  }
+
+  /**
+   * "Tell this session…": a box on a running session's card, to steer it.
+   * "Add to input" types the text into the session's input line for the
+   * user to send; "Send now" types it and presses Enter. Claude queues text
+   * entered mid-turn and folds it into the running turn, so this works while
+   * it works. Cmd/Ctrl+Enter is Send now. The draft is kept in the plugin's
+   * inbox state, so folding the card or re-rendering doesn't lose it.
+   */
+  private renderSteer(el: HTMLElement, card: InboxCard, name: string): void {
+    const token = card.token;
+    if (card.ended || !this.plugin.agentSessionStore.get(token)?.running || !this.plugin.findTerminalView(token)) return;
+    const readiness = this.plugin.steerReadiness(token);
+    const section = el.createDiv({ cls: "terminus-inbox-steer" });
+    const input = section.createEl("textarea", {
+      cls: "terminus-inbox-steer-input",
+      attr: { rows: "2", placeholder: `Tell ${name}…  (${Platform.isMacOS ? "⌘" : "Ctrl"}↵ sends now)` },
+    });
+    input.value = this.ui.drafts.get(token) ?? "";
+    input.addEventListener("input", () => {
+      if (input.value) this.ui.drafts.set(token, input.value);
+      else this.ui.drafts.delete(token);
+    });
+    input.addEventListener("blur", () => {
+      if (!this.renderSkipped) return;
+      this.renderSkipped = false;
+      this.render();
+    });
+
+    const actions = section.createDiv({ cls: "terminus-inbox-steer-actions" });
+    const add = actions.createEl("button", { cls: "terminus-btn-ghost", text: "Add to input" });
+    setTooltip(add, "Types it into the session's input line and takes you to the terminal; you press Enter");
+    const send = actions.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Send now" });
+    setTooltip(send, "Types it into the session's input line and presses Enter");
+    if (!readiness.ready) {
+      add.disabled = true;
+      send.disabled = true;
+      actions.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
+    }
+    const deliver = async (submit: boolean) => {
+      const text = input.value.trim();
+      if (!text) {
+        input.focus();
+        return;
+      }
+      if (!(await this.plugin.sendGuidance(token, text, submit))) return;
+      this.ui.drafts.delete(token);
+      input.value = "";
+      input.blur();
+      this.render();
+    };
+    add.addEventListener("click", () => void deliver(false));
+    send.addEventListener("click", () => void deliver(true));
+    input.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" && (evt.metaKey || evt.ctrlKey)) {
+        evt.preventDefault();
+        if (readiness.ready) void deliver(true);
+      }
+    });
   }
 
   /**

@@ -21,6 +21,9 @@ export class InboxUiState {
   /** A card to bring into view on the next render: set by the sidebar's
    *  "to review" counts, consumed by the inbox. */
   revealToken: string | null = null;
+  /** What's typed in each session's "Tell this session…" box, by token, so a
+   *  re-render (or a fold) doesn't lose it. */
+  readonly drafts = new Map<string, string>();
   /** The tokens the last dismissal hid, for Undo. */
   lastDismissed: string[] = [];
   finishedCollapsed = false;

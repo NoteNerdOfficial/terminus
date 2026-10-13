@@ -704,6 +704,14 @@ export class TerminalView extends ItemView {
     return true;
   }
 
+  /** Presses Enter in the terminal: submits what's in Claude's input line.
+   *  Only for something the user asked to send (the inbox's "Send now"). */
+  submitInput(): boolean {
+    if (!this.pty) return false;
+    this.pty.write("\r");
+    return true;
+  }
+
   /** Types the launch prompt once Claude's session has started (its
    *  SessionStart hook, Multi-agent only). The input box takes text right
    *  away (checked against 2.1.296); the short wait is a margin. Never on a

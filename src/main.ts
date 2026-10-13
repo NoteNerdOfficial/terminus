@@ -774,6 +774,44 @@ export default class TerminusPlugin extends Plugin {
     new Notice(`Terminus: result added to ${parent.getDisplayText()} — press Enter to send it`);
   }
 
+  /**
+   * Whether guidance can be typed into a session now. Unlike review
+   * feedback it is allowed mid-turn: Claude queues what's entered then and
+   * folds it into the running turn, which is the point. It's refused while
+   * Claude waits on a prompt (permission or a question), where typed text
+   * could answer it.
+   */
+  steerReadiness(token: string): { ready: true } | { ready: false; reason: string } {
+    const session = this.agentSessionStore.get(token);
+    if (!session?.running || !this.findTerminalView(token)) return { ready: false, reason: "Session ended" };
+    if (session.status === "needs-attention" && session.needs !== "unread-turn") {
+      return { ready: false, reason: "Answer Claude's prompt first" };
+    }
+    return { ready: true };
+  }
+
+  /**
+   * "Tell this session…": types the text into the session's input line.
+   * `submit` is the user's explicit "Send now": Enter follows shortly after,
+   * so the TUI has taken the text first, and the terminal is left alone so
+   * several can be sent from the inbox. Otherwise the terminal is focused
+   * and the Enter is the user's. False when it couldn't be typed.
+   */
+  async sendGuidance(token: string, text: string, submit: boolean): Promise<boolean> {
+    const terminal = this.findTerminalView(token);
+    const message = text.trim();
+    if (!terminal || !message || !this.steerReadiness(token).ready) return false;
+    if (!terminal.typeIntoInput(message)) return false;
+    if (submit) {
+      window.setTimeout(() => terminal.submitInput(), 250);
+      new Notice(`Terminus: sent to ${terminal.getDisplayText()}`);
+    } else {
+      await this.focusTerminal(token);
+      new Notice(`Terminus: added to ${terminal.getDisplayText()} — press Enter to send it`);
+    }
+    return true;
+  }
+
   /** Types a session's queued feedback into its terminal, unsubmitted, and
    *  clears the queue: the text is the user's to edit or send from here. */
   async sendFeedback(token: string): Promise<void> {

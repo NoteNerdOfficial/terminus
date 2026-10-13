@@ -17785,6 +17785,14 @@ var TerminalView = class extends import_obsidian10.ItemView {
     this.pty.write(text.replace(/\r/g, ""));
     return true;
   }
+  /** Presses Enter in the terminal: submits what's in Claude's input line.
+   *  Only for something the user asked to send (the inbox's "Send now"). */
+  submitInput() {
+    if (!this.pty)
+      return false;
+    this.pty.write("\r");
+    return true;
+  }
   /** Types the launch prompt once Claude's session has started (its
    *  SessionStart hook, Multi-agent only). The input box takes text right
    *  away (checked against 2.1.296); the short wait is a margin. Never on a
@@ -20383,6 +20391,8 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.plugin = plugin;
     /** The terminal in front, whose card is marked; only that changes on a focus event. */
     this.focusedToken = null;
+    /** A render was asked for while a guidance box had focus (see renderNow). */
+    this.renderSkipped = false;
     /** Set in onOpen: holds renders while a mouse button is down here. */
     this.guardedRender = () => this.renderNow();
     /** Every re-render goes through here: the stores change often while
@@ -20461,6 +20471,11 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
   }
   renderNow() {
     const container = this.contentEl;
+    const active = document.activeElement;
+    if (active instanceof HTMLTextAreaElement && active.hasClass("terminus-inbox-steer-input") && container.contains(active)) {
+      this.renderSkipped = true;
+      return;
+    }
     const scrollTop = container.scrollTop;
     container.empty();
     container.addClass("terminus-pending-view", "terminus-inbox-view");
@@ -20835,6 +20850,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
     this.renderFeedback(workEl, card.token, name);
     this.renderDelegations(workEl, card.token, name);
+    this.renderSteer(workEl, card, name);
     if (!workEl.hasChildNodes())
       workEl.remove();
     const foot = el2.createDiv({ cls: "terminus-inbox-card-foot" });
@@ -20863,6 +20879,71 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
         () => void this.plugin.focusTerminal(card.token)
       );
     }
+  }
+  /**
+   * "Tell this session…": a box on a running session's card, to steer it.
+   * "Add to input" types the text into the session's input line for the
+   * user to send; "Send now" types it and presses Enter. Claude queues text
+   * entered mid-turn and folds it into the running turn, so this works while
+   * it works. Cmd/Ctrl+Enter is Send now. The draft is kept in the plugin's
+   * inbox state, so folding the card or re-rendering doesn't lose it.
+   */
+  renderSteer(el2, card, name) {
+    var _a8, _b;
+    const token = card.token;
+    if (card.ended || !((_a8 = this.plugin.agentSessionStore.get(token)) == null ? void 0 : _a8.running) || !this.plugin.findTerminalView(token))
+      return;
+    const readiness = this.plugin.steerReadiness(token);
+    const section = el2.createDiv({ cls: "terminus-inbox-steer" });
+    const input = section.createEl("textarea", {
+      cls: "terminus-inbox-steer-input",
+      attr: { rows: "2", placeholder: `Tell ${name}\u2026  (${import_obsidian19.Platform.isMacOS ? "\u2318" : "Ctrl"}\u21B5 sends now)` }
+    });
+    input.value = (_b = this.ui.drafts.get(token)) != null ? _b : "";
+    input.addEventListener("input", () => {
+      if (input.value)
+        this.ui.drafts.set(token, input.value);
+      else
+        this.ui.drafts.delete(token);
+    });
+    input.addEventListener("blur", () => {
+      if (!this.renderSkipped)
+        return;
+      this.renderSkipped = false;
+      this.render();
+    });
+    const actions = section.createDiv({ cls: "terminus-inbox-steer-actions" });
+    const add = actions.createEl("button", { cls: "terminus-btn-ghost", text: "Add to input" });
+    (0, import_obsidian19.setTooltip)(add, "Types it into the session's input line and takes you to the terminal; you press Enter");
+    const send = actions.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Send now" });
+    (0, import_obsidian19.setTooltip)(send, "Types it into the session's input line and presses Enter");
+    if (!readiness.ready) {
+      add.disabled = true;
+      send.disabled = true;
+      actions.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
+    }
+    const deliver = async (submit) => {
+      const text = input.value.trim();
+      if (!text) {
+        input.focus();
+        return;
+      }
+      if (!await this.plugin.sendGuidance(token, text, submit))
+        return;
+      this.ui.drafts.delete(token);
+      input.value = "";
+      input.blur();
+      this.render();
+    };
+    add.addEventListener("click", () => void deliver(false));
+    send.addEventListener("click", () => void deliver(true));
+    input.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" && (evt.metaKey || evt.ctrlKey)) {
+        evt.preventDefault();
+        if (readiness.ready)
+          void deliver(true);
+      }
+    });
   }
   /**
    * Tasks sent from this session to new terminals ("Send to a new
@@ -23531,6 +23612,9 @@ var InboxUiState = class {
     /** A card to bring into view on the next render: set by the sidebar's
      *  "to review" counts, consumed by the inbox. */
     this.revealToken = null;
+    /** What's typed in each session's "Tell this session…" box, by token, so a
+     *  re-render (or a fold) doesn't lose it. */
+    this.drafts = /* @__PURE__ */ new Map();
     /** The tokens the last dismissal hid, for Undo. */
     this.lastDismissed = [];
     this.finishedCollapsed = false;
@@ -25067,6 +25151,45 @@ ${result}`))
     this.delegationStore.remove(childToken);
     await this.focusTerminal(delegation.parentToken);
     new import_obsidian30.Notice(`Terminus: result added to ${parent.getDisplayText()} \u2014 press Enter to send it`);
+  }
+  /**
+   * Whether guidance can be typed into a session now. Unlike review
+   * feedback it is allowed mid-turn: Claude queues what's entered then and
+   * folds it into the running turn, which is the point. It's refused while
+   * Claude waits on a prompt (permission or a question), where typed text
+   * could answer it.
+   */
+  steerReadiness(token) {
+    const session = this.agentSessionStore.get(token);
+    if (!(session == null ? void 0 : session.running) || !this.findTerminalView(token))
+      return { ready: false, reason: "Session ended" };
+    if (session.status === "needs-attention" && session.needs !== "unread-turn") {
+      return { ready: false, reason: "Answer Claude's prompt first" };
+    }
+    return { ready: true };
+  }
+  /**
+   * "Tell this session…": types the text into the session's input line.
+   * `submit` is the user's explicit "Send now": Enter follows shortly after,
+   * so the TUI has taken the text first, and the terminal is left alone so
+   * several can be sent from the inbox. Otherwise the terminal is focused
+   * and the Enter is the user's. False when it couldn't be typed.
+   */
+  async sendGuidance(token, text, submit) {
+    const terminal = this.findTerminalView(token);
+    const message = text.trim();
+    if (!terminal || !message || !this.steerReadiness(token).ready)
+      return false;
+    if (!terminal.typeIntoInput(message))
+      return false;
+    if (submit) {
+      window.setTimeout(() => terminal.submitInput(), 250);
+      new import_obsidian30.Notice(`Terminus: sent to ${terminal.getDisplayText()}`);
+    } else {
+      await this.focusTerminal(token);
+      new import_obsidian30.Notice(`Terminus: added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
+    }
+    return true;
   }
   /** Types a session's queued feedback into its terminal, unsubmitted, and
    *  clears the queue: the text is the user's to edit or send from here. */
