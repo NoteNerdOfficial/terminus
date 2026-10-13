@@ -33,3 +33,8 @@ AI Skills Manager/
 *.bak
 .env
 .env.*
+
+# A throwaway sample vault ("Acme Notes") for trying Terminus and taking
+# README screenshots: generic notes, simulated hook events, screenshots.
+# Kept locally for reuse, never committed
+demo-vault/
