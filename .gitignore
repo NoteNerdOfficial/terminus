@@ -23,3 +23,13 @@ app.css
 # Personal reference notes, not part of the shipped plugin or its docs
 docs/
 .claude/settings.local.json
+
+# Output of the AI Skills Manager plugin (exports of the user's own Claude
+# agents, rules and commands, with local paths): personal, never shipped
+AI Skills Manager/
+
+# Editor and tool leftovers
+*.log
+*.bak
+.env
+.env.*
