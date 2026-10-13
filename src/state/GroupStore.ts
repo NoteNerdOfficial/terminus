@@ -31,8 +31,6 @@ export interface GroupsData {
   lastLeafByGroup: Record<string, string>;
   /** Leaf id → group id for non-terminal tabs that belong to a group. */
   tabGroups: Record<string, string>;
-  /** The sidebar's Ungrouped section is folded. */
-  ungroupedCollapsed: boolean;
   /** For "Group N" names; never reused, so a new group can't repeat the name
    *  of one just closed. */
   nextNumber: number;
@@ -43,7 +41,6 @@ export const DEFAULT_GROUPS_DATA: GroupsData = {
   activeGroupId: null,
   lastLeafByGroup: {},
   tabGroups: {},
-  ungroupedCollapsed: false,
   nextNumber: 1,
 };
 
@@ -67,7 +64,6 @@ export function resolveGroupsData(saved: unknown): GroupsData {
     activeGroupId: typeof s.activeGroupId === "string" && ids.has(s.activeGroupId) ? s.activeGroupId : null,
     lastLeafByGroup: isStringRecord(s.lastLeafByGroup) ? s.lastLeafByGroup : {},
     tabGroups: isStringRecord(s.tabGroups) ? s.tabGroups : {},
-    ungroupedCollapsed: s.ungroupedCollapsed === true,
     nextNumber: typeof s.nextNumber === "number" && s.nextNumber >= 1 ? s.nextNumber : groups.length + 1,
   };
 }
@@ -165,21 +161,12 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
     this.changed();
   }
 
-  /** Folds or unfolds a group (null: the Ungrouped section) in the sidebar. */
-  setCollapsed(id: string | null, collapsed: boolean): void {
-    if (id === null) {
-      if (this.data.ungroupedCollapsed === collapsed) return;
-      this.data.ungroupedCollapsed = collapsed;
-    } else {
-      const group = this.get(id);
-      if (!group || group.collapsed === collapsed) return;
-      group.collapsed = collapsed;
-    }
+  /** Folds or unfolds a group in the sidebar. */
+  setCollapsed(id: string, collapsed: boolean): void {
+    const group = this.get(id);
+    if (!group || group.collapsed === collapsed) return;
+    group.collapsed = collapsed;
     this.changed();
-  }
-
-  get ungroupedCollapsed(): boolean {
-    return this.data.ungroupedCollapsed;
   }
 
   setNote(id: string, path: string | null): void {

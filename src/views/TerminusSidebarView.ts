@@ -206,8 +206,9 @@ export class TerminusSidebarView extends ItemView {
 
   private renderGroup(list: HTMLElement, group: TerminalGroup, members: TerminalView[]): void {
     const active = this.plugin.groupStore.activeGroupId === group.id;
-    const section = list.createDiv({ cls: "terminus-sidebar-group" });
+    const section = list.createDiv({ cls: "terminus-sidebar-group terminus-sidebar-group-card" });
     section.style.setProperty("--terminus-group-color", group.color);
+    section.toggleClass("is-active", active);
     const row = section.createDiv({ cls: "terminus-sidebar-group-row" });
     row.toggleClass("is-active", active);
     this.makeDropTarget(row, group.id);
@@ -227,6 +228,7 @@ export class TerminusSidebarView extends ItemView {
       });
     }
     const needsAttention = members.some((t) => this.status(t) === "needs-attention");
+    section.toggleClass("is-needs-attention", needsAttention && !active);
     if (needsAttention && !active) row.createSpan({ cls: "terminus-sidebar-attention", attr: { "aria-label": "A session here needs attention" } });
     row.createSpan({
       cls: "terminus-sidebar-group-state",
@@ -265,22 +267,26 @@ export class TerminusSidebarView extends ItemView {
       this.renderNoteSuggestion(section, group.id, note);
     }
 
-    for (const view of members) this.renderTerminal(section, view);
+    // The terminals sit in the card's body, below a rule, apart from the
+    // group's own header.
+    if (members.length === 0) return;
+    const body = section.createDiv({ cls: "terminus-sidebar-group-terminals" });
+    for (const view of members) this.renderTerminal(body, view);
   }
 
-  /** The ▸/▾ that folds a group (null: Ungrouped), the same chevron the
-   *  change rows use. It's its own control, so a click on it folds without
-   *  also selecting the group; from the keyboard, ← folds and → unfolds the
-   *  focused row. */
-  private renderFoldChevron(row: HTMLElement, groupId: string | null, collapsed: boolean): void {
+  /** The chevron that folds a group.
+   *  It's its own control, so a click on it folds without also selecting
+   *  the group; from the keyboard, ← folds and → unfolds the focused row. */
+  private renderFoldChevron(row: HTMLElement, groupId: string, collapsed: boolean): void {
     const fold = (next: boolean) => this.plugin.groupStore.setCollapsed(groupId, next);
+    // The same Lucide chevrons as the Agent inbox's cards and sections.
     const chevron = row.createEl("button", {
       cls: "terminus-sidebar-chevron",
-      text: collapsed ? "▸" : "▾",
-      // A group row is itself focusable (← and → fold it), so its chevron
-      // stays out of the tab order; Ungrouped's row isn't, so its is in it.
-      attr: { "aria-label": collapsed ? "Expand" : "Collapse", "aria-expanded": String(!collapsed), tabindex: groupId === null ? "0" : "-1" },
+      // The group row is itself focusable (← and → fold it), so its chevron
+      // stays out of the tab order.
+      attr: { "aria-label": collapsed ? "Expand" : "Collapse", "aria-expanded": String(!collapsed), tabindex: "-1" },
     });
+    setIcon(chevron, collapsed ? "chevron-right" : "chevron-down");
     chevron.addEventListener("click", (evt) => {
       evt.stopPropagation();
       fold(!collapsed);
@@ -346,12 +352,9 @@ export class TerminusSidebarView extends ItemView {
   private renderUngrouped(list: HTMLElement, members: TerminalView[]): void {
     const section = list.createDiv({ cls: "terminus-sidebar-group is-ungrouped" });
     const row = section.createDiv({ cls: "terminus-sidebar-group-row is-ungrouped" });
-    const collapsed = this.plugin.groupStore.ungroupedCollapsed;
-    this.renderFoldChevron(row, null, collapsed);
     row.createSpan({ cls: "terminus-sidebar-group-name", text: "Ungrouped" });
     row.createSpan({ cls: "terminus-sidebar-group-state", text: "Shown in every group" });
     this.makeDropTarget(row, null);
-    if (collapsed) return;
     if (members.length === 0) {
       section.createDiv({ cls: "terminus-sidebar-empty", text: "Drag a terminal here to show it in every group." });
       return;

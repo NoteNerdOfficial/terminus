@@ -266,12 +266,16 @@ export class AgentInboxView extends ItemView {
       }
     }
 
+    // The card's body: the work itself (changes, agents, queued comments),
+    // below a rule and on the alternate surface, as a group card's
+    // terminals are in the sidebar.
+    const workEl = el.createDiv({ cls: "terminus-inbox-card-body" });
     if (card.leadChanges.length > 0 || card.subagents.length > 0) {
       if (card.subagents.length > 0) {
         // With subagents, the lead is one agent among them, in the same
         // shape of row, so the card reads as a list of agents, each with
         // its own changes underneath.
-        this.renderAgent(el, {
+        this.renderAgent(workEl, {
           mark: { kind: "lead", icon: "bot", label: "Lead session" },
           name: "Lead",
           description: "Main session",
@@ -279,18 +283,19 @@ export class AgentInboxView extends ItemView {
           changes: card.leadChanges,
         });
       } else {
-        this.renderChangeList(el.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges);
+        this.renderChangeList(workEl.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges);
       }
-      for (const sub of card.subagents) this.renderSubagent(el, sub);
+      for (const sub of card.subagents) this.renderSubagent(workEl, sub);
       if (card.hiddenSubagents > 0) {
-        el.createDiv({
+        workEl.createDiv({
           cls: "terminus-inbox-more",
           text: `${card.hiddenSubagents} earlier ${card.hiddenSubagents === 1 ? "subagent" : "subagents"} finished`,
         });
       }
     }
 
-    this.renderFeedback(el, card.token, name);
+    this.renderFeedback(workEl, card.token, name);
+    if (!workEl.hasChildNodes()) workEl.remove();
 
     const foot = el.createDiv({ cls: "terminus-inbox-card-foot" });
     if (card.changes.length > 0) {

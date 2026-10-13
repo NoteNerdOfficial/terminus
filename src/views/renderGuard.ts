@@ -16,8 +16,11 @@ import type { Component } from "obsidian";
 export function guardRenderDuringPress(component: Component, el: HTMLElement, render: () => void): () => void {
   let pressed = false;
   let queued = false;
-  component.registerDomEvent(el, "pointerdown", () => {
-    pressed = true;
+  // The primary button only: a right-click opens a menu, which (natively, on
+  // macOS) swallows the release, so the hold would last until the next click
+  // anywhere, e.g. leaving "Rename" waiting for one.
+  component.registerDomEvent(el, "pointerdown", (evt) => {
+    if (evt.button === 0) pressed = true;
   });
   const release = () => {
     if (!pressed) return;

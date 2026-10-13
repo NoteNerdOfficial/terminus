@@ -19909,8 +19909,9 @@ function buildCard(token, session, changes) {
 function guardRenderDuringPress(component, el2, render) {
   let pressed = false;
   let queued = false;
-  component.registerDomEvent(el2, "pointerdown", () => {
-    pressed = true;
+  component.registerDomEvent(el2, "pointerdown", (evt) => {
+    if (evt.button === 0)
+      pressed = true;
   });
   const release = () => {
     if (!pressed)
@@ -20192,9 +20193,10 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
         }
       }
     }
+    const workEl = el2.createDiv({ cls: "terminus-inbox-card-body" });
     if (card.leadChanges.length > 0 || card.subagents.length > 0) {
       if (card.subagents.length > 0) {
-        this.renderAgent(el2, {
+        this.renderAgent(workEl, {
           mark: { kind: "lead", icon: "bot", label: "Lead session" },
           name: "Lead",
           description: "Main session",
@@ -20202,18 +20204,20 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
           changes: card.leadChanges
         });
       } else {
-        this.renderChangeList(el2.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges);
+        this.renderChangeList(workEl.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges);
       }
       for (const sub of card.subagents)
-        this.renderSubagent(el2, sub);
+        this.renderSubagent(workEl, sub);
       if (card.hiddenSubagents > 0) {
-        el2.createDiv({
+        workEl.createDiv({
           cls: "terminus-inbox-more",
           text: `${card.hiddenSubagents} earlier ${card.hiddenSubagents === 1 ? "subagent" : "subagents"} finished`
         });
       }
     }
-    this.renderFeedback(el2, card.token, name);
+    this.renderFeedback(workEl, card.token, name);
+    if (!workEl.hasChildNodes())
+      workEl.remove();
     const foot = el2.createDiv({ cls: "terminus-inbox-card-foot" });
     if (card.changes.length > 0) {
       const ids = new Set(card.changes.map((c) => c.id));
@@ -20674,8 +20678,9 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
   }
   renderGroup(list, group, members) {
     const active = this.plugin.groupStore.activeGroupId === group.id;
-    const section = list.createDiv({ cls: "terminus-sidebar-group" });
+    const section = list.createDiv({ cls: "terminus-sidebar-group terminus-sidebar-group-card" });
     section.style.setProperty("--terminus-group-color", group.color);
+    section.toggleClass("is-active", active);
     const row = section.createDiv({ cls: "terminus-sidebar-group-row" });
     row.toggleClass("is-active", active);
     this.makeDropTarget(row, group.id);
@@ -20693,6 +20698,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       });
     }
     const needsAttention = members.some((t) => this.status(t) === "needs-attention");
+    section.toggleClass("is-needs-attention", needsAttention && !active);
     if (needsAttention && !active)
       row.createSpan({ cls: "terminus-sidebar-attention", attr: { "aria-label": "A session here needs attention" } });
     row.createSpan({
@@ -20726,22 +20732,24 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
         meta.createSpan({ cls: `terminus-sidebar-note-status is-${isNoteStatus(status) ? status : "other"}`, text: status });
       this.renderNoteSuggestion(section, group.id, note);
     }
+    if (members.length === 0)
+      return;
+    const body = section.createDiv({ cls: "terminus-sidebar-group-terminals" });
     for (const view of members)
-      this.renderTerminal(section, view);
+      this.renderTerminal(body, view);
   }
-  /** The ▸/▾ that folds a group (null: Ungrouped), the same chevron the
-   *  change rows use. It's its own control, so a click on it folds without
-   *  also selecting the group; from the keyboard, ← folds and → unfolds the
-   *  focused row. */
+  /** The chevron that folds a group.
+   *  It's its own control, so a click on it folds without also selecting
+   *  the group; from the keyboard, ← folds and → unfolds the focused row. */
   renderFoldChevron(row, groupId, collapsed) {
     const fold = (next) => this.plugin.groupStore.setCollapsed(groupId, next);
     const chevron = row.createEl("button", {
       cls: "terminus-sidebar-chevron",
-      text: collapsed ? "\u25B8" : "\u25BE",
-      // A group row is itself focusable (← and → fold it), so its chevron
-      // stays out of the tab order; Ungrouped's row isn't, so its is in it.
-      attr: { "aria-label": collapsed ? "Expand" : "Collapse", "aria-expanded": String(!collapsed), tabindex: groupId === null ? "0" : "-1" }
+      // The group row is itself focusable (← and → fold it), so its chevron
+      // stays out of the tab order.
+      attr: { "aria-label": collapsed ? "Expand" : "Collapse", "aria-expanded": String(!collapsed), tabindex: "-1" }
     });
+    (0, import_obsidian21.setIcon)(chevron, collapsed ? "chevron-right" : "chevron-down");
     chevron.addEventListener("click", (evt) => {
       evt.stopPropagation();
       fold(!collapsed);
@@ -20810,13 +20818,9 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
   renderUngrouped(list, members) {
     const section = list.createDiv({ cls: "terminus-sidebar-group is-ungrouped" });
     const row = section.createDiv({ cls: "terminus-sidebar-group-row is-ungrouped" });
-    const collapsed = this.plugin.groupStore.ungroupedCollapsed;
-    this.renderFoldChevron(row, null, collapsed);
     row.createSpan({ cls: "terminus-sidebar-group-name", text: "Ungrouped" });
     row.createSpan({ cls: "terminus-sidebar-group-state", text: "Shown in every group" });
     this.makeDropTarget(row, null);
-    if (collapsed)
-      return;
     if (members.length === 0) {
       section.createDiv({ cls: "terminus-sidebar-empty", text: "Drag a terminal here to show it in every group." });
       return;
@@ -20986,7 +20990,6 @@ var DEFAULT_GROUPS_DATA = {
   activeGroupId: null,
   lastLeafByGroup: {},
   tabGroups: {},
-  ungroupedCollapsed: false,
   nextNumber: 1
 };
 function resolveGroupsData(saved) {
@@ -21006,7 +21009,6 @@ function resolveGroupsData(saved) {
     activeGroupId: typeof s15.activeGroupId === "string" && ids.has(s15.activeGroupId) ? s15.activeGroupId : null,
     lastLeafByGroup: isStringRecord(s15.lastLeafByGroup) ? s15.lastLeafByGroup : {},
     tabGroups: isStringRecord(s15.tabGroups) ? s15.tabGroups : {},
-    ungroupedCollapsed: s15.ungroupedCollapsed === true,
     nextNumber: typeof s15.nextNumber === "number" && s15.nextNumber >= 1 ? s15.nextNumber : groups.length + 1
   };
 }
@@ -21087,22 +21089,13 @@ var GroupStore = class extends TypedEmitter {
     group.folder = folder;
     this.changed();
   }
-  /** Folds or unfolds a group (null: the Ungrouped section) in the sidebar. */
+  /** Folds or unfolds a group in the sidebar. */
   setCollapsed(id, collapsed) {
-    if (id === null) {
-      if (this.data.ungroupedCollapsed === collapsed)
-        return;
-      this.data.ungroupedCollapsed = collapsed;
-    } else {
-      const group = this.get(id);
-      if (!group || group.collapsed === collapsed)
-        return;
-      group.collapsed = collapsed;
-    }
+    const group = this.get(id);
+    if (!group || group.collapsed === collapsed)
+      return;
+    group.collapsed = collapsed;
     this.changed();
-  }
-  get ungroupedCollapsed() {
-    return this.data.ungroupedCollapsed;
   }
   setNote(id, path) {
     const group = this.get(id);

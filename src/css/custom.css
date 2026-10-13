@@ -1488,7 +1488,7 @@
   --tm-bad: var(--color-red, #e93147);
   --tm-gap: 6px;
   /* Every text button in both views shares the ＋ Terminal height. */
-  --tm-button-height: 26px;
+  --tm-button-height: 24px;
   font-size: var(--font-ui-small);
 }
 
@@ -1584,7 +1584,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--tm-gap);
-  margin-top: 10px;
+  margin-top: 16px;
 }
 
 .terminus-sidebar-actions button,
@@ -1592,6 +1592,8 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  height: var(--tm-button-height);
+  padding: 0 10px;
 }
 
 /* The icon's wrapper is a flex box and the svg a block, so the icon centres
@@ -1616,13 +1618,54 @@
   padding: 6px;
 }
 
-.terminus-sidebar-group {
-  padding-bottom: 6px;
+/* Each group is a card, like the Agent inbox's; the showing group's border
+   is the accent, and one with a session needing attention is orange, as
+   its inbox card is. Ungrouped terminals aren't a group, so they sit on the
+   sidebar itself, below the cards. */
+.terminus-sidebar-group-card {
+  margin: 0 0 8px;
+  padding: 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background-color: var(--background-primary);
 }
 
-.terminus-sidebar-group + .terminus-sidebar-group {
-  padding-top: 6px;
+.terminus-sidebar-group-card.is-active {
+  border-color: var(--interactive-accent);
+}
+
+.terminus-sidebar-group-card.is-needs-attention {
+  border-color: var(--tm-attention);
+  box-shadow: 0 2px 8px rgba(var(--color-orange-rgb, 232, 135, 30), 0.12);
+}
+
+/* The card's border marks the showing group, so its row needn't. */
+.terminus-sidebar-group-card .terminus-sidebar-group-row.is-active:not(:hover) {
+  background-color: transparent;
+}
+
+/* The card's body: the terminals, on the theme's alternate surface below a
+   rule, so they read as the group's contents rather than more header. */
+.terminus-sidebar-group-terminals {
+  margin: 4px -4px -4px;
+  padding: 4px;
   border-top: 1px solid var(--background-modifier-border);
+  border-radius: 0 0 var(--radius-m) var(--radius-m);
+  background-color: var(--background-primary-alt);
+}
+
+.terminus-sidebar-group.is-ungrouped {
+  padding: 4px 5px 6px;
+}
+
+/* Ungrouped isn't a group and doesn't fold: a plain heading, its terminals
+   in line with it rather than indented. */
+.terminus-sidebar-group-row.is-ungrouped {
+  padding-left: 8px;
+}
+
+.terminus-sidebar-group.is-ungrouped .terminus-sidebar-terminal {
+  margin-left: 0;
 }
 
 /* Group and terminal rows read like Obsidian's own file tree. */
@@ -1657,20 +1700,25 @@
   cursor: default;
 }
 
-/* The fold chevron: the same ▸/▾ glyph and size as the change rows'. */
+/* The fold chevron: the Agent inbox's own (Lucide, 14px, faint). */
 .terminus-sidebar .terminus-sidebar-chevron {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
-  height: auto;
+  height: 18px;
   padding: 0;
   border: none;
   background: none;
   box-shadow: none;
-  font-size: 18px;
-  line-height: 1;
-  text-align: center;
-  color: var(--text-muted);
+  color: var(--text-faint);
   cursor: pointer;
+}
+
+.terminus-sidebar .terminus-sidebar-chevron svg {
+  width: 14px;
+  height: 14px;
 }
 
 .terminus-sidebar .terminus-sidebar-chevron:hover {
@@ -1719,56 +1767,42 @@
   color: var(--text-accent);
 }
 
-/* A row's own actions appear where the pointer or keyboard is, floating
-   over the end of the row: hidden, they take no space, so a row's text and
-   tags run to the edge instead of stopping short of an empty gap. Their
-   backing repeats the row's hover colour over the sidebar background. On
-   touch screens there's no hover, so they sit in the row, always shown. */
-.terminus-sidebar-group-row,
-.terminus-sidebar-terminal {
-  position: relative;
-}
-
+/* A row's own actions appear where the pointer or keyboard is, at the end
+   of the row and on the row's own hover colour (no backing of their own,
+   which never matched every theme's sidebar). Hidden, they take no space;
+   shown, they take the place of the row's trailing label ("Shell", "1 in
+   background"), and the name truncates before them. On touch screens
+   there's no hover, so they're always shown. */
 .terminus-sidebar-row-actions {
-  position: absolute;
-  top: 50%;
-  right: 2px;
-  display: flex;
+  display: none;
+  flex: none;
   align-items: center;
   gap: 1px;
-  padding-left: 8px;
-  border-radius: var(--radius-s);
-  background:
-    linear-gradient(var(--nav-item-background-hover, var(--background-modifier-hover)), var(--nav-item-background-hover, var(--background-modifier-hover))),
-    var(--background-secondary);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-50%);
-  transition: opacity 120ms ease-out;
+  margin-left: auto;
 }
 
-.terminus-sidebar-group-row.is-active .terminus-sidebar-row-actions {
-  background:
-    linear-gradient(var(--nav-item-background-active, var(--background-modifier-active-hover)), var(--nav-item-background-active, var(--background-modifier-active-hover))),
-    var(--background-secondary);
+.terminus-sidebar-row-actions .clickable-icon {
+  height: 22px;
+  padding: 0 4px;
 }
 
 .terminus-sidebar-group-row:hover .terminus-sidebar-row-actions,
 .terminus-sidebar-group-row:focus-within .terminus-sidebar-row-actions,
 .terminus-sidebar-terminal:hover .terminus-sidebar-row-actions,
 .terminus-sidebar-terminal:focus-within .terminus-sidebar-row-actions {
-  opacity: 1;
-  pointer-events: auto;
+  display: flex;
+}
+
+.terminus-sidebar-group-row:not(.is-ungrouped):hover .terminus-sidebar-group-state,
+.terminus-sidebar-group-row:not(.is-ungrouped):focus-within .terminus-sidebar-group-state,
+.terminus-sidebar-terminal:hover .terminus-sidebar-shell-tag,
+.terminus-sidebar-terminal:focus-within .terminus-sidebar-shell-tag {
+  display: none;
 }
 
 @media (hover: none) {
   .terminus-sidebar-row-actions {
-    position: static;
-    padding-left: 0;
-    background: none;
-    opacity: 1;
-    pointer-events: auto;
-    transform: none;
+    display: flex;
   }
 }
 
@@ -1953,7 +1987,7 @@
 }
 
 .terminus-sidebar-empty {
-  padding: 2px 8px 6px 26px;
+  padding: 2px 8px 6px;
   font-size: var(--font-ui-smaller);
   color: var(--text-faint);
 }
@@ -2533,7 +2567,30 @@
   gap: 4px;
   padding: 4px 8px 4px 10px;
   border-top: 1px solid var(--background-modifier-border);
-  background-color: var(--background-secondary);
+  background-color: var(--background-primary-alt);
+}
+
+/* The card's body: what the session did (changes, agents, queued
+   comments), below a rule on the alternate surface, as a group card's
+   terminals are in the sidebar. The header above it says what the
+   session is doing; the footer shares the body's surface. */
+.terminus-inbox-card-body {
+  padding-top: 6px;
+  border-top: 1px solid var(--background-modifier-border);
+  background-color: var(--background-primary-alt);
+}
+
+.terminus-inbox-card-body > .terminus-inbox-agent:first-child,
+.terminus-inbox-card-body > .terminus-inbox-feedback:first-child {
+  border-top: none;
+}
+
+.terminus-inbox-card-body > .terminus-inbox-agent:first-child {
+  padding-top: 2px;
+}
+
+.terminus-inbox-card-body > .terminus-inbox-feedback:first-child {
+  padding-top: 2px;
 }
 
 .terminus-inbox-spacer {
@@ -2629,10 +2686,6 @@
   .terminus-sidebar-status.is-needs-attention,
   .terminus-inbox-agent-mark.is-running::before {
     animation: none;
-  }
-
-  .terminus-sidebar-row-actions {
-    transition: none;
   }
 }
 
