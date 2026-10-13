@@ -21071,7 +21071,12 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       (0, import_obsidian21.setTooltip)(button, tooltip);
       return button;
     };
-    plusButton("Terminal", "New ungrouped terminal").addEventListener("click", () => void this.plugin.groups.newTerminal(null));
+    plusButton("Terminal", "New ungrouped terminal").addEventListener("click", (evt) => {
+      void this.plugin.choosePlacement(evt).then((placement) => {
+        if (placement)
+          void this.plugin.groups.newTerminal(null, true, void 0, placement);
+      });
+    });
     plusButton("Group", "New group, with a new terminal in it").addEventListener("click", () => {
       void this.plugin.groups.createGroup().then((group) => this.startRename(group.id));
     });
@@ -21871,6 +21876,23 @@ var TabVisibility = class {
   }
 };
 
+// src/util/leafPlacement.ts
+function leafForPlacement(workspace, placement) {
+  switch (placement) {
+    case "split-right":
+    case "split-down": {
+      const anchor = workspace.getMostRecentLeaf();
+      const direction = placement === "split-right" ? "vertical" : "horizontal";
+      return anchor ? workspace.createLeafBySplit(anchor, direction) : workspace.getLeaf("split", direction);
+    }
+    case "window":
+      return workspace.getLeaf("window");
+    case "tab":
+    default:
+      return workspace.getLeaf("tab");
+  }
+}
+
 // src/groups/GroupController.ts
 var GroupController = class {
   constructor(plugin) {
@@ -22187,7 +22209,7 @@ var GroupController = class {
   }
   /** A new terminal in a group (starting in its folder, next to the
    *  terminal last used there) or ungrouped. */
-  async newTerminal(target, focus = true, launch) {
+  async newTerminal(target, focus = true, launch, placement = "tab") {
     var _a8, _b;
     const { workspace } = this.plugin.app;
     const group = this.store.get(target);
@@ -22195,7 +22217,7 @@ var GroupController = class {
     const anchor = anchorId && workspace.getLeafById(anchorId) || ((_a8 = this.terminalsIn(target)[0]) == null ? void 0 : _a8.leaf);
     if (anchor)
       workspace.setActiveLeaf(anchor, { focus: false });
-    const leaf = workspace.getLeaf("tab");
+    const leaf = leafForPlacement(workspace, placement);
     await leaf.setViewState({
       type: TERMINUS_VIEW_TYPE,
       active: focus,
@@ -24372,26 +24394,47 @@ var TerminusPlugin = class extends import_obsidian28.Plugin {
     if (next)
       await this.focusTerminal(next.token);
   }
-  /** Ribbon clicks always carry a MouseEvent to anchor a placement menu to;
-   *  a command-palette/hotkey invocation doesn't, so "Always ask" falls
-   *  back to a plain new tab in that case rather than showing a menu with
-   *  no sensible place to appear. */
-  async openTerminal(evt) {
-    const placement = this.settings.terminalPlacement;
-    if (placement === "ask" && evt) {
-      this.showTerminalPlacementMenu(evt);
-      return;
-    }
-    await this.openTerminalAt(placement === "ask" ? "tab" : placement);
+  /** The placement for a new terminal: the setting, or, when it's "Always
+   *  ask", the user's pick from a menu at `evt` (null if they dismiss it).
+   *  Ribbon clicks always carry a MouseEvent to anchor the menu to; a
+   *  command-palette/hotkey invocation doesn't, so "Always ask" falls back
+   *  to a plain new tab there rather than showing a menu with no sensible
+   *  place to appear. `allowWindow` false is for terminals that belong to a
+   *  group, whose tabs are shown and hidden with it: a new window then
+   *  becomes a tab. */
+  choosePlacement(evt, allowWindow = true) {
+    const setting = this.settings.terminalPlacement;
+    const allowed = TERMINAL_OPEN_PLACEMENTS.filter((p2) => allowWindow || p2 !== "window");
+    if (setting !== "ask")
+      return Promise.resolve(allowed.includes(setting) ? setting : "tab");
+    if (!evt)
+      return Promise.resolve("tab");
+    return this.askPlacement(evt, allowed);
   }
-  showTerminalPlacementMenu(evt) {
-    const menu = new import_obsidian28.Menu();
-    for (const placement of TERMINAL_OPEN_PLACEMENTS) {
-      menu.addItem(
-        (item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => void this.openTerminalAt(placement))
-      );
-    }
-    menu.showAtMouseEvent(evt);
+  /** The placement menu, anchored at `evt`; resolves null when dismissed. */
+  askPlacement(evt, allowed = TERMINAL_OPEN_PLACEMENTS) {
+    return new Promise((resolve) => {
+      const menu = new import_obsidian28.Menu();
+      let picked = false;
+      for (const placement of allowed) {
+        menu.addItem(
+          (item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => {
+            picked = true;
+            resolve(placement);
+          })
+        );
+      }
+      menu.onHide(() => {
+        if (!picked)
+          resolve(null);
+      });
+      menu.showAtMouseEvent(evt);
+    });
+  }
+  async openTerminal(evt) {
+    const placement = await this.choosePlacement(evt);
+    if (placement)
+      await this.openTerminalAt(placement);
   }
   /** Always opens a NEW terminal -- multiple concurrent terminals (each
    *  running their own `claude` session) are supported; the hook/review
@@ -24401,23 +24444,7 @@ var TerminusPlugin = class extends import_obsidian28.Plugin {
    *  normal Obsidian tab-switching, not this command's job. */
   async openTerminalAt(placement) {
     const { workspace } = this.app;
-    let leaf;
-    switch (placement) {
-      case "split-right":
-      case "split-down": {
-        const anchor = workspace.getMostRecentLeaf();
-        const direction = placement === "split-right" ? "vertical" : "horizontal";
-        leaf = anchor ? workspace.createLeafBySplit(anchor, direction) : workspace.getLeaf("split", direction);
-        break;
-      }
-      case "window":
-        leaf = workspace.getLeaf("window");
-        break;
-      case "tab":
-      default:
-        leaf = workspace.getLeaf("tab");
-        break;
-    }
+    const leaf = leafForPlacement(workspace, placement);
     await leaf.setViewState({ type: TERMINUS_VIEW_TYPE, active: true });
     await workspace.revealLeaf(leaf);
   }

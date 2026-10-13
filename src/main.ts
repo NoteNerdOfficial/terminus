@@ -20,6 +20,7 @@ import { AgentSessionStore } from "./state/AgentSessionStore";
 import { TranscriptUsageReader, subagentTranscriptPath } from "./claude/transcriptUsage";
 import { FeedbackStore } from "./state/FeedbackStore";
 import { InboxUiState } from "./state/InboxUiState";
+import { leafForPlacement, type OpenPlacement } from "./util/leafPlacement";
 import { composeFeedbackPrompt } from "./claude/feedbackPrompt";
 import { ClosedTerminalBuffer, ClosedTerminalEntry } from "./state/ClosedTerminalBuffer";
 import { ActionLogModal } from "./modals/ActionLogModal";
@@ -40,7 +41,6 @@ import {
   MIN_FONT_SIZE,
   TerminusSettingTab,
   TerminusSettings,
-  TerminalPlacement,
   TERMINAL_PLACEMENT_LABELS,
   TERMINAL_OPEN_PLACEMENTS,
   CursorStyle,
@@ -786,27 +786,45 @@ export default class TerminusPlugin extends Plugin {
     if (next) await this.focusTerminal(next.token);
   }
 
-  /** Ribbon clicks always carry a MouseEvent to anchor a placement menu to;
-   *  a command-palette/hotkey invocation doesn't, so "Always ask" falls
-   *  back to a plain new tab in that case rather than showing a menu with
-   *  no sensible place to appear. */
-  private async openTerminal(evt?: MouseEvent): Promise<void> {
-    const placement = this.settings.terminalPlacement;
-    if (placement === "ask" && evt) {
-      this.showTerminalPlacementMenu(evt);
-      return;
-    }
-    await this.openTerminalAt(placement === "ask" ? "tab" : placement);
+  /** The placement for a new terminal: the setting, or, when it's "Always
+   *  ask", the user's pick from a menu at `evt` (null if they dismiss it).
+   *  Ribbon clicks always carry a MouseEvent to anchor the menu to; a
+   *  command-palette/hotkey invocation doesn't, so "Always ask" falls back
+   *  to a plain new tab there rather than showing a menu with no sensible
+   *  place to appear. `allowWindow` false is for terminals that belong to a
+   *  group, whose tabs are shown and hidden with it: a new window then
+   *  becomes a tab. */
+  choosePlacement(evt?: MouseEvent, allowWindow = true): Promise<OpenPlacement | null> {
+    const setting = this.settings.terminalPlacement;
+    const allowed = TERMINAL_OPEN_PLACEMENTS.filter((p) => allowWindow || p !== "window");
+    if (setting !== "ask") return Promise.resolve(allowed.includes(setting) ? setting : "tab");
+    if (!evt) return Promise.resolve("tab");
+    return this.askPlacement(evt, allowed);
   }
 
-  private showTerminalPlacementMenu(evt: MouseEvent): void {
-    const menu = new Menu();
-    for (const placement of TERMINAL_OPEN_PLACEMENTS) {
-      menu.addItem((item) =>
-        item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => void this.openTerminalAt(placement))
-      );
-    }
-    menu.showAtMouseEvent(evt);
+  /** The placement menu, anchored at `evt`; resolves null when dismissed. */
+  askPlacement(evt: MouseEvent, allowed: OpenPlacement[] = TERMINAL_OPEN_PLACEMENTS): Promise<OpenPlacement | null> {
+    return new Promise((resolve) => {
+      const menu = new Menu();
+      let picked = false;
+      for (const placement of allowed) {
+        menu.addItem((item) =>
+          item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => {
+            picked = true;
+            resolve(placement);
+          })
+        );
+      }
+      menu.onHide(() => {
+        if (!picked) resolve(null);
+      });
+      menu.showAtMouseEvent(evt);
+    });
+  }
+
+  private async openTerminal(evt?: MouseEvent): Promise<void> {
+    const placement = await this.choosePlacement(evt);
+    if (placement) await this.openTerminalAt(placement);
   }
 
   /** Always opens a NEW terminal -- multiple concurrent terminals (each
@@ -815,31 +833,9 @@ export default class TerminusPlugin extends Plugin {
    *  token, so this was purely a UI limitation (this used to dedupe against
    *  an existing terminal leaf). Reusing an existing terminal is just
    *  normal Obsidian tab-switching, not this command's job. */
-  private async openTerminalAt(placement: Exclude<TerminalPlacement, "ask">): Promise<void> {
+  private async openTerminalAt(placement: OpenPlacement): Promise<void> {
     const { workspace } = this.app;
-    let leaf: WorkspaceLeaf;
-    switch (placement) {
-      case "split-right":
-      case "split-down": {
-        // Resolve the anchor pane ourselves and split off of it explicitly,
-        // rather than trusting `getLeaf("split", direction)` to pick the
-        // right one internally (it's just `createLeafBySplit(getMostRecentLeaf(),
-        // direction)` under the hood) -- going through it directly fixed the
-        // exact same "split down" opening to the side instead of below bug
-        // in the Tab Spaces plugin.
-        const anchor = workspace.getMostRecentLeaf();
-        const direction = placement === "split-right" ? "vertical" : "horizontal";
-        leaf = anchor ? workspace.createLeafBySplit(anchor, direction) : workspace.getLeaf("split", direction);
-        break;
-      }
-      case "window":
-        leaf = workspace.getLeaf("window");
-        break;
-      case "tab":
-      default:
-        leaf = workspace.getLeaf("tab");
-        break;
-    }
+    const leaf = leafForPlacement(workspace, placement);
     await leaf.setViewState({ type: TERMINUS_VIEW_TYPE, active: true });
     await workspace.revealLeaf(leaf);
   }

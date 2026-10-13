@@ -193,7 +193,13 @@ export class TerminusSidebarView extends ItemView {
       setTooltip(button, tooltip);
       return button;
     };
-    plusButton("Terminal", "New ungrouped terminal").addEventListener("click", () => void this.plugin.groups.newTerminal(null));
+    // Opens where the "Terminal placement" setting says, asking with the
+    // ribbon's menu when it's "Always ask".
+    plusButton("Terminal", "New ungrouped terminal").addEventListener("click", (evt) => {
+      void this.plugin.choosePlacement(evt).then((placement) => {
+        if (placement) void this.plugin.groups.newTerminal(null, true, undefined, placement);
+      });
+    });
     plusButton("Group", "New group, with a new terminal in it").addEventListener("click", () => {
       void this.plugin.groups.createGroup().then((group) => this.startRename(group.id));
     });

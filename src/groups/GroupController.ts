@@ -7,6 +7,7 @@ import { TabVisibility } from "./TabVisibility";
 import { GroupSuggestModal } from "./GroupSuggestModal";
 import { addNoteMenuItems, moveTabCommand } from "./groupMenus";
 import { noteFile, noteStatus, startClaudeOnNote } from "./groupNotes";
+import { leafForPlacement, type OpenPlacement } from "../util/leafPlacement";
 import type TerminusPlugin from "../main";
 
 /** Ungrouped, or a group id. */
@@ -330,13 +331,20 @@ export class GroupController {
 
   /** A new terminal in a group (starting in its folder, next to the
    *  terminal last used there) or ungrouped. */
-  async newTerminal(target: GroupTarget, focus = true, launch?: { command: string; prompt?: string }): Promise<TerminalView | null> {
+  async newTerminal(
+    target: GroupTarget,
+    focus = true,
+    launch?: { command: string; prompt?: string },
+    placement: OpenPlacement = "tab"
+  ): Promise<TerminalView | null> {
     const { workspace } = this.plugin.app;
     const group = this.store.get(target);
     const anchorId = group ? this.store.lastLeaf(group.id) : undefined;
     const anchor = (anchorId && workspace.getLeafById(anchorId)) || this.terminalsIn(target)[0]?.leaf;
     if (anchor) workspace.setActiveLeaf(anchor, { focus: false });
-    const leaf = workspace.getLeaf("tab");
+    // A split is made off the anchor just made active, so it lands beside
+    // the group's own terminal.
+    const leaf = leafForPlacement(workspace, placement);
     await leaf.setViewState({
       type: TERMINUS_VIEW_TYPE,
       active: focus,
