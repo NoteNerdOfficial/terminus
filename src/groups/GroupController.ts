@@ -63,7 +63,7 @@ export class GroupController {
 
   /** A new terminal in a group (starting in its folder, next to the
    *  terminal last used there) or ungrouped. */
-  async newTerminal(target: GroupTarget, focus = true): Promise<TerminalView | null> {
+  async newTerminal(target: GroupTarget, focus = true, launch?: { command: string; prompt?: string }): Promise<TerminalView | null> {
     const { workspace } = this.plugin.app;
     const group = this.store.get(target);
     const anchorId = group ? this.store.lastLeaf(group.id) : undefined;
@@ -73,7 +73,7 @@ export class GroupController {
     await leaf.setViewState({
       type: TERMINUS_VIEW_TYPE,
       active: focus,
-      state: { groupId: group?.id, cwd: group?.folder ?? undefined },
+      state: { groupId: group?.id, cwd: group?.folder ?? undefined, launch },
     });
     await workspace.revealLeaf(leaf);
     this.plugin.applyGroupVisibility();

@@ -12,6 +12,8 @@ export interface TerminalGroup {
   color: string;
   /** Where its new terminals start; null for the vault folder. */
   folder: string | null;
+  /** The linked note's vault path (see groupNotes.ts); null for none. */
+  note: string | null;
 }
 
 /** What's saved in the plugin's data. */
@@ -44,7 +46,11 @@ export function resolveGroupsData(saved: unknown): GroupsData {
     : [];
   const ids = new Set(groups.map((g) => g.id));
   return {
-    groups: groups.map((g) => ({ ...g, folder: typeof g.folder === "string" ? g.folder : null })),
+    groups: groups.map((g) => ({
+      ...g,
+      folder: typeof g.folder === "string" ? g.folder : null,
+      note: typeof g.note === "string" ? g.note : null,
+    })),
     activeGroupId: typeof s.activeGroupId === "string" && ids.has(s.activeGroupId) ? s.activeGroupId : null,
     lastLeafByGroup: isStringRecord(s.lastLeafByGroup) ? s.lastLeafByGroup : {},
     tabGroups: isStringRecord(s.tabGroups) ? s.tabGroups : {},
@@ -94,6 +100,7 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
       name: `Group ${n}`,
       color: this.palette[(n - 1) % this.palette.length] ?? "",
       folder: null,
+      note: null,
     };
     this.data.groups.push(group);
     this.data.nextNumber = n + 1;
@@ -121,6 +128,25 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
     if (!group || group.folder === folder) return;
     group.folder = folder;
     this.changed();
+  }
+
+  setNote(id: string, path: string | null): void {
+    const group = this.get(id);
+    if (!group || group.note === path) return;
+    group.note = path;
+    this.changed();
+  }
+
+  /** Follows a linked note's rename (or deletion, with null). */
+  noteMoved(oldPath: string, newPath: string | null): void {
+    let changed = false;
+    for (const group of this.data.groups) {
+      if (group.note === oldPath) {
+        group.note = newPath;
+        changed = true;
+      }
+    }
+    if (changed) this.changed();
   }
 
   /** Removes a group. Its tabs become global; its terminals' own `groupId`

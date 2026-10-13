@@ -182,6 +182,12 @@ export class TerminalView extends ItemView {
   /** The group this terminal belongs to (Multi-agent); null when ungrouped.
    *  Saved in view state, so it survives restarts with the tab. */
   private groupIdValue: string | null = null;
+  /** A one-off command to run instead of the global startup command, and a
+   *  prompt to type (unsent) once Claude's session starts -- "Start Claude
+   *  on this note". Taken from the opening view state and never saved, so
+   *  a restart doesn't launch it again. */
+  private launch: { command: string; prompt?: string } | null = null;
+  private pendingPrompt: string | null = null;
   // Live "Claude is editing X" chip, floating over the terminal's
   // bottom-right corner (see mountActivityIndicator). Raised by
   // onChangeApplied (once per file this terminal's PreToolUse hook reports)
@@ -554,6 +560,7 @@ export class TerminalView extends ItemView {
     switch (payload.hook_event_name) {
       case "SessionStart":
         store.sessionStarted(this.token, identity);
+        this.typePendingPrompt();
         void this.readGitBranch();
         // A resumed session's transcript already has usage in it.
         void this.plugin.refreshUsage(this.token);
@@ -668,6 +675,18 @@ export class TerminalView extends ItemView {
     if (!this.pty) return false;
     this.pty.write(text.replace(/\r/g, ""));
     return true;
+  }
+
+  /** Types the launch prompt once Claude's session has started (its
+   *  SessionStart hook, Multi-agent only). The input box takes text right
+   *  away (checked against 2.1.296); the short wait is a margin. Never on a
+   *  timer alone: before the session starts, typed text could answer
+   *  Claude's folder-trust prompt instead. */
+  private typePendingPrompt(): void {
+    const prompt = this.pendingPrompt;
+    if (!prompt) return;
+    this.pendingPrompt = null;
+    window.setTimeout(() => this.typeIntoInput(prompt), 300);
   }
 
   /** The hook/review token: how the Agent inbox matches sessions and
@@ -897,7 +916,18 @@ export class TerminalView extends ItemView {
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
-    const typedState = state as { scrollback?: unknown; cwd?: unknown; customName?: unknown; color?: unknown; groupId?: unknown } | null;
+    const typedState = state as {
+      scrollback?: unknown;
+      cwd?: unknown;
+      customName?: unknown;
+      color?: unknown;
+      groupId?: unknown;
+      launch?: { command?: unknown; prompt?: unknown };
+    } | null;
+    const launch = typedState?.launch;
+    if (launch && typeof launch.command === "string" && launch.command) {
+      this.launch = { command: launch.command, prompt: typeof launch.prompt === "string" ? launch.prompt : undefined };
+    }
     const scrollback = typedState?.scrollback;
     if (typeof scrollback === "string" && scrollback.length > 0) {
       if (this.term) {
@@ -1038,7 +1068,9 @@ export class TerminalView extends ItemView {
       this.plugin.agentSessionStore.sessionEnded(this.token);
     });
     this.pty.on("ready", () => {
-      const command = this.plugin.settings.startupCommand.trim();
+      const command = this.launch?.command ?? this.plugin.settings.startupCommand.trim();
+      this.pendingPrompt = this.launch?.prompt ?? null;
+      this.launch = null;
       if (command) this.pty?.write(`${command}\r`);
     });
 

@@ -1,4 +1,4 @@
-import { Menu, Notice, Plugin, WorkspaceLeaf, setIcon } from "obsidian";
+import { Menu, Notice, Plugin, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import { pathBasename, pathJoin, pathRelative } from "terminus-node-bridge";
 import { ReviewServer } from "./server/ReviewServer";
 import { provisionClaudeSettings, getVaultBasePath, getHookBridgePath } from "./hooks/provisionSettings";
@@ -14,6 +14,7 @@ import { GroupStore } from "./state/GroupStore";
 import { GroupController } from "./groups/GroupController";
 import { GroupSuggestModal } from "./groups/GroupSuggestModal";
 import { TabVisibility } from "./groups/TabVisibility";
+import { noteFile, noteStatus, startClaudeOnNote } from "./groups/groupNotes";
 import { TERMINAL_COLOR_PALETTE } from "./terminal/colorPalette";
 import { fetchLatestPluginVersion, PluginVersionStatus, versionStatus } from "./pluginVersion";
 import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore";
@@ -59,6 +60,11 @@ export default class TerminusPlugin extends Plugin {
   readonly groups = new GroupController(this);
   readonly tabs = new TabVisibility(this);
   private groupStatusEl: HTMLElement | null = null;
+  /** Group id → a suggested status for its note, shown in the sidebar
+   *  until acted on or dismissed (see suggestNoteStatus). */
+  readonly noteSuggestions = new Map<string, "review" | "active">();
+  /** Each session's last status, to spot a turn starting or ending. */
+  private lastSessionStatus = new Map<string, string>();
   /** Latest release on GitHub, once checked (Multi-agent only). */
   private latestPluginVersion: string | null = null;
   /** Set first thing in onunload: views closing then aren't the user
@@ -161,6 +167,28 @@ export default class TerminusPlugin extends Plugin {
         if (source === "tab-header" && leaf) this.addGroupMenuItems(menu, leaf);
       })
     );
+    // Linked notes follow renames; a deleted note unlinks.
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.groupStore.noteMoved(oldPath, file.path)));
+    this.registerEvent(this.app.vault.on("delete", (file) => this.groupStore.noteMoved(file.path, null)));
+    // A linked note's status shows in the sidebar.
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        if (this.groupStore.list().some((g) => g.note === file.path)) this.refreshTerminusViews();
+      })
+    );
+    this.agentSessionStore.on("change", (session) => this.suggestNoteStatus(session.token, session.status));
+    // "Start Claude on this note" on a note's menu (file list, tab, editor).
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (this.experience !== "multi-agent" || !(file instanceof TFile) || file.extension !== "md") return;
+        menu.addItem((item) =>
+          item
+            .setTitle("Start Claude on this note")
+            .setIcon("square-terminal")
+            .onClick(() => void startClaudeOnNote(this, file))
+        );
+      })
+    );
     this.groupStatusEl = this.addStatusBarItem();
     this.groupStatusEl.addClass("terminus-group-status", "mod-clickable");
     this.groupStatusEl.addEventListener("click", () => {
@@ -258,6 +286,16 @@ export default class TerminusPlugin extends Plugin {
             if (choice.kind === "group") this.addTabToGroup(leaf, choice.target, true);
           }).open();
         }
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "start-claude-on-note",
+      name: "Start Claude on this note",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (this.experience !== "multi-agent" || !file || file.extension !== "md") return false;
+        if (!checking) void startClaudeOnNote(this, file);
         return true;
       },
     });
@@ -548,6 +586,31 @@ export default class TerminusPlugin extends Plugin {
       this.latestPluginVersion = null;
       this.refreshTerminusViews();
     }
+  }
+
+  /**
+   * Suggests (never makes) a status change for a group's linked note: a
+   * turn ending with the note "active" suggests "review"; a new turn with
+   * it in "review" suggests "active". Only for those values, so a note
+   * whose `status` means something else is left alone, and nothing ever
+   * suggests "done".
+   */
+  private suggestNoteStatus(token: string, status: string): void {
+    const previous = this.lastSessionStatus.get(token);
+    this.lastSessionStatus.set(token, status);
+    if (this.experience !== "multi-agent" || previous === status) return;
+    const groupId = this.findTerminalView(token)?.groupId;
+    const group = this.groupStore.get(groupId);
+    const file = noteFile(this, group?.note ?? null);
+    if (!group || !file) return;
+    const current = noteStatus(this, file);
+    let suggestion: "review" | "active" | null = null;
+    const turnEnded = previous === "working" && (status === "finished-unread" || status === "idle");
+    if (turnEnded && current === "active") suggestion = "review";
+    else if (previous !== "working" && status === "working" && current === "review") suggestion = "active";
+    if (!suggestion || this.noteSuggestions.get(group.id) === suggestion) return;
+    this.noteSuggestions.set(group.id, suggestion);
+    this.refreshTerminusViews();
   }
 
   setGroupColor(groupId: string, color: string): void {

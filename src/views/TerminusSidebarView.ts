@@ -1,4 +1,4 @@
-import { FuzzySuggestModal, ItemView, Menu, setIcon, setTooltip, TFolder, WorkspaceLeaf } from "obsidian";
+import { FuzzySuggestModal, ItemView, Menu, setIcon, setTooltip, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 import { pathBasename, pathJoin, pathRelative } from "terminus-node-bridge";
 import { TerminalView } from "./TerminalView";
 import type { TerminalGroup } from "../state/GroupStore";
@@ -6,6 +6,7 @@ import type { GroupTarget } from "../groups/GroupController";
 import { TERMINAL_COLOR_PALETTE } from "../terminal/colorPalette";
 import { refreshTabPendingDot } from "../terminal/tabHeaderColor";
 import { COMMUNITY_PLUGIN_URL } from "../pluginVersion";
+import { isNoteStatus, linkNote, NOTE_STATUSES, noteFile, noteStatus, NoteSuggestModal, openGroupNote, setNoteStatus } from "../groups/groupNotes";
 import type TerminusPlugin from "../main";
 
 export const TERMINUS_SIDEBAR_VIEW_TYPE = "terminus-sidebar";
@@ -202,8 +203,45 @@ export class TerminusSidebarView extends ItemView {
 
     const meta = section.createDiv({ cls: "terminus-sidebar-group-meta" });
     meta.createSpan({ text: `📁 ${this.folderLabel(group.folder)}`, attr: { title: "New terminals in this group start here" } });
+    const note = noteFile(this.plugin, group.note);
+    if (note) {
+      const link = meta.createEl("a", { cls: "terminus-sidebar-note", text: `📝 ${note.basename}`, href: "#" });
+      setTooltip(link, `Open ${note.path}`);
+      link.addEventListener("click", (evt) => {
+        evt.preventDefault();
+        void openGroupNote(this.plugin, group.id);
+      });
+      const status = noteStatus(this.plugin, note);
+      if (status) meta.createSpan({ cls: `terminus-sidebar-note-status is-${isNoteStatus(status) ? status : "other"}`, text: status });
+      this.renderNoteSuggestion(section, group.id, note);
+    }
 
     for (const view of members) this.renderTerminal(section, view);
+  }
+
+  /** "Turn finished. Move the note to review?" -- a suggestion only; the
+   *  note changes only if the user says so. */
+  private renderNoteSuggestion(section: HTMLElement, groupId: string, note: TFile): void {
+    const suggestion = this.plugin.noteSuggestions.get(groupId);
+    if (!suggestion) return;
+    // Stale once the note's status has moved on by other means.
+    const current = noteStatus(this.plugin, note);
+    if ((suggestion === "review" && current !== "active") || (suggestion === "active" && current !== "review")) {
+      this.plugin.noteSuggestions.delete(groupId);
+      return;
+    }
+    const row = section.createDiv({ cls: "terminus-sidebar-suggestion" });
+    row.createSpan({
+      text: suggestion === "review" ? "Turn finished. Move the note to review?" : "Working again. Move the note back to active?",
+    });
+    row.createEl("button", { text: suggestion === "review" ? "Move to review" : "Move to active", cls: "mod-cta" }).addEventListener("click", () => {
+      this.plugin.noteSuggestions.delete(groupId);
+      void setNoteStatus(this.plugin, note, suggestion);
+    });
+    row.createEl("button", { text: "Not now" }).addEventListener("click", () => {
+      this.plugin.noteSuggestions.delete(groupId);
+      this.render();
+    });
   }
 
   private renderRenameInput(row: HTMLElement, group: TerminalGroup): void {
@@ -389,6 +427,25 @@ export class TerminusSidebarView extends ItemView {
     evt.preventDefault();
     const menu = new Menu();
     menu.addItem((item) => item.setTitle("Rename").onClick(() => this.startRename(group.id)));
+    menu.addItem((item) =>
+      item.setTitle(group.note ? "Link to another note…" : "Link to note…").onClick(() => {
+        new NoteSuggestModal(this.plugin, (file) => void linkNote(this.plugin, group.id, file)).open();
+      })
+    );
+    const note = noteFile(this.plugin, group.note);
+    if (note) {
+      menu.addItem((item) => item.setTitle("Open note").onClick(() => void openGroupNote(this.plugin, group.id)));
+      const current = noteStatus(this.plugin, note);
+      for (const status of NOTE_STATUSES) {
+        menu.addItem((item) =>
+          item
+            .setTitle(`Note status: ${status}`)
+            .setChecked(current === status)
+            .onClick(() => void setNoteStatus(this.plugin, note, status))
+        );
+      }
+      menu.addItem((item) => item.setTitle("Unlink note").onClick(() => this.plugin.groupStore.setNote(group.id, null)));
+    }
     menu.addItem((item) =>
       item.setTitle("Set folder…").onClick(() => {
         new FolderSuggestModal(this.plugin, (folder) => {

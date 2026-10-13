@@ -2126,3 +2126,47 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
 .terminus-group-status {
   cursor: pointer;
 }
+
+/* Group notes (Multi-agent). */
+.terminus-sidebar-note {
+  margin-left: 8px;
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.terminus-sidebar-note:hover {
+  color: var(--text-normal);
+  text-decoration: underline;
+}
+
+.terminus-sidebar-note-status {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10px;
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-sidebar-note-status.is-active {
+  color: var(--interactive-accent);
+}
+
+.terminus-sidebar-note-status.is-review {
+  color: var(--color-orange, #e8871e);
+}
+
+.terminus-sidebar-note-status.is-done {
+  color: var(--color-green, #08b94e);
+}
+
+.terminus-sidebar-suggestion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 8px 4px 28px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: var(--font-ui-smaller);
+  background-color: var(--background-secondary);
+}
