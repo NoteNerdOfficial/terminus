@@ -17186,7 +17186,7 @@ function showGroupMenu(evt, plugin, group, actions) {
     );
   }
   if (group.settledAt !== null) {
-    menu.addItem((item) => item.setTitle("Move out of Done").setIcon("undo-2").onClick(() => plugin.groups.unsettleGroup(group.id)));
+    menu.addItem((item) => item.setTitle("Reopen").setIcon("undo-2").onClick(() => plugin.groups.unsettleGroup(group.id)));
   } else {
     menu.addItem(
       (item) => item.setTitle("Settle").setIcon("check-circle-2").setDisabled(!plugin.groups.canSettle(group.id)).onClick(() => plugin.groups.settleGroup(group.id))
@@ -21579,7 +21579,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
             var _a8;
             return `${count} ${count === 1 ? "terminal" : "terminals"} \xB7 ${timeAgo((_a8 = group.settledAt) != null ? _a8 : Date.now())}`;
           },
-          restoreLabel: "Move out of Done",
+          restoreLabel: "Reopen",
           restore: (group) => this.plugin.groups.unsettleGroup(group.id)
         });
       }

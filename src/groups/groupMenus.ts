@@ -190,7 +190,7 @@ export function showGroupMenu(evt: MouseEvent, plugin: TerminusPlugin, group: Te
     );
   }
   if (group.settledAt !== null) {
-    menu.addItem((item) => item.setTitle("Move out of Done").setIcon("undo-2").onClick(() => plugin.groups.unsettleGroup(group.id)));
+    menu.addItem((item) => item.setTitle("Reopen").setIcon("undo-2").onClick(() => plugin.groups.unsettleGroup(group.id)));
   } else {
     menu.addItem((item) =>
       item

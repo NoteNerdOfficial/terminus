@@ -177,7 +177,7 @@ export class TerminusSidebarView extends ItemView {
           open: this.doneOpen,
           toggle: () => (this.doneOpen = !this.doneOpen),
           detail: (group, count) => `${count} ${count === 1 ? "terminal" : "terminals"} · ${timeAgo(group.settledAt ?? Date.now())}`,
-          restoreLabel: "Move out of Done",
+          restoreLabel: "Reopen",
           restore: (group) => this.plugin.groups.unsettleGroup(group.id),
         });
       }
