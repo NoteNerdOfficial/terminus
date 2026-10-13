@@ -1,12 +1,12 @@
-import { FuzzySuggestModal, ItemView, Menu, setIcon, setTooltip, TFile, TFolder, WorkspaceLeaf } from "obsidian";
-import { pathBasename, pathJoin, pathRelative } from "terminus-node-bridge";
+import { ItemView, Menu, setIcon, setTooltip, TFile, WorkspaceLeaf } from "obsidian";
+import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { TerminalView } from "./TerminalView";
 import type { TerminalGroup } from "../state/GroupStore";
 import type { GroupTarget } from "../groups/GroupController";
-import { TERMINAL_COLOR_PALETTE } from "../terminal/colorPalette";
 import { refreshTabPendingDot } from "../terminal/tabHeaderColor";
 import { COMMUNITY_PLUGIN_URL } from "../pluginVersion";
-import { isNoteStatus, linkNote, NOTE_STATUSES, noteFile, noteStatus, NoteSuggestModal, openGroupNote, setNoteStatus } from "../groups/groupNotes";
+import { isNoteStatus, noteFile, noteStatus, openGroupNote, setNoteStatus } from "../groups/groupNotes";
+import { addMoveItems, showGroupMenu } from "../groups/groupMenus";
 import type TerminusPlugin from "../main";
 
 export const TERMINUS_SIDEBAR_VIEW_TYPE = "terminus-sidebar";
@@ -222,12 +222,12 @@ export class TerminusSidebarView extends ItemView {
   /** "Turn finished. Move the note to review?" -- a suggestion only; the
    *  note changes only if the user says so. */
   private renderNoteSuggestion(section: HTMLElement, groupId: string, note: TFile): void {
-    const suggestion = this.plugin.noteSuggestions.get(groupId);
+    const suggestion = this.plugin.groups.noteSuggestions.get(groupId);
     if (!suggestion) return;
     // Stale once the note's status has moved on by other means.
     const current = noteStatus(this.plugin, note);
     if ((suggestion === "review" && current !== "active") || (suggestion === "active" && current !== "review")) {
-      this.plugin.noteSuggestions.delete(groupId);
+      this.plugin.groups.noteSuggestions.delete(groupId);
       return;
     }
     const row = section.createDiv({ cls: "terminus-sidebar-suggestion" });
@@ -235,11 +235,11 @@ export class TerminusSidebarView extends ItemView {
       text: suggestion === "review" ? "Turn finished. Move the note to review?" : "Working again. Move the note back to active?",
     });
     row.createEl("button", { text: suggestion === "review" ? "Move to review" : "Move to active", cls: "mod-cta" }).addEventListener("click", () => {
-      this.plugin.noteSuggestions.delete(groupId);
+      this.plugin.groups.noteSuggestions.delete(groupId);
       void setNoteStatus(this.plugin, note, suggestion);
     });
     row.createEl("button", { text: "Not now" }).addEventListener("click", () => {
-      this.plugin.noteSuggestions.delete(groupId);
+      this.plugin.groups.noteSuggestions.delete(groupId);
       this.render();
     });
   }
@@ -392,79 +392,15 @@ export class TerminusSidebarView extends ItemView {
 
   private showMoveMenu(evt: MouseEvent, views: TerminalView[]): void {
     const menu = new Menu();
-    const current = views.length === 1 ? (views[0]?.groupId ?? null) : undefined;
-    for (const group of this.plugin.groupStore.list()) {
-      menu.addItem((item) =>
-        item
-          .setTitle(group.name)
-          .setChecked(current === group.id)
-          .onClick(() => {
-            this.selected.clear();
-            this.plugin.groups.moveTerminals(views, group.id);
-          })
-      );
-    }
-    menu.addItem((item) =>
-      item
-        .setTitle("Ungrouped")
-        .setChecked(current === null)
-        .onClick(() => {
-          this.selected.clear();
-          this.plugin.groups.moveTerminals(views, null);
-        })
-    );
-    menu.addSeparator();
-    menu.addItem((item) =>
-      item.setTitle("New group").setIcon("plus").onClick(() => {
-        this.selected.clear();
-        void this.plugin.groups.createGroup(views).then((group) => this.startRename(group.id));
-      })
-    );
+    addMoveItems(menu, this.plugin, { terminals: views }, () => this.selected.clear());
     menu.showAtMouseEvent(evt);
   }
 
   private showGroupMenu(evt: MouseEvent, group: TerminalGroup): void {
     evt.preventDefault();
-    const menu = new Menu();
-    menu.addItem((item) => item.setTitle("Rename").onClick(() => this.startRename(group.id)));
-    menu.addItem((item) =>
-      item.setTitle(group.note ? "Link to another note…" : "Link to note…").onClick(() => {
-        new NoteSuggestModal(this.plugin, (file) => void linkNote(this.plugin, group.id, file)).open();
-      })
-    );
-    const note = noteFile(this.plugin, group.note);
-    if (note) {
-      menu.addItem((item) => item.setTitle("Open note").onClick(() => void openGroupNote(this.plugin, group.id)));
-      const current = noteStatus(this.plugin, note);
-      for (const status of NOTE_STATUSES) {
-        menu.addItem((item) =>
-          item
-            .setTitle(`Note status: ${status}`)
-            .setChecked(current === status)
-            .onClick(() => void setNoteStatus(this.plugin, note, status))
-        );
-      }
-      menu.addItem((item) => item.setTitle("Unlink note").onClick(() => this.plugin.groupStore.setNote(group.id, null)));
-    }
-    menu.addItem((item) =>
-      item.setTitle("Set folder…").onClick(() => {
-        new FolderSuggestModal(this.plugin, (folder) => {
-          this.plugin.groupStore.setFolder(group.id, folder);
-        }).open();
-      })
-    );
-    menu.addSeparator();
-    for (const option of TERMINAL_COLOR_PALETTE) {
-      menu.addItem((item) =>
-        item
-          .setTitle(option.name)
-          .setChecked(group.color === option.value)
-          .onClick(() => this.plugin.setGroupColor(group.id, option.value))
-      );
-    }
-    menu.addSeparator();
-    menu.addItem((item) =>
-      item.setTitle("Close group").onClick(() => {
+    showGroupMenu(evt, this.plugin, group, {
+      rename: () => this.startRename(group.id),
+      close: () => {
         const members = this.plugin.groups.terminalsIn(group.id);
         if (this.plugin.groups.busy(members).length > 0) {
           this.confirmingClose = group.id;
@@ -472,9 +408,8 @@ export class TerminusSidebarView extends ItemView {
         } else {
           this.plugin.groups.closeGroup(group.id);
         }
-      })
-    );
-    menu.showAtMouseEvent(evt);
+      },
+    });
   }
 
   private status(view: TerminalView): SidebarStatus | null {
@@ -498,26 +433,3 @@ const STATUS_LABELS: Record<SidebarStatus, string> = {
   "finished-unread": "Finished",
   idle: "Idle",
 };
-
-/** Picks a vault folder for a group's new terminals to start in. */
-class FolderSuggestModal extends FuzzySuggestModal<TFolder> {
-  constructor(
-    private plugin: TerminusPlugin,
-    private onPick: (absolutePath: string | null) => void
-  ) {
-    super(plugin.app);
-    this.setPlaceholder("Folder new terminals in this group start in");
-  }
-
-  getItems(): TFolder[] {
-    return this.app.vault.getAllLoadedFiles().filter((f): f is TFolder => f instanceof TFolder);
-  }
-
-  getItemText(folder: TFolder): string {
-    return folder.isRoot() ? "/ (vault)" : folder.path;
-  }
-
-  onChooseItem(folder: TFolder): void {
-    this.onPick(folder.isRoot() ? null : pathJoin(this.plugin.getVaultBasePath(), folder.path));
-  }
-}

@@ -28,6 +28,7 @@ import { RenameTerminalModal } from "../modals/RenameTerminalModal";
 import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload, StopHookPayload } from "../hooks/types";
 import { getGitBranch } from "../git/gitBranch";
 import { withoutInheritedClaudeSession } from "../pty/claudeSessionEnv";
+import { addMoveItems } from "../groups/groupMenus";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
 
@@ -330,7 +331,7 @@ export class TerminalView extends ItemView {
       app: this.app,
       getCwd: () => this.cwdTracker?.getCwd() ?? this.restoredCwd,
       getVaultBasePath: () => this.plugin.getVaultBasePath(),
-      onTabOpened: (leaf) => this.plugin.addTabToGroup(leaf, this.groupIdValue),
+      onTabOpened: (leaf) => this.plugin.groups.addTabToGroup(leaf, this.groupIdValue),
     });
 
     this.plugin.reviewServer.register(this.token, {
@@ -695,36 +696,13 @@ export class TerminalView extends ItemView {
     return this.token;
   }
 
-  /** The tab's right-click and ⋯ menus get "Move to group" (Multi-agent). */
+  /** The tab's right-click and ⋯ menus get the move items (Multi-agent),
+   *  the same ones every group menu uses (see groupMenus.ts). */
   onPaneMenu(menu: Menu, source: string): void {
     super.onPaneMenu(menu, source);
     if (this.plugin.experience !== "multi-agent") return;
     menu.addSeparator();
-    for (const group of this.plugin.groupStore.list()) {
-      menu.addItem((item) =>
-        item
-          .setTitle(`Move to ${group.name}`)
-          .setIcon("folder-input")
-          .setChecked(this.groupIdValue === group.id)
-          .onClick(() => this.plugin.groups.moveTerminals([this], group.id))
-      );
-    }
-    if (this.groupIdValue) {
-      menu.addItem((item) =>
-        item
-          .setTitle("Take out of its group")
-          .setIcon("folder-output")
-          .onClick(() => this.plugin.groups.moveTerminals([this], null))
-      );
-    }
-    menu.addItem((item) =>
-      item
-        .setTitle("Move to a new group")
-        .setIcon("folder-plus")
-        .onClick(() => {
-          void this.plugin.groups.createGroup([this]).then(async (group) => (await this.plugin.revealSidebar())?.startRename(group.id));
-        })
-    );
+    addMoveItems(menu, this.plugin, { terminals: [this] });
   }
 
   /** Its own colour tag, else its group's (Multi-agent). */
@@ -828,7 +806,7 @@ export class TerminalView extends ItemView {
     this.plugin.reviewServer.unregister(this.token);
     // Closing the terminal ends its session even if SessionEnd never comes.
     this.plugin.agentSessionStore.sessionEnded(this.token);
-    this.plugin.onTerminalClosed();
+    this.plugin.groups.onTerminalClosed();
     this.pty?.kill();
     this.commandTracker?.dispose();
 

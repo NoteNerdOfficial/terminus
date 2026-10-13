@@ -59,7 +59,7 @@ export async function openGroupNote(plugin: TerminusPlugin, groupId: string): Pr
   if (!file) return;
   const leaf = plugin.app.workspace.getLeaf("tab");
   await leaf.openFile(file);
-  plugin.addTabToGroup(leaf, groupId);
+  plugin.groups.addTabToGroup(leaf, groupId);
 }
 
 /**

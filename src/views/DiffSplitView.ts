@@ -51,7 +51,7 @@ export class DiffSplitView extends ItemView {
     this.render();
     // Showing another group's change switches to that group, so the tab
     // that was just asked for doesn't vanish.
-    this.plugin.revealGroupOf(this.leaf);
+    this.plugin.groups.revealGroupOf(this.leaf);
   }
 
   getState(): Record<string, unknown> {

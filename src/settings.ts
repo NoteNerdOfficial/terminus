@@ -50,11 +50,15 @@ export const EXPERIENCE_LABELS: Record<Experience, string> = {
   "multi-agent": "Multi-agent",
 };
 
-/** Off until the Agent inbox and the Terminus sidebar exist: while it's off,
- *  the Experience setting and the invite to try Multi-agent stay hidden and
+/** Set at build time by esbuild.config.mjs: false unless built with
+ *  TERMINUS_MULTI_AGENT=1 (a test build; see .claude/scripts/deploy.mjs). */
+declare const TERMINUS_MULTI_AGENT_AVAILABLE: boolean;
+
+/** Off in normal builds until Multi-agent ships: while it's off, the
+ *  Experience setting and the invite to try Multi-agent stay hidden and
  *  every install runs Classic, whatever its saved `experience` says, so a
- *  release can never offer a mode with nothing in it. */
-export const MULTI_AGENT_AVAILABLE = false;
+ *  release can never offer a mode that isn't ready. */
+export const MULTI_AGENT_AVAILABLE: boolean = TERMINUS_MULTI_AGENT_AVAILABLE;
 
 export interface ClassicSettings {
   autoRevealPendingChanges: boolean;

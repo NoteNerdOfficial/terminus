@@ -1,4 +1,4 @@
-import { Menu, Notice, Plugin, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+import { Menu, Notice, Plugin, WorkspaceLeaf, setIcon } from "obsidian";
 import { pathBasename, pathJoin, pathRelative } from "terminus-node-bridge";
 import { ReviewServer } from "./server/ReviewServer";
 import { provisionClaudeSettings, getVaultBasePath, getHookBridgePath } from "./hooks/provisionSettings";
@@ -12,9 +12,6 @@ import { AGENT_INBOX_VIEW_TYPE, AgentInboxView } from "./views/AgentInboxView";
 import { TERMINUS_SIDEBAR_VIEW_TYPE, TerminusSidebarView } from "./views/TerminusSidebarView";
 import { GroupStore } from "./state/GroupStore";
 import { GroupController } from "./groups/GroupController";
-import { GroupSuggestModal } from "./groups/GroupSuggestModal";
-import { TabVisibility } from "./groups/TabVisibility";
-import { noteFile, noteStatus, startClaudeOnNote } from "./groups/groupNotes";
 import { TERMINAL_COLOR_PALETTE } from "./terminal/colorPalette";
 import { fetchLatestPluginVersion, PluginVersionStatus, versionStatus } from "./pluginVersion";
 import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore";
@@ -58,18 +55,15 @@ export default class TerminusPlugin extends Plugin {
   /** Multi-agent's terminal groups; created once settings are loaded. */
   groupStore!: GroupStore;
   readonly groups = new GroupController(this);
-  readonly tabs = new TabVisibility(this);
-  private groupStatusEl: HTMLElement | null = null;
-  /** Group id → a suggested status for its note, shown in the sidebar
-   *  until acted on or dismissed (see suggestNoteStatus). */
-  readonly noteSuggestions = new Map<string, "review" | "active">();
-  /** Each session's last status, to spot a turn starting or ending. */
-  private lastSessionStatus = new Map<string, string>();
   /** Latest release on GitHub, once checked (Multi-agent only). */
   private latestPluginVersion: string | null = null;
   /** Set first thing in onunload: views closing then aren't the user
    *  closing terminals, so groups mustn't be tidied away. */
   private unloading = false;
+
+  get isUnloading(): boolean {
+    return this.unloading;
+  }
   private readonly transcriptUsage = new TranscriptUsageReader();
   /** Subagents whose usage was read after they ended: final, never re-read. */
   private finalSubagentUsage = new Set<string>();
@@ -144,58 +138,8 @@ export default class TerminusPlugin extends Plugin {
     this.registerView(DIFF_SPLIT_VIEW_TYPE, (leaf) => new DiffSplitView(leaf, this));
     this.registerView(AGENT_INBOX_VIEW_TYPE, (leaf) => new AgentInboxView(leaf, this));
     this.registerView(TERMINUS_SIDEBAR_VIEW_TYPE, (leaf) => new TerminusSidebarView(leaf, this));
+    this.groups.register();
 
-    // Opening a terminal from another group switches to that group.
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", (leaf) => {
-        if (this.experience === "multi-agent") this.groups.onActiveLeaf(leaf);
-      })
-    );
-    // New tabs, moved panes and closed tabs: re-apply which tabs show. Also
-    // where terminals restored after startup get loaded (see
-    // startMultiAgentViews).
-    this.registerEvent(
-      this.app.workspace.on("layout-change", () => {
-        if (this.experience === "multi-agent") void this.groups.loadDeferredTerminals();
-        this.applyGroupVisibility();
-      })
-    );
-    this.groupStore.on("change", () => this.applyGroupVisibility());
-    // A note tab's right-click menu: put it in a group, or back in every group.
-    this.registerEvent(
-      this.app.workspace.on("file-menu", (menu, _file, source, leaf) => {
-        if (source === "tab-header" && leaf) this.addGroupMenuItems(menu, leaf);
-      })
-    );
-    // Linked notes follow renames; a deleted note unlinks.
-    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.groupStore.noteMoved(oldPath, file.path)));
-    this.registerEvent(this.app.vault.on("delete", (file) => this.groupStore.noteMoved(file.path, null)));
-    // A linked note's status shows in the sidebar.
-    this.registerEvent(
-      this.app.metadataCache.on("changed", (file) => {
-        if (this.groupStore.list().some((g) => g.note === file.path)) this.refreshTerminusViews();
-      })
-    );
-    this.agentSessionStore.on("change", (session) => this.suggestNoteStatus(session.token, session.status));
-    // "Start Claude on this note" on a note's menu (file list, tab, editor).
-    this.registerEvent(
-      this.app.workspace.on("file-menu", (menu, file) => {
-        if (this.experience !== "multi-agent" || !(file instanceof TFile) || file.extension !== "md") return;
-        menu.addItem((item) =>
-          item
-            .setTitle("Start Claude on this note")
-            .setIcon("square-terminal")
-            .onClick(() => void startClaudeOnNote(this, file))
-        );
-      })
-    );
-    this.groupStatusEl = this.addStatusBarItem();
-    this.groupStatusEl.addClass("terminus-group-status", "mod-clickable");
-    this.groupStatusEl.addEventListener("click", () => {
-      new GroupSuggestModal(this, "Switch to group", false, (choice) => {
-        if (choice.kind === "group") void this.groups.selectGroup(choice.target);
-      }).open();
-    });
     // Twice a day, while the sidebar that shows it is in use.
     this.registerInterval(window.setInterval(() => void this.checkPluginVersion(), 12 * 60 * 60 * 1000));
 
@@ -232,80 +176,6 @@ export default class TerminusPlugin extends Plugin {
       checkCallback: (checking) => {
         if (this.experience !== "multi-agent") return false;
         if (!checking) void this.revealReviewView();
-        return true;
-      },
-    });
-    this.addCommand({
-      id: "new-group",
-      name: "New group",
-      checkCallback: (checking) => {
-        if (this.experience !== "multi-agent") return false;
-        if (!checking) {
-          void this.groups.createGroup().then(async (group) => (await this.revealSidebar())?.startRename(group.id));
-        }
-        return true;
-      },
-    });
-    this.addCommand({
-      id: "switch-group",
-      name: "Switch group…",
-      checkCallback: (checking) => {
-        if (this.experience !== "multi-agent" || this.groupStore.list().length === 0) return false;
-        if (!checking) new GroupSuggestModal(this, "Switch to group", false, (choice) => {
-            if (choice.kind === "group") void this.groups.selectGroup(choice.target);
-          }).open();
-        return true;
-      },
-    });
-    this.addCommand({
-      id: "move-terminal-to-group",
-      name: "Move terminal to group…",
-      checkCallback: (checking) => {
-        const view = this.app.workspace.getActiveViewOfType(TerminalView);
-        if (this.experience !== "multi-agent" || !view) return false;
-        if (!checking) {
-          new GroupSuggestModal(this, "Move this terminal to", true, (choice) => {
-            if (choice.kind === "new") {
-              void this.groups.createGroup([view]).then(async (group) => (await this.revealSidebar())?.startRename(group.id));
-            } else {
-              this.groups.moveTerminals([view], choice.target);
-            }
-          }).open();
-        }
-        return true;
-      },
-    });
-    this.addCommand({
-      id: "add-tab-to-group",
-      name: "Add current tab to group…",
-      checkCallback: (checking) => {
-        const leaf = this.app.workspace.getMostRecentLeaf();
-        if (this.experience !== "multi-agent" || !leaf || leaf.view instanceof TerminalView || this.groupStore.list().length === 0) return false;
-        if (!checking) {
-          new GroupSuggestModal(this, "Add this tab to", false, (choice) => {
-            if (choice.kind === "group") this.addTabToGroup(leaf, choice.target, true);
-          }).open();
-        }
-        return true;
-      },
-    });
-    this.addCommand({
-      id: "start-claude-on-note",
-      name: "Start Claude on this note",
-      checkCallback: (checking) => {
-        const file = this.app.workspace.getActiveFile();
-        if (this.experience !== "multi-agent" || !file || file.extension !== "md") return false;
-        if (!checking) void startClaudeOnNote(this, file);
-        return true;
-      },
-    });
-    this.addCommand({
-      id: "close-group",
-      name: "Close group",
-      checkCallback: (checking) => {
-        const groupId = this.groupStore?.activeGroupId;
-        if (this.experience !== "multi-agent" || !groupId) return false;
-        if (!checking) void this.closeGroupAsking(groupId);
         return true;
       },
     });
@@ -447,7 +317,7 @@ export default class TerminusPlugin extends Plugin {
     }
     // Group colours and hidden tabs apply only in Multi-agent.
     for (const view of this.groups.terminals()) view.refreshGroupColor();
-    this.applyGroupVisibility();
+    this.groups.applyVisibility();
   }
 
   /**
@@ -460,9 +330,7 @@ export default class TerminusPlugin extends Plugin {
    * stays, shown as having no terminals, until its × removes it.
    */
   private async startMultiAgentViews(): Promise<void> {
-    await this.groups.loadDeferredTerminals();
-    this.groupStore.pruneTabs(this.liveLeafIds());
-    this.applyGroupVisibility();
+    await this.groups.start();
     for (const view of this.groups.terminals()) view.refreshGroupColor();
     await this.revealSidebar(false);
     void this.checkPluginVersion();
@@ -498,83 +366,6 @@ export default class TerminusPlugin extends Plugin {
     }
   }
 
-  /** Shows the selected group's tabs and hides other groups' (or, outside
-   *  Multi-agent, shows everything), and updates the status bar. */
-  applyGroupVisibility(): void {
-    this.tabs.apply();
-    this.refreshGroupStatus();
-  }
-
-  /** "⧉ Auth rotation · 4 in other groups" in the status bar; click to
-   *  switch. Empty outside Multi-agent or with no groups. */
-  private refreshGroupStatus(): void {
-    const el = this.groupStatusEl;
-    if (!el) return;
-    const groups = this.experience === "multi-agent" ? this.groupStore.list() : [];
-    el.toggle(groups.length > 0);
-    if (groups.length === 0) return;
-    const active = this.groupStore.get(this.groupStore.activeGroupId);
-    const hidden = this.tabs.hiddenTerminalCount();
-    el.setText(`⧉ ${active?.name ?? "No group"}${hidden > 0 ? ` · ${hidden} in other groups` : ""}`);
-    el.setAttr("aria-label", "Switch group");
-  }
-
-  /**
-   * Puts a non-terminal tab in a group (null: back in every group). With
-   * `stay` false the tab came from a group's terminal or card, so that
-   * group is selected and the tab the user just opened stays in view.
-   */
-  addTabToGroup(leaf: WorkspaceLeaf, groupId: string | null, stay = false): void {
-    if (this.experience !== "multi-agent") return;
-    const leafId = (leaf as WorkspaceLeaf & { id?: string }).id;
-    if (!leafId || (!groupId && !stay)) return;
-    this.groupStore.setTabGroup(leafId, groupId);
-    if (!stay) this.revealGroupOf(leaf);
-  }
-
-  /** Selects the group a tab belongs to, if it's another one. */
-  revealGroupOf(leaf: WorkspaceLeaf): void {
-    if (this.experience !== "multi-agent") return;
-    const group = this.tabs.groupOf(leaf);
-    if (group && group !== this.groupStore.activeGroupId) this.groupStore.setActive(group);
-    else this.applyGroupVisibility();
-  }
-
-  /** "Add to group" / "Show in every group" for a tab's right-click menu. */
-  addGroupMenuItems(menu: Menu, leaf: WorkspaceLeaf): void {
-    if (this.experience !== "multi-agent") return;
-    const leafId = (leaf as WorkspaceLeaf & { id?: string }).id;
-    if (!leafId) return;
-    const current = this.groupStore.tabGroup(leafId);
-    menu.addSeparator();
-    for (const group of this.groupStore.list()) {
-      menu.addItem((item) =>
-        item
-          .setTitle(`Add to ${group.name}`)
-          .setIcon("folder-plus")
-          .setChecked(current === group.id)
-          .onClick(() => this.addTabToGroup(leaf, group.id, true))
-      );
-    }
-    if (current) {
-      menu.addItem((item) =>
-        item
-          .setTitle("Show in every group")
-          .setIcon("folder-minus")
-          .onClick(() => this.addTabToGroup(leaf, null, true))
-      );
-    }
-  }
-
-  private liveLeafIds(): Set<string> {
-    const ids = new Set<string>();
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      const id = (leaf as WorkspaceLeaf & { id?: string }).id;
-      if (id) ids.add(id);
-    });
-    return ids;
-  }
-
   /** Turning it on checks at once; turning it off forgets the result, so
    *  the sidebar goes back to the plain version. */
   async setCheckForUpdates(check: boolean): Promise<void> {
@@ -586,46 +377,6 @@ export default class TerminusPlugin extends Plugin {
       this.latestPluginVersion = null;
       this.refreshTerminusViews();
     }
-  }
-
-  /**
-   * Suggests (never makes) a status change for a group's linked note: a
-   * turn ending with the note "active" suggests "review"; a new turn with
-   * it in "review" suggests "active". Only for those values, so a note
-   * whose `status` means something else is left alone, and nothing ever
-   * suggests "done".
-   */
-  private suggestNoteStatus(token: string, status: string): void {
-    const previous = this.lastSessionStatus.get(token);
-    this.lastSessionStatus.set(token, status);
-    if (this.experience !== "multi-agent" || previous === status) return;
-    const groupId = this.findTerminalView(token)?.groupId;
-    const group = this.groupStore.get(groupId);
-    const file = noteFile(this, group?.note ?? null);
-    if (!group || !file) return;
-    const current = noteStatus(this, file);
-    let suggestion: "review" | "active" | null = null;
-    const turnEnded = previous === "working" && (status === "finished-unread" || status === "idle");
-    if (turnEnded && current === "active") suggestion = "review";
-    else if (previous !== "working" && status === "working" && current === "review") suggestion = "active";
-    if (!suggestion || this.noteSuggestions.get(group.id) === suggestion) return;
-    this.noteSuggestions.set(group.id, suggestion);
-    this.refreshTerminusViews();
-  }
-
-  setGroupColor(groupId: string, color: string): void {
-    this.groupStore.setColor(groupId, color);
-    for (const view of this.groups.terminalsIn(groupId)) view.refreshGroupColor();
-  }
-
-  /** A terminal's tab closed. A group it emptied is removed -- except while
-   *  Terminus itself is unloading, when every view closes at once. */
-  onTerminalClosed(): void {
-    if (this.unloading || this.experience !== "multi-agent") return;
-    // After the leaf has left the workspace.
-    window.setTimeout(() => {
-      if (!this.unloading) this.groups.removeEmptyGroups();
-    }, 0);
   }
 
   /** Each experience has its own review view: closes the other one's
@@ -937,18 +688,6 @@ export default class TerminusPlugin extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_SIDEBAR_VIEW_TYPE)) {
       if (leaf.view instanceof TerminusSidebarView) leaf.view.render();
     }
-  }
-
-  /** The command's version of a group's ×: asks first only when a session
-   *  in it is mid-turn or waiting on an answer. */
-  private async closeGroupAsking(groupId: string): Promise<void> {
-    const group = this.groupStore.get(groupId);
-    if (!group) return;
-    if (this.groups.busy(this.groups.terminalsIn(groupId)).length > 0) {
-      const ok = await ConfirmModal.confirm(this.app, `Close ${group.name}?`, "Claude is mid-turn here. Close anyway?", "Close");
-      if (!ok) return;
-    }
-    this.groups.closeGroup(groupId);
   }
 
   findTerminalView(token: string): TerminalView | null {

@@ -46,7 +46,7 @@ export async function openChangedFile(plugin: TerminusPlugin, change: PendingCha
   await leaf.openFile(file, firstHunkLine === null ? undefined : { eState: { line: firstHunkLine } });
   // Joins the group of the session that made the change (Multi-agent).
   const owner = change.contributors[0]?.token;
-  plugin.addTabToGroup(leaf, owner ? (plugin.findTerminalView(owner)?.groupId ?? null) : null);
+  plugin.groups.addTabToGroup(leaf, owner ? (plugin.findTerminalView(owner)?.groupId ?? null) : null);
 
   // Everything past this point is the inline-diff overlay, which is a bonus
   // on top of the open rather than the reason for it -- so each of these

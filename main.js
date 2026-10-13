@@ -391,8 +391,8 @@ __export(main_exports, {
   default: () => TerminusPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian25 = require("obsidian");
-var import_terminus_node_bridge27 = __toESM(require_dist());
+var import_obsidian27 = require("obsidian");
+var import_terminus_node_bridge28 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
 var import_terminus_node_bridge = __toESM(require_dist());
@@ -1367,7 +1367,7 @@ ${transcript}`;
 }
 
 // src/views/TerminalView.ts
-var import_obsidian7 = require("obsidian");
+var import_obsidian10 = require("obsidian");
 var import_electron2 = require("electron");
 
 // node_modules/@xterm/xterm/lib/xterm.mjs
@@ -15427,7 +15427,7 @@ var xr2 = class extends B3 {
 };
 
 // src/views/TerminalView.ts
-var import_terminus_node_bridge13 = __toESM(require_dist());
+var import_terminus_node_bridge14 = __toESM(require_dist());
 
 // src/node/emitter.ts
 var TypedEmitter = class {
@@ -16514,6 +16514,250 @@ async function getGitBranch(cwd) {
   }
 }
 
+// src/groups/groupMenus.ts
+var import_obsidian9 = require("obsidian");
+var import_terminus_node_bridge13 = __toESM(require_dist());
+
+// src/groups/groupNotes.ts
+var import_obsidian7 = require("obsidian");
+var NOTE_STATUSES = ["active", "review", "parked", "done"];
+function isNoteStatus(value) {
+  return typeof value === "string" && NOTE_STATUSES.includes(value);
+}
+function noteFile(plugin, path) {
+  if (!path)
+    return null;
+  const file = plugin.app.vault.getAbstractFileByPath(path);
+  return file instanceof import_obsidian7.TFile ? file : null;
+}
+function noteStatus(plugin, file) {
+  var _a8, _b;
+  const value = (_b = (_a8 = plugin.app.metadataCache.getFileCache(file)) == null ? void 0 : _a8.frontmatter) == null ? void 0 : _b.status;
+  return typeof value === "string" ? value : null;
+}
+async function setNoteStatus(plugin, file, status) {
+  try {
+    await plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
+      frontmatter.status = status;
+    });
+  } catch (err) {
+    new import_obsidian7.Notice(`Terminus: couldn't update ${file.basename}'s status: ${String(err)}`);
+  }
+}
+async function linkNote(plugin, groupId, file) {
+  plugin.groupStore.setNote(groupId, file.path);
+  if (noteStatus(plugin, file) !== null)
+    return;
+  try {
+    await plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
+      var _a8;
+      (_a8 = frontmatter.status) != null ? _a8 : frontmatter.status = "active";
+    });
+  } catch (err) {
+    new import_obsidian7.Notice(`Terminus: linked ${file.basename}, but couldn't add its status: ${String(err)}`);
+  }
+}
+async function openGroupNote(plugin, groupId) {
+  var _a8, _b;
+  const file = noteFile(plugin, (_b = (_a8 = plugin.groupStore.get(groupId)) == null ? void 0 : _a8.note) != null ? _b : null);
+  if (!file)
+    return;
+  const leaf = plugin.app.workspace.getLeaf("tab");
+  await leaf.openFile(file);
+  plugin.groups.addTabToGroup(leaf, groupId);
+}
+async function startClaudeOnNote(plugin, file) {
+  const group = plugin.groupStore.create();
+  plugin.groupStore.rename(group.id, file.basename);
+  await linkNote(plugin, group.id, file);
+  await plugin.groups.newTerminal(group.id, true, { command: "claude", prompt: `Read ${file.path} and let's work on it.` });
+  await plugin.groups.selectGroup(group.id);
+}
+var NoteSuggestModal = class extends import_obsidian7.FuzzySuggestModal {
+  constructor(plugin, onPick) {
+    super(plugin.app);
+    this.onPick = onPick;
+    this.setPlaceholder("Note to link to this group");
+  }
+  getItems() {
+    return this.app.vault.getMarkdownFiles();
+  }
+  getItemText(file) {
+    return file.path;
+  }
+  onChooseItem(file) {
+    this.onPick(file);
+  }
+};
+
+// src/groups/GroupSuggestModal.ts
+var import_obsidian8 = require("obsidian");
+var GroupSuggestModal = class extends import_obsidian8.SuggestModal {
+  constructor(plugin, placeholder, options, onPick) {
+    super(plugin.app);
+    this.plugin = plugin;
+    this.options = options;
+    this.onPick = onPick;
+    this.setPlaceholder(placeholder);
+  }
+  getSuggestions(query) {
+    const options = this.plugin.groupStore.list().map((g2) => ({ choice: { kind: "group", target: g2.id }, label: g2.name }));
+    if (this.options.offerNew)
+      options.push({ choice: { kind: "new" }, label: "New group" });
+    if (this.options.mode === "switch")
+      options.push({ choice: { kind: "group", target: null }, label: "No group (ungrouped terminals only)" });
+    else if (this.options.offerRemove)
+      options.push({ choice: { kind: "group", target: null }, label: "Remove from group" });
+    const q2 = query.trim().toLowerCase();
+    return q2 ? options.filter((o2) => o2.label.toLowerCase().includes(q2)) : options;
+  }
+  renderSuggestion(option, el2) {
+    el2.setText(option.label);
+  }
+  onChooseSuggestion(option) {
+    this.onPick(option.choice);
+  }
+};
+
+// src/groups/groupMenus.ts
+function subjectGroup(plugin, subject) {
+  var _a8;
+  if ("tab" in subject) {
+    const id = subject.tab.id;
+    return id ? (_a8 = plugin.groupStore.tabGroup(id)) != null ? _a8 : null : null;
+  }
+  const groups = new Set(subject.terminals.map((t) => {
+    var _a9;
+    return (_a9 = t.groupId) != null ? _a9 : null;
+  }));
+  return groups.size === 1 ? [...groups][0] : void 0;
+}
+function moveSubject(plugin, subject, target) {
+  if ("tab" in subject)
+    plugin.groups.addTabToGroup(subject.tab, target, true);
+  else
+    plugin.groups.moveTerminals(subject.terminals, target);
+}
+function moveToNewGroup(plugin, terminals) {
+  void plugin.groups.createGroup(terminals).then(async (group) => {
+    var _a8;
+    return (_a8 = await plugin.revealSidebar()) == null ? void 0 : _a8.startRename(group.id);
+  });
+}
+function addMoveItems(menu, plugin, subject, onDone) {
+  const current = subjectGroup(plugin, subject);
+  const done = (fn3) => () => {
+    onDone == null ? void 0 : onDone();
+    fn3();
+  };
+  for (const group of plugin.groupStore.list()) {
+    menu.addItem(
+      (item) => item.setTitle(`Move to ${group.name}`).setIcon("folder-input").setChecked(current === group.id).onClick(done(() => moveSubject(plugin, subject, group.id)))
+    );
+  }
+  if ("terminals" in subject) {
+    menu.addItem(
+      (item) => item.setTitle("Move to new group").setIcon("folder-plus").onClick(done(() => moveToNewGroup(plugin, subject.terminals)))
+    );
+  }
+  if (current) {
+    menu.addItem(
+      (item) => item.setTitle("Remove from group").setIcon("folder-output").onClick(done(() => moveSubject(plugin, subject, null)))
+    );
+  }
+}
+function addNoteMenuItems(menu, plugin, file, leaf) {
+  const note = noteFile(plugin, file.path);
+  const startable = (note == null ? void 0 : note.extension) === "md";
+  const movable = !!leaf && !(leaf.view instanceof TerminalView) && plugin.groupStore.list().length > 0;
+  if (!startable && !movable)
+    return;
+  menu.addSeparator();
+  if (note && startable) {
+    menu.addItem(
+      (item) => item.setTitle("Start Claude on this note").setIcon("square-terminal").onClick(() => void startClaudeOnNote(plugin, note))
+    );
+  }
+  if (movable && leaf)
+    addMoveItems(menu, plugin, { tab: leaf });
+}
+function showGroupMenu(evt, plugin, group, actions) {
+  const anchor = evt.currentTarget instanceof HTMLElement ? evt.currentTarget : null;
+  const menu = new import_obsidian9.Menu();
+  menu.addItem((item) => item.setTitle("Rename").setIcon("pencil").onClick(actions.rename));
+  menu.addItem(
+    (item) => item.setTitle("Set folder\u2026").setIcon("folder").onClick(() => new FolderSuggestModal(plugin, (folder) => plugin.groupStore.setFolder(group.id, folder)).open())
+  );
+  if (anchor) {
+    menu.addItem(
+      (item) => item.setTitle("Colour\u2026").setIcon("palette").onClick(() => openTerminalColorPicker(anchor, group.color, (color) => color && plugin.groups.setGroupColor(group.id, color)))
+    );
+  }
+  menu.addSeparator();
+  const note = noteFile(plugin, group.note);
+  if (note) {
+    menu.addItem((item) => item.setTitle("Open note").setIcon("file-text").onClick(() => void openGroupNote(plugin, group.id)));
+    menu.addItem(
+      (item) => item.setTitle("Note status\u2026").setIcon("list-checks").onClick(() => new NoteStatusModal(plugin, noteStatus(plugin, note), (status) => void setNoteStatus(plugin, note, status)).open())
+    );
+    menu.addItem((item) => item.setTitle("Unlink note").setIcon("unlink").onClick(() => plugin.groupStore.setNote(group.id, null)));
+  } else {
+    menu.addItem(
+      (item) => item.setTitle("Link to note\u2026").setIcon("link").onClick(() => new NoteSuggestModal(plugin, (file) => void linkNote(plugin, group.id, file)).open())
+    );
+  }
+  menu.addSeparator();
+  menu.addItem((item) => item.setTitle("Close group").setIcon("x").onClick(actions.close));
+  menu.showAtMouseEvent(evt);
+}
+function moveTabCommand(plugin, leaf) {
+  const terminal = leaf.view instanceof TerminalView ? leaf.view : null;
+  const subject = terminal ? { terminals: [terminal] } : { tab: leaf };
+  const inGroup = !!subjectGroup(plugin, subject);
+  new GroupSuggestModal(plugin, "Move this tab to", { mode: "move", offerNew: !!terminal, offerRemove: inGroup }, (choice) => {
+    if (choice.kind === "new") {
+      if (terminal)
+        moveToNewGroup(plugin, [terminal]);
+      return;
+    }
+    moveSubject(plugin, subject, choice.target);
+  }).open();
+}
+var NoteStatusModal = class extends import_obsidian9.SuggestModal {
+  constructor(plugin, current, onPick) {
+    super(plugin.app);
+    this.current = current;
+    this.onPick = onPick;
+    this.setPlaceholder("Note status");
+  }
+  getSuggestions(query) {
+    return NOTE_STATUSES.filter((s15) => s15.includes(query.trim().toLowerCase()));
+  }
+  renderSuggestion(status, el2) {
+    el2.setText(status === this.current ? `${status} (current)` : status);
+  }
+  onChooseSuggestion(status) {
+    this.onPick(status);
+  }
+};
+var FolderSuggestModal = class extends import_obsidian9.FuzzySuggestModal {
+  constructor(plugin, onPick) {
+    super(plugin.app);
+    this.plugin = plugin;
+    this.onPick = onPick;
+    this.setPlaceholder("Folder new terminals in this group start in");
+  }
+  getItems() {
+    return this.app.vault.getAllLoadedFiles().filter((f) => f instanceof import_obsidian9.TFolder);
+  }
+  getItemText(folder) {
+    return folder.isRoot() ? "/ (vault)" : folder.path;
+  }
+  onChooseItem(folder) {
+    this.onPick(folder.isRoot() ? null : (0, import_terminus_node_bridge13.pathJoin)(this.plugin.getVaultBasePath(), folder.path));
+  }
+};
+
 // src/views/TerminalView.ts
 var TERMINUS_VIEW_TYPE = "terminus-view";
 var SCROLLBACK_PERSIST_LINES = 1e3;
@@ -16538,7 +16782,7 @@ function middleTruncate(text, max = 26) {
 }
 function getOsFilePath(file) {
   var _a8;
-  if (!import_obsidian7.Platform.isDesktopApp)
+  if (!import_obsidian10.Platform.isDesktopApp)
     return void 0;
   try {
     const path = (_a8 = import_electron2.webUtils) == null ? void 0 : _a8.getPathForFile(file);
@@ -16567,7 +16811,7 @@ function resolveXtermTheme() {
     selectionBackground: v3("--text-selection", "#3a3d41")
   };
 }
-var TerminalView = class extends import_obsidian7.ItemView {
+var TerminalView = class extends import_obsidian10.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -16630,7 +16874,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     // dot the user never focuses is exactly the case it exists to catch)
     // that a timed guess would only risk clearing it too early.
     this.isPendingAttention = false;
-    this.token = (0, import_terminus_node_bridge13.randomHex)(16);
+    this.token = (0, import_terminus_node_bridge14.randomHex)(16);
     this.terminalNumber = plugin.allocateTerminalNumber();
   }
   getViewType() {
@@ -16696,7 +16940,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
         return (_b2 = (_a9 = this.cwdTracker) == null ? void 0 : _a9.getCwd()) != null ? _b2 : this.restoredCwd;
       },
       getVaultBasePath: () => this.plugin.getVaultBasePath(),
-      onTabOpened: (leaf) => this.plugin.addTabToGroup(leaf, this.groupIdValue)
+      onTabOpened: (leaf) => this.plugin.groups.addTabToGroup(leaf, this.groupIdValue)
     });
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload),
@@ -16824,7 +17068,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     this.activityFiles.add(filePath);
     const names = [...this.activityFiles];
     const only = names.length === 1 ? names[0] : void 0;
-    const label = only ? middleTruncate((0, import_terminus_node_bridge13.pathBasename)(only)) : `${names.length} files`;
+    const label = only ? middleTruncate((0, import_terminus_node_bridge14.pathBasename)(only)) : `${names.length} files`;
     this.activityLabelEl.setText(label);
     this.activityEl.setAttribute("aria-label", names.join("\n"));
     this.activityEl.addClass("is-active");
@@ -17027,30 +17271,14 @@ var TerminalView = class extends import_obsidian7.ItemView {
   get hookToken() {
     return this.token;
   }
-  /** The tab's right-click and ⋯ menus get "Move to group" (Multi-agent). */
+  /** The tab's right-click and ⋯ menus get the move items (Multi-agent),
+   *  the same ones every group menu uses (see groupMenus.ts). */
   onPaneMenu(menu, source) {
     super.onPaneMenu(menu, source);
     if (this.plugin.experience !== "multi-agent")
       return;
     menu.addSeparator();
-    for (const group of this.plugin.groupStore.list()) {
-      menu.addItem(
-        (item) => item.setTitle(`Move to ${group.name}`).setIcon("folder-input").setChecked(this.groupIdValue === group.id).onClick(() => this.plugin.groups.moveTerminals([this], group.id))
-      );
-    }
-    if (this.groupIdValue) {
-      menu.addItem(
-        (item) => item.setTitle("Take out of its group").setIcon("folder-output").onClick(() => this.plugin.groups.moveTerminals([this], null))
-      );
-    }
-    menu.addItem(
-      (item) => item.setTitle("Move to a new group").setIcon("folder-plus").onClick(() => {
-        void this.plugin.groups.createGroup([this]).then(async (group) => {
-          var _a8;
-          return (_a8 = await this.plugin.revealSidebar()) == null ? void 0 : _a8.startRename(group.id);
-        });
-      })
-    );
+    addMoveItems(menu, this.plugin, { terminals: [this] });
   }
   /** Its own colour tag, else its group's (Multi-agent). */
   get effectiveColor() {
@@ -17105,11 +17333,11 @@ var TerminalView = class extends import_obsidian7.ItemView {
     const vaultPath = uriPath != null ? uriPath : text;
     const resolved = (_b = this.app.vault.getAbstractFileByPath(vaultPath)) != null ? _b : this.app.metadataCache.getFirstLinkpathDest(vaultPath, "");
     if (resolved) {
-      (_c2 = this.pty) == null ? void 0 : _c2.write(shellQuoteIfNeeded((0, import_terminus_node_bridge13.pathJoin)(this.plugin.getVaultBasePath(), resolved.path)));
+      (_c2 = this.pty) == null ? void 0 : _c2.write(shellQuoteIfNeeded((0, import_terminus_node_bridge14.pathJoin)(this.plugin.getVaultBasePath(), resolved.path)));
       return;
     }
     if (uriPath) {
-      new import_obsidian7.Notice(`Terminus: couldn't resolve the dragged file (${uriPath}) to a path in this vault.`);
+      new import_obsidian10.Notice(`Terminus: couldn't resolve the dragged file (${uriPath}) to a path in this vault.`);
       return;
     }
     (_d = this.pty) == null ? void 0 : _d.write(shellQuoteIfNeeded(text));
@@ -17133,7 +17361,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     this.webglAddon = null;
     this.plugin.reviewServer.unregister(this.token);
     this.plugin.agentSessionStore.sessionEnded(this.token);
-    this.plugin.onTerminalClosed();
+    this.plugin.groups.onTerminalClosed();
     (_d = this.pty) == null ? void 0 : _d.kill();
     (_e4 = this.commandTracker) == null ? void 0 : _e4.dispose();
     this.plugin.closedTerminals.push({
@@ -17297,10 +17525,10 @@ var TerminalView = class extends import_obsidian7.ItemView {
     var _a8, _b, _c2, _d;
     const pythonBin = await this.plugin.getPython3Bin();
     const shell2 = this.plugin.getUserShell();
-    const resourcesDir = (0, import_terminus_node_bridge13.pathJoin)(this.plugin.getPluginDir(), "resources");
-    const helperPath = (0, import_terminus_node_bridge13.pathJoin)(resourcesDir, "pty_helper.py");
+    const resourcesDir = (0, import_terminus_node_bridge14.pathJoin)(this.plugin.getPluginDir(), "resources");
+    const helperPath = (0, import_terminus_node_bridge14.pathJoin)(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
-    const restoredCwdStillExists = this.restoredCwd && (0, import_terminus_node_bridge13.fileExistsSync)(this.restoredCwd);
+    const restoredCwdStillExists = this.restoredCwd && (0, import_terminus_node_bridge14.fileExistsSync)(this.restoredCwd);
     this.pty = new PtyProcess({
       pythonBin,
       helperPath,
@@ -17309,16 +17537,16 @@ var TerminalView = class extends import_obsidian7.ItemView {
       cols: (_b = (_a8 = this.term) == null ? void 0 : _a8.cols) != null ? _b : 80,
       rows: (_d = (_c2 = this.term) == null ? void 0 : _c2.rows) != null ? _d : 24,
       env: {
-        ...withoutInheritedClaudeSession((0, import_terminus_node_bridge13.getAllEnvVars)()),
+        ...withoutInheritedClaudeSession((0, import_terminus_node_bridge14.getAllEnvVars)()),
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
         ...getShellIntegrationEnv(shell2, resourcesDir)
       }
     });
-    this.pty.on("data", (chunk) => this.writeToTerminal((0, import_terminus_node_bridge13.bufferToBytes)(chunk)));
-    this.pty.on("stderr", (text) => new import_obsidian7.Notice(`Terminus: ${text.trim()}`));
-    this.pty.on("error", (err) => new import_obsidian7.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
+    this.pty.on("data", (chunk) => this.writeToTerminal((0, import_terminus_node_bridge14.bufferToBytes)(chunk)));
+    this.pty.on("stderr", (text) => new import_obsidian10.Notice(`Terminus: ${text.trim()}`));
+    this.pty.on("error", (err) => new import_obsidian10.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
     this.pty.on("exit", ({ code }) => {
       this.writeToTerminal(`\r
 [process exited${code !== null ? ` with code ${code}` : ""}]\r
@@ -17383,7 +17611,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     new CommandHelpModal(this.app, claudeBin, (_c2 = cmd.exitCode) != null ? _c2 : 0, transcript, this.plugin.settings.claudeAuthToken, (command) => {
       var _a9;
       (_a9 = this.pty) == null ? void 0 : _a9.write(command);
-      new import_obsidian7.Notice(`Terminus: suggested command added to ${this.getDisplayText()} \u2014 press Enter to run it`);
+      new import_obsidian10.Notice(`Terminus: suggested command added to ${this.getDisplayText()} \u2014 press Enter to run it`);
     }).open();
   }
   /**
@@ -17414,9 +17642,9 @@ var TerminalView = class extends import_obsidian7.ItemView {
    *  (first oldText vs latest newText) so a multi-edit turn is checked as a
    *  whole, not edit-by-edit. */
   async checkBacklinkBreakage(absoluteFilePath) {
-    const relPath = (0, import_terminus_node_bridge13.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
+    const relPath = (0, import_terminus_node_bridge14.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
     const file = this.app.vault.getAbstractFileByPath(relPath);
-    if (!(file instanceof import_obsidian7.TFile))
+    if (!(file instanceof import_obsidian10.TFile))
       return;
     const merged = this.plugin.pendingChangesStore.get(absoluteFilePath);
     if (!merged)
@@ -17432,7 +17660,7 @@ function sessionIdentity(payload) {
 }
 
 // src/views/PendingChangesView.ts
-var import_obsidian14 = require("obsidian");
+var import_obsidian17 = require("obsidian");
 
 // node_modules/diff/libesm/diff/base.js
 var Diff = class {
@@ -18094,12 +18322,12 @@ function renderDiffLine(container, line) {
 }
 
 // src/views/changeRows.ts
-var import_obsidian13 = require("obsidian");
-var import_terminus_node_bridge20 = __toESM(require_dist());
+var import_obsidian16 = require("obsidian");
+var import_terminus_node_bridge21 = __toESM(require_dist());
 
 // src/editor/openWithDiff.ts
-var import_obsidian9 = require("obsidian");
-var import_terminus_node_bridge15 = __toESM(require_dist());
+var import_obsidian12 = require("obsidian");
+var import_terminus_node_bridge16 = __toESM(require_dist());
 
 // src/editor/inlineDiff.ts
 var import_state = require("@codemirror/state");
@@ -18285,11 +18513,11 @@ function computeHunks(oldText, newText) {
 }
 
 // src/modals/collisions.ts
-var import_terminus_node_bridge14 = __toESM(require_dist());
+var import_terminus_node_bridge15 = __toESM(require_dist());
 
 // src/modals/ConfirmModal.ts
-var import_obsidian8 = require("obsidian");
-var ConfirmModal = class extends import_obsidian8.Modal {
+var import_obsidian11 = require("obsidian");
+var ConfirmModal = class extends import_obsidian11.Modal {
   constructor(app, title, message, confirmText) {
     super(app);
     this.title = title;
@@ -18355,12 +18583,12 @@ async function confirmCollisionReject(app, changes, scope = "file") {
     const change = collided[0];
     const first = (_b = (_a8 = change.contributors[0]) == null ? void 0 : _a8.label) != null ? _b : change.panelLabel;
     const others = joinNames(laterContributors(change));
-    const file = (0, import_terminus_node_bridge14.pathBasename)(change.diff.filePath);
+    const file = (0, import_terminus_node_bridge15.pathBasename)(change.diff.filePath);
     const message = scope === "hunk" ? `${others} also edited ${file} after ${first}. Rejecting this change restores its lines to how they were before ${first}'s first edit, which may undo ${others}'s edits too.` : `${others} also edited this file after ${first}. Rejecting restores it to how it was before ${first}'s first edit, which undoes ${others}'s edits too.`;
     return ConfirmModal.confirm(app, scope === "hunk" ? "Reject this change?" : `Reject ${file}?`, message, "Reject");
   }
   const SHOWN = 3;
-  const listed = collided.slice(0, SHOWN).map((c) => `${(0, import_terminus_node_bridge14.pathBasename)(c.diff.filePath)} (${joinNames(laterContributors(c))})`).join(", ");
+  const listed = collided.slice(0, SHOWN).map((c) => `${(0, import_terminus_node_bridge15.pathBasename)(c.diff.filePath)} (${joinNames(laterContributors(c))})`).join(", ");
   const more = collided.length > SHOWN ? ` and ${collided.length - SHOWN} more` : "";
   const count = changes.length;
   return ConfirmModal.confirm(
@@ -18375,9 +18603,9 @@ async function confirmCollisionReject(app, changes, scope = "file") {
 async function openChangedFile(plugin, change) {
   var _a8, _b, _c2;
   const { app } = plugin;
-  const relPath = (0, import_terminus_node_bridge15.pathRelative)(plugin.getVaultBasePath(), change.diff.filePath);
+  const relPath = (0, import_terminus_node_bridge16.pathRelative)(plugin.getVaultBasePath(), change.diff.filePath);
   const file = relPath.startsWith("..") ? null : app.vault.getAbstractFileByPath(relPath);
-  if (!(file instanceof import_obsidian9.TFile)) {
+  if (!(file instanceof import_obsidian12.TFile)) {
     openOutsideObsidian(change.diff.filePath);
     return;
   }
@@ -18385,9 +18613,9 @@ async function openChangedFile(plugin, change) {
   const firstHunkLine = findFirstHunkLine(change);
   await leaf.openFile(file, firstHunkLine === null ? void 0 : { eState: { line: firstHunkLine } });
   const owner = (_a8 = change.contributors[0]) == null ? void 0 : _a8.token;
-  plugin.addTabToGroup(leaf, owner ? (_c2 = (_b = plugin.findTerminalView(owner)) == null ? void 0 : _b.groupId) != null ? _c2 : null : null);
+  plugin.groups.addTabToGroup(leaf, owner ? (_c2 = (_b = plugin.findTerminalView(owner)) == null ? void 0 : _b.groupId) != null ? _c2 : null : null);
   const view = leaf.view;
-  if (!(view instanceof import_obsidian9.MarkdownView))
+  if (!(view instanceof import_obsidian12.MarkdownView))
     return;
   const cm = view.editor.cm;
   if (!cm)
@@ -18402,7 +18630,7 @@ async function openChangedFile(plugin, change) {
     if (!accepted && !await confirmCollisionReject(plugin.app, [current]))
       return;
     store.resolveItem(change.id, accepted).catch((err) => {
-      new import_obsidian9.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge15.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian12.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge16.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   cm.dispatch({
@@ -18429,20 +18657,20 @@ function findFirstHunkLine(change) {
   return line;
 }
 function openOutsideObsidian(absolutePath) {
-  if (!(0, import_terminus_node_bridge15.fileExistsSync)(absolutePath)) {
-    new import_obsidian9.Notice(`Terminus: couldn't find ${(0, import_terminus_node_bridge15.pathBasename)(absolutePath)} on disk.`);
+  if (!(0, import_terminus_node_bridge16.fileExistsSync)(absolutePath)) {
+    new import_obsidian12.Notice(`Terminus: couldn't find ${(0, import_terminus_node_bridge16.pathBasename)(absolutePath)} on disk.`);
     return;
   }
   openWithSystemDefaultApp(absolutePath);
 }
 
 // src/views/DiffSplitView.ts
-var import_obsidian11 = require("obsidian");
-var import_terminus_node_bridge17 = __toESM(require_dist());
+var import_obsidian14 = require("obsidian");
+var import_terminus_node_bridge18 = __toESM(require_dist());
 
 // src/diff/renderSplitDiff.ts
-var import_obsidian10 = require("obsidian");
-var import_terminus_node_bridge16 = __toESM(require_dist());
+var import_obsidian13 = require("obsidian");
+var import_terminus_node_bridge17 = __toESM(require_dist());
 var EDGE = 4;
 var MIN_HIDDEN_TO_TRUNCATE = 4;
 function renderSplitDiffBody(container, app, store, change, comments) {
@@ -18551,7 +18779,7 @@ function renderHunkControls(container, hunk, change, app, store, comments, lines
       await store.resolveHunk(change.id, hunk.index, accepted);
       return true;
     } catch (err) {
-      new import_obsidian10.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge16.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian13.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge17.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
       return false;
     }
   };
@@ -18659,7 +18887,7 @@ function renderSplitCell(row, side, kind, lineNumber, cellLine) {
 
 // src/views/DiffSplitView.ts
 var DIFF_SPLIT_VIEW_TYPE = "terminus-diff-split";
-var DiffSplitView = class extends import_obsidian11.ItemView {
+var DiffSplitView = class extends import_obsidian14.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -18684,7 +18912,7 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
         return;
       }
       const header = container.createDiv({ cls: "terminus-split-diff-header" });
-      header.createSpan({ cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge17.pathBasename)(change.diff.filePath) });
+      header.createSpan({ cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge18.pathBasename)(change.diff.filePath) });
       if (change.editCount > 1) {
         header.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
       }
@@ -18731,7 +18959,7 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
     return (_c2 = (_b = (_a8 = this.plugin.pendingChangesStore.get(this.changeId)) == null ? void 0 : _a8.contributors[0]) == null ? void 0 : _b.token) != null ? _c2 : null;
   }
   getDisplayText() {
-    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge17.pathBasename)(this.changeId)}` : "Split Diff";
+    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge18.pathBasename)(this.changeId)}` : "Split Diff";
   }
   getIcon() {
     return "diff";
@@ -18741,7 +18969,7 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
     this.changeId = (_a8 = state == null ? void 0 : state.changeId) != null ? _a8 : null;
     await super.setState(state, result);
     this.render();
-    this.plugin.revealGroupOf(this.leaf);
+    this.plugin.groups.revealGroupOf(this.leaf);
   }
   getState() {
     var _a8;
@@ -18765,9 +18993,9 @@ async function openDiffSplitView(plugin, changeId) {
 }
 
 // src/modals/ActionLogModal.ts
-var import_obsidian12 = require("obsidian");
-var import_terminus_node_bridge18 = __toESM(require_dist());
-var ActionLogModal = class extends import_obsidian12.Modal {
+var import_obsidian15 = require("obsidian");
+var import_terminus_node_bridge19 = __toESM(require_dist());
+var ActionLogModal = class extends import_obsidian15.Modal {
   constructor(app, actionLog) {
     super(app);
     this.actionLog = actionLog;
@@ -18806,7 +19034,7 @@ var ActionLogModal = class extends import_obsidian12.Modal {
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted"
     });
-    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge18.pathBasename)(entry.filePath) });
+    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge19.pathBasename)(entry.filePath) });
     row.createSpan({
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` \xB7 ${entry.editCount} edits` : ""}`
@@ -18816,13 +19044,13 @@ var ActionLogModal = class extends import_obsidian12.Modal {
 };
 
 // src/git/gitDiff.ts
-var import_terminus_node_bridge19 = __toESM(require_dist());
+var import_terminus_node_bridge20 = __toESM(require_dist());
 async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
-  const relPath = (0, import_terminus_node_bridge19.pathRelative)(vaultBasePath, absoluteFilePath);
+  const relPath = (0, import_terminus_node_bridge20.pathRelative)(vaultBasePath, absoluteFilePath);
   if (relPath.startsWith(".."))
     return null;
   try {
-    const { stdout } = await (0, import_terminus_node_bridge19.execFileText)("git", ["show", `HEAD:${relPath}`], {
+    const { stdout } = await (0, import_terminus_node_bridge20.execFileText)("git", ["show", `HEAD:${relPath}`], {
       cwd: vaultBasePath,
       maxBuffer: 10 * 1024 * 1024
     });
@@ -18854,7 +19082,7 @@ async function runBulkAction(ctx, accepted, changes, action, scopeLabel) {
     await action();
   } catch (err) {
     const target = scopeLabel ? `${scopeLabel}'s changes` : "all changes";
-    new import_obsidian13.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage2(err)}`);
+    new import_obsidian16.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage2(err)}`);
   }
 }
 function renderChangeRow(ctx, list, change, stats) {
@@ -18863,14 +19091,14 @@ function renderChangeRow(ctx, list, change, stats) {
   const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "\u25B8" });
   const info = summary.createDiv({ cls: "terminus-pending-info" });
   const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-  nameRow.createSpan({ cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge20.pathBasename)(change.diff.filePath) });
+  nameRow.createSpan({ cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge21.pathBasename)(change.diff.filePath) });
   nameRow.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
   nameRow.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
   if (change.editCount > 1) {
     nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
   }
-  const vaultName = (0, import_terminus_node_bridge20.pathBasename)(ctx.plugin.getVaultBasePath());
-  const relativePath = (0, import_terminus_node_bridge20.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
+  const vaultName = (0, import_terminus_node_bridge21.pathBasename)(ctx.plugin.getVaultBasePath());
+  const relativePath = (0, import_terminus_node_bridge21.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
   info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
   const collision = collisionLabel(change);
   if (collision) {
@@ -18891,8 +19119,8 @@ function renderChangeRow(ctx, list, change, stats) {
     if (!accepted && !await confirmCollisionReject(ctx.plugin.app, [change]))
       return;
     ctx.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err) => {
-      new import_obsidian13.Notice(
-        `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge20.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
+      new import_obsidian16.Notice(
+        `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge21.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
       );
     });
   };
@@ -18928,7 +19156,7 @@ function renderRowBody(ctx, body, change) {
     const list = warning.createEl("ul");
     for (const link of change.brokenBacklinks) {
       list.createEl("li", {
-        text: `${(0, import_terminus_node_bridge20.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
+        text: `${(0, import_terminus_node_bridge21.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
       });
     }
   }
@@ -18957,8 +19185,8 @@ function renderRowBody(ctx, body, change) {
     if (previewRendered)
       return;
     previewRendered = true;
-    const relPath = (0, import_terminus_node_bridge20.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
-    void import_obsidian13.MarkdownRenderer.render(ctx.plugin.app, change.diff.newText, previewContainer, relPath, ctx.component);
+    const relPath = (0, import_terminus_node_bridge21.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
+    void import_obsidian16.MarkdownRenderer.render(ctx.plugin.app, change.diff.newText, previewContainer, relPath, ctx.component);
   });
   gitBtn.addEventListener("click", () => {
     activate(2);
@@ -19013,17 +19241,17 @@ function renderHistoryRow(ctx, list, item) {
     cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
     text: item.accepted ? "Kept" : "Reverted"
   });
-  row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge20.pathBasename)(item.diff.filePath) });
+  row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge21.pathBasename)(item.diff.filePath) });
   row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
     ctx.plugin.pendingChangesStore.undo(item.historyId).catch((err) => {
-      new import_obsidian13.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
+      new import_obsidian16.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
     });
   });
 }
 
 // src/views/PendingChangesView.ts
 var PENDING_CHANGES_VIEW_TYPE = "terminus-pending-changes";
-var PendingChangesView = class extends import_obsidian14.ItemView {
+var PendingChangesView = class extends import_obsidian17.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -19160,11 +19388,11 @@ var PendingChangesView = class extends import_obsidian14.ItemView {
 };
 
 // src/views/AgentInboxView.ts
-var import_obsidian15 = require("obsidian");
-var import_terminus_node_bridge22 = __toESM(require_dist());
+var import_obsidian18 = require("obsidian");
+var import_terminus_node_bridge23 = __toESM(require_dist());
 
 // src/claude/transcriptUsage.ts
-var import_terminus_node_bridge21 = __toESM(require_dist());
+var import_terminus_node_bridge22 = __toESM(require_dist());
 var MILLION = 1e6;
 var LONG_PROMPT_TOKENS = 1e5;
 var US_ONLY_MULTIPLIER = 1.1;
@@ -19247,7 +19475,7 @@ var TranscriptUsageReader = class {
     this.pending.delete(path);
   }
   async readNow(path, kind) {
-    const text = await (0, import_terminus_node_bridge21.readTextFileIfExists)(path);
+    const text = await (0, import_terminus_node_bridge22.readTextFileIfExists)(path);
     if (text === null) {
       this.files.delete(path);
       return null;
@@ -19337,8 +19565,8 @@ function summarize(state) {
 function subagentTranscriptPath(leadTranscriptPath, agentId) {
   if (!leadTranscriptPath.endsWith(".jsonl"))
     return null;
-  const session = (0, import_terminus_node_bridge21.pathBasename)(leadTranscriptPath, ".jsonl");
-  return (0, import_terminus_node_bridge21.pathJoin)((0, import_terminus_node_bridge21.pathDirname)(leadTranscriptPath), session, "subagents", `agent-${agentId}.jsonl`);
+  const session = (0, import_terminus_node_bridge22.pathBasename)(leadTranscriptPath, ".jsonl");
+  return (0, import_terminus_node_bridge22.pathJoin)((0, import_terminus_node_bridge22.pathDirname)(leadTranscriptPath), session, "subagents", `agent-${agentId}.jsonl`);
 }
 
 // src/state/inboxModel.ts
@@ -19434,7 +19662,7 @@ function buildCard(token, session, changes) {
 
 // src/views/AgentInboxView.ts
 var AGENT_INBOX_VIEW_TYPE = "terminus-agent-inbox";
-var AgentInboxView = class extends import_obsidian15.ItemView {
+var AgentInboxView = class extends import_obsidian18.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -19515,7 +19743,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     next.addEventListener("click", () => void this.plugin.jumpToNextSessionNeedingAttention());
     const more = header.createEl("button", { cls: "terminus-btn-outline", text: "\u22EF", attr: { "aria-label": "More" } });
     more.addEventListener("click", (evt) => {
-      const menu = new import_obsidian15.Menu();
+      const menu = new import_obsidian18.Menu();
       const resolveEverything = (accepted) => void runBulkAction(this.rows, accepted, allChanges, () => this.plugin.pendingChangesStore.resolveAll(accepted));
       menu.addItem(
         (item) => item.setTitle("Keep all pending changes").setDisabled(allChanges.length === 0).onClick(() => resolveEverything(true))
@@ -19699,7 +19927,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     for (const item of items) {
       const line = list.createDiv({ cls: "terminus-inbox-feedback-item" });
       const where = (_a8 = item.newLines) != null ? _a8 : item.oldLines;
-      const place = `${(0, import_terminus_node_bridge22.pathRelative)(base, item.filePath)}${where ? `:${where.start}` : ""}`;
+      const place = `${(0, import_terminus_node_bridge23.pathRelative)(base, item.filePath)}${where ? `:${where.start}` : ""}`;
       line.createSpan({ cls: "terminus-inbox-feedback-place", text: place });
       if (item.rejected)
         line.createSpan({ cls: "terminus-diff-stat-remove", text: "rejected" });
@@ -19734,7 +19962,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     if (!card.ended && session.status === "working") {
       if (!session.currentFile)
         return "Working\u2026";
-      return `Editing ${(0, import_terminus_node_bridge22.pathRelative)(this.plugin.getVaultBasePath(), session.currentFile)}\u2026`;
+      return `Editing ${(0, import_terminus_node_bridge23.pathRelative)(this.plugin.getVaultBasePath(), session.currentFile)}\u2026`;
     }
     return session.lastMessage === null ? null : plainPreview(session.lastMessage);
   }
@@ -19891,11 +20119,11 @@ function formatClock(at3) {
 }
 
 // src/views/TerminusSidebarView.ts
-var import_obsidian18 = require("obsidian");
-var import_terminus_node_bridge23 = __toESM(require_dist());
+var import_obsidian20 = require("obsidian");
+var import_terminus_node_bridge24 = __toESM(require_dist());
 
 // src/pluginVersion.ts
-var import_obsidian16 = require("obsidian");
+var import_obsidian19 = require("obsidian");
 var LATEST_RELEASE_URL = "https://api.github.com/repos/NoteNerdOfficial/terminus/releases/latest";
 var COMMUNITY_PLUGIN_URL = "obsidian://show-plugin?id=terminus";
 function compareVersions(a, b3) {
@@ -19911,7 +20139,7 @@ function compareVersions(a, b3) {
 }
 async function fetchLatestPluginVersion() {
   try {
-    const res = await (0, import_obsidian16.requestUrl)({ url: LATEST_RELEASE_URL, headers: { Accept: "application/vnd.github+json" } });
+    const res = await (0, import_obsidian19.requestUrl)({ url: LATEST_RELEASE_URL, headers: { Accept: "application/vnd.github+json" } });
     const tag = res.json.tag_name;
     return typeof tag === "string" && tag.trim() ? tag.trim().replace(/^v/, "") : null;
   } catch (e) {
@@ -19924,82 +20152,10 @@ function versionStatus(installed, latest) {
   return compareVersions(latest, installed) > 0 ? { state: "outdated", installed, latest } : { state: "current", installed };
 }
 
-// src/groups/groupNotes.ts
-var import_obsidian17 = require("obsidian");
-var NOTE_STATUSES = ["active", "review", "parked", "done"];
-function isNoteStatus(value) {
-  return typeof value === "string" && NOTE_STATUSES.includes(value);
-}
-function noteFile(plugin, path) {
-  if (!path)
-    return null;
-  const file = plugin.app.vault.getAbstractFileByPath(path);
-  return file instanceof import_obsidian17.TFile ? file : null;
-}
-function noteStatus(plugin, file) {
-  var _a8, _b;
-  const value = (_b = (_a8 = plugin.app.metadataCache.getFileCache(file)) == null ? void 0 : _a8.frontmatter) == null ? void 0 : _b.status;
-  return typeof value === "string" ? value : null;
-}
-async function setNoteStatus(plugin, file, status) {
-  try {
-    await plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
-      frontmatter.status = status;
-    });
-  } catch (err) {
-    new import_obsidian17.Notice(`Terminus: couldn't update ${file.basename}'s status: ${String(err)}`);
-  }
-}
-async function linkNote(plugin, groupId, file) {
-  plugin.groupStore.setNote(groupId, file.path);
-  if (noteStatus(plugin, file) !== null)
-    return;
-  try {
-    await plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
-      var _a8;
-      (_a8 = frontmatter.status) != null ? _a8 : frontmatter.status = "active";
-    });
-  } catch (err) {
-    new import_obsidian17.Notice(`Terminus: linked ${file.basename}, but couldn't add its status: ${String(err)}`);
-  }
-}
-async function openGroupNote(plugin, groupId) {
-  var _a8, _b;
-  const file = noteFile(plugin, (_b = (_a8 = plugin.groupStore.get(groupId)) == null ? void 0 : _a8.note) != null ? _b : null);
-  if (!file)
-    return;
-  const leaf = plugin.app.workspace.getLeaf("tab");
-  await leaf.openFile(file);
-  plugin.addTabToGroup(leaf, groupId);
-}
-async function startClaudeOnNote(plugin, file) {
-  const group = plugin.groupStore.create();
-  plugin.groupStore.rename(group.id, file.basename);
-  await linkNote(plugin, group.id, file);
-  await plugin.groups.newTerminal(group.id, true, { command: "claude", prompt: `Read ${file.path} and let's work on it.` });
-  await plugin.groups.selectGroup(group.id);
-}
-var NoteSuggestModal = class extends import_obsidian17.FuzzySuggestModal {
-  constructor(plugin, onPick) {
-    super(plugin.app);
-    this.onPick = onPick;
-    this.setPlaceholder("Note to link to this group");
-  }
-  getItems() {
-    return this.app.vault.getMarkdownFiles();
-  }
-  getItemText(file) {
-    return file.path;
-  }
-  onChooseItem(file) {
-    this.onPick(file);
-  }
-};
-
 // src/views/TerminusSidebarView.ts
 var TERMINUS_SIDEBAR_VIEW_TYPE = "terminus-sidebar";
 var DRAG_TYPE = "application/x-terminus-terminals";
-var TerminusSidebarView = class extends import_obsidian18.ItemView {
+var TerminusSidebarView = class extends import_obsidian20.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -20096,9 +20252,9 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
     }
     const plusButton = (label, tooltip) => {
       const button = actions.createEl("button", { cls: "terminus-sidebar-plus" });
-      (0, import_obsidian18.setIcon)(button.createSpan(), "plus");
+      (0, import_obsidian20.setIcon)(button.createSpan(), "plus");
       button.createSpan({ text: label });
-      (0, import_obsidian18.setTooltip)(button, tooltip);
+      (0, import_obsidian20.setTooltip)(button, tooltip);
       return button;
     };
     plusButton("Terminal", "New ungrouped terminal").addEventListener("click", () => void this.plugin.groups.newTerminal(null));
@@ -20121,7 +20277,7 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
       evt.preventDefault();
       window.open(COMMUNITY_PLUGIN_URL);
     });
-    (0, import_obsidian18.setTooltip)(
+    (0, import_obsidian20.setTooltip)(
       link,
       outdated ? `Version ${status.latest} is available. Open Community plugins to update.` : status.state === "current" ? "You're on the latest version." : this.plugin.settings.multiAgent.checkForUpdates ? "Check Community plugins for updates." : "Update checks are off (Settings \u2192 Terminus). Open Community plugins to check."
     );
@@ -20151,7 +20307,7 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
       text: members.length === 0 ? "No terminals" : active ? "Showing" : `${members.length} in background`
     });
     const add = row.createEl("button", { cls: "terminus-sidebar-icon-btn", text: "\uFF0B" });
-    (0, import_obsidian18.setTooltip)(add, "New terminal in this group");
+    (0, import_obsidian20.setTooltip)(add, "New terminal in this group");
     add.addEventListener("click", (evt) => {
       evt.stopPropagation();
       void this.plugin.groups.newTerminal(group.id);
@@ -20164,7 +20320,7 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
     const note = noteFile(this.plugin, group.note);
     if (note) {
       const link = meta.createEl("a", { cls: "terminus-sidebar-note", text: `\u{1F4DD} ${note.basename}`, href: "#" });
-      (0, import_obsidian18.setTooltip)(link, `Open ${note.path}`);
+      (0, import_obsidian20.setTooltip)(link, `Open ${note.path}`);
       link.addEventListener("click", (evt) => {
         evt.preventDefault();
         void openGroupNote(this.plugin, group.id);
@@ -20180,12 +20336,12 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
   /** "Turn finished. Move the note to review?" -- a suggestion only; the
    *  note changes only if the user says so. */
   renderNoteSuggestion(section, groupId, note) {
-    const suggestion = this.plugin.noteSuggestions.get(groupId);
+    const suggestion = this.plugin.groups.noteSuggestions.get(groupId);
     if (!suggestion)
       return;
     const current = noteStatus(this.plugin, note);
     if (suggestion === "review" && current !== "active" || suggestion === "active" && current !== "review") {
-      this.plugin.noteSuggestions.delete(groupId);
+      this.plugin.groups.noteSuggestions.delete(groupId);
       return;
     }
     const row = section.createDiv({ cls: "terminus-sidebar-suggestion" });
@@ -20193,11 +20349,11 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
       text: suggestion === "review" ? "Turn finished. Move the note to review?" : "Working again. Move the note back to active?"
     });
     row.createEl("button", { text: suggestion === "review" ? "Move to review" : "Move to active", cls: "mod-cta" }).addEventListener("click", () => {
-      this.plugin.noteSuggestions.delete(groupId);
+      this.plugin.groups.noteSuggestions.delete(groupId);
       void setNoteStatus(this.plugin, note, suggestion);
     });
     row.createEl("button", { text: "Not now" }).addEventListener("click", () => {
-      this.plugin.noteSuggestions.delete(groupId);
+      this.plugin.groups.noteSuggestions.delete(groupId);
       this.render();
     });
   }
@@ -20266,7 +20422,7 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
       row.createSpan({ cls: "terminus-sidebar-shell-tag", text: "Shell", attr: { title: "Claude isn't running here" } });
     }
     const move = row.createEl("button", { cls: "terminus-sidebar-icon-btn", text: "\u21C4" });
-    (0, import_obsidian18.setTooltip)(move, "Move to group");
+    (0, import_obsidian20.setTooltip)(move, "Move to group");
     move.addEventListener("click", (evt) => {
       evt.stopPropagation();
       this.showMoveMenu(evt, this.dragSet(view));
@@ -20300,7 +20456,7 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
   renderCloseButton(row, key, terminals, label, close, isGroup) {
     var _a8;
     const button = row.createEl("button", { cls: "terminus-sidebar-icon-btn", text: "\xD7" });
-    (0, import_obsidian18.setTooltip)(button, label);
+    (0, import_obsidian20.setTooltip)(button, label);
     button.addEventListener("click", (evt) => {
       evt.stopPropagation();
       if (this.plugin.groups.busy(terminals).length > 0) {
@@ -20361,68 +20517,15 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
     });
   }
   showMoveMenu(evt, views) {
-    var _a8, _b;
-    const menu = new import_obsidian18.Menu();
-    const current = views.length === 1 ? (_b = (_a8 = views[0]) == null ? void 0 : _a8.groupId) != null ? _b : null : void 0;
-    for (const group of this.plugin.groupStore.list()) {
-      menu.addItem(
-        (item) => item.setTitle(group.name).setChecked(current === group.id).onClick(() => {
-          this.selected.clear();
-          this.plugin.groups.moveTerminals(views, group.id);
-        })
-      );
-    }
-    menu.addItem(
-      (item) => item.setTitle("Ungrouped").setChecked(current === null).onClick(() => {
-        this.selected.clear();
-        this.plugin.groups.moveTerminals(views, null);
-      })
-    );
-    menu.addSeparator();
-    menu.addItem(
-      (item) => item.setTitle("New group").setIcon("plus").onClick(() => {
-        this.selected.clear();
-        void this.plugin.groups.createGroup(views).then((group) => this.startRename(group.id));
-      })
-    );
+    const menu = new import_obsidian20.Menu();
+    addMoveItems(menu, this.plugin, { terminals: views }, () => this.selected.clear());
     menu.showAtMouseEvent(evt);
   }
   showGroupMenu(evt, group) {
     evt.preventDefault();
-    const menu = new import_obsidian18.Menu();
-    menu.addItem((item) => item.setTitle("Rename").onClick(() => this.startRename(group.id)));
-    menu.addItem(
-      (item) => item.setTitle(group.note ? "Link to another note\u2026" : "Link to note\u2026").onClick(() => {
-        new NoteSuggestModal(this.plugin, (file) => void linkNote(this.plugin, group.id, file)).open();
-      })
-    );
-    const note = noteFile(this.plugin, group.note);
-    if (note) {
-      menu.addItem((item) => item.setTitle("Open note").onClick(() => void openGroupNote(this.plugin, group.id)));
-      const current = noteStatus(this.plugin, note);
-      for (const status of NOTE_STATUSES) {
-        menu.addItem(
-          (item) => item.setTitle(`Note status: ${status}`).setChecked(current === status).onClick(() => void setNoteStatus(this.plugin, note, status))
-        );
-      }
-      menu.addItem((item) => item.setTitle("Unlink note").onClick(() => this.plugin.groupStore.setNote(group.id, null)));
-    }
-    menu.addItem(
-      (item) => item.setTitle("Set folder\u2026").onClick(() => {
-        new FolderSuggestModal(this.plugin, (folder) => {
-          this.plugin.groupStore.setFolder(group.id, folder);
-        }).open();
-      })
-    );
-    menu.addSeparator();
-    for (const option of TERMINAL_COLOR_PALETTE) {
-      menu.addItem(
-        (item) => item.setTitle(option.name).setChecked(group.color === option.value).onClick(() => this.plugin.setGroupColor(group.id, option.value))
-      );
-    }
-    menu.addSeparator();
-    menu.addItem(
-      (item) => item.setTitle("Close group").onClick(() => {
+    showGroupMenu(evt, this.plugin, group, {
+      rename: () => this.startRename(group.id),
+      close: () => {
         const members = this.plugin.groups.terminalsIn(group.id);
         if (this.plugin.groups.busy(members).length > 0) {
           this.confirmingClose = group.id;
@@ -20430,9 +20533,8 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
         } else {
           this.plugin.groups.closeGroup(group.id);
         }
-      })
-    );
-    menu.showAtMouseEvent(evt);
+      }
+    });
   }
   status(view) {
     const session = this.plugin.agentSessionStore.get(view.hookToken);
@@ -20442,9 +20544,9 @@ var TerminusSidebarView = class extends import_obsidian18.ItemView {
   }
   folderLabel(folder) {
     if (!folder)
-      return (0, import_terminus_node_bridge23.pathBasename)(this.plugin.getVaultBasePath());
-    const relative = (0, import_terminus_node_bridge23.pathRelative)(this.plugin.getVaultBasePath(), folder);
-    return relative.startsWith("..") ? folder : relative || (0, import_terminus_node_bridge23.pathBasename)(folder);
+      return (0, import_terminus_node_bridge24.pathBasename)(this.plugin.getVaultBasePath());
+    const relative = (0, import_terminus_node_bridge24.pathRelative)(this.plugin.getVaultBasePath(), folder);
+    return relative.startsWith("..") ? folder : relative || (0, import_terminus_node_bridge24.pathBasename)(folder);
   }
 };
 var STATUS_LABELS = {
@@ -20452,23 +20554,6 @@ var STATUS_LABELS = {
   "needs-attention": "Needs attention",
   "finished-unread": "Finished",
   idle: "Idle"
-};
-var FolderSuggestModal = class extends import_obsidian18.FuzzySuggestModal {
-  constructor(plugin, onPick) {
-    super(plugin.app);
-    this.plugin = plugin;
-    this.onPick = onPick;
-    this.setPlaceholder("Folder new terminals in this group start in");
-  }
-  getItems() {
-    return this.app.vault.getAllLoadedFiles().filter((f) => f instanceof import_obsidian18.TFolder);
-  }
-  getItemText(folder) {
-    return folder.isRoot() ? "/ (vault)" : folder.path;
-  }
-  onChooseItem(folder) {
-    this.onPick(folder.isRoot() ? null : (0, import_terminus_node_bridge23.pathJoin)(this.plugin.getVaultBasePath(), folder.path));
-  }
 };
 
 // src/state/GroupStore.ts
@@ -20638,164 +20723,7 @@ var GroupStore = class extends TypedEmitter {
 };
 
 // src/groups/GroupController.ts
-var GroupController = class {
-  constructor(plugin) {
-    this.plugin = plugin;
-  }
-  get store() {
-    return this.plugin.groupStore;
-  }
-  /** Every terminal, in workspace order. Only loaded views: in Multi-agent
-   *  every terminal tab is loaded at startup (see loadDeferredTerminals). */
-  terminals() {
-    return this.plugin.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE).map((leaf) => leaf.view).filter((view) => view instanceof TerminalView);
-  }
-  terminalsIn(target) {
-    return this.terminals().filter((view) => view.groupId === target);
-  }
-  /** Obsidian defers loading background tabs until they're shown, and a
-   *  deferred terminal has no shell and no group yet. Groups are about
-   *  terminals running in the background, so all of them are loaded. */
-  async loadDeferredTerminals() {
-    for (const leaf of this.plugin.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
-      const deferred = leaf;
-      if (deferred.isDeferred && deferred.loadIfDeferred)
-        await deferred.loadIfDeferred();
-    }
-  }
-  /**
-   * A new group. With `terminals`, they move into it; without, it starts
-   * with a new terminal, since a group is never empty. Either way it becomes
-   * the selected group. Nothing takes the keyboard: the caller usually puts
-   * the group's name into a rename field next.
-   */
-  async createGroup(terminals = []) {
-    const group = this.store.create();
-    if (terminals.length > 0) {
-      this.moveTerminals(terminals, group.id);
-    } else {
-      await this.newTerminal(group.id, false);
-    }
-    await this.selectGroup(group.id, false);
-    return group;
-  }
-  /** A new terminal in a group (starting in its folder, next to the
-   *  terminal last used there) or ungrouped. */
-  async newTerminal(target, focus = true, launch) {
-    var _a8, _b;
-    const { workspace } = this.plugin.app;
-    const group = this.store.get(target);
-    const anchorId = group ? this.store.lastLeaf(group.id) : void 0;
-    const anchor = anchorId && workspace.getLeafById(anchorId) || ((_a8 = this.terminalsIn(target)[0]) == null ? void 0 : _a8.leaf);
-    if (anchor)
-      workspace.setActiveLeaf(anchor, { focus: false });
-    const leaf = workspace.getLeaf("tab");
-    await leaf.setViewState({
-      type: TERMINUS_VIEW_TYPE,
-      active: focus,
-      state: { groupId: group == null ? void 0 : group.id, cwd: (_b = group == null ? void 0 : group.folder) != null ? _b : void 0, launch }
-    });
-    await workspace.revealLeaf(leaf);
-    this.plugin.applyGroupVisibility();
-    return leaf.view instanceof TerminalView ? leaf.view : null;
-  }
-  /** Moves terminals into a group or out of all of them, then removes any
-   *  group the move left empty. */
-  moveTerminals(terminals, target) {
-    for (const view of terminals)
-      view.setGroup(target);
-    this.removeEmptyGroups();
-    this.plugin.applyGroupVisibility();
-    this.plugin.refreshTerminusViews();
-  }
-  /** Groups with no terminals left go: a group is never empty. */
-  removeEmptyGroups() {
-    const used = new Set(this.terminals().map((view) => view.groupId));
-    for (const group of this.store.list()) {
-      if (!used.has(group.id))
-        this.store.remove(group.id);
-    }
-  }
-  /** Selects a group and brings back the terminal last used in it, giving
-   *  it the keyboard unless `focus` is false. */
-  async selectGroup(target, focus = true) {
-    var _a8;
-    this.store.setActive(target);
-    if (!target)
-      return;
-    const { workspace } = this.plugin.app;
-    const lastId = this.store.lastLeaf(target);
-    const last = lastId ? workspace.getLeafById(lastId) : null;
-    const leaf = last && last.view instanceof TerminalView && last.view.groupId === target ? last : (_a8 = this.terminalsIn(target)[0]) == null ? void 0 : _a8.leaf;
-    if (!leaf)
-      return;
-    await workspace.revealLeaf(leaf);
-    if (focus)
-      workspace.setActiveLeaf(leaf, { focus: true });
-  }
-  /** Opening a terminal from another group (its row, an inbox card, Next,
-   *  or plain tab navigation) switches to that group; and the group
-   *  remembers it as its last-used terminal. */
-  onActiveLeaf(leaf) {
-    if (!leaf || !(leaf.view instanceof TerminalView))
-      return;
-    const groupId = leaf.view.groupId;
-    const leafId = leaf.id;
-    if (groupId && leafId)
-      this.store.setLastLeaf(groupId, leafId);
-    if (groupId && groupId !== this.store.activeGroupId)
-      this.store.setActive(groupId);
-  }
-  /** Closes terminals (their tabs) and removes groups left empty. Asking
-   *  first about busy sessions is the caller's job. */
-  closeTerminals(terminals) {
-    for (const view of terminals)
-      view.leaf.detach();
-    this.removeEmptyGroups();
-  }
-  /** Closes a group's terminals and removes it. Its other tabs stay open
-   *  and become global: they may hold unsaved edits. */
-  closeGroup(groupId) {
-    for (const view of this.terminalsIn(groupId))
-      view.leaf.detach();
-    this.store.remove(groupId);
-  }
-  /** Sessions in these terminals that are mid-turn or waiting on an
-   *  answer: closing them interrupts Claude, so it's asked about first. */
-  busy(terminals) {
-    return terminals.filter((view) => {
-      var _a8;
-      const status = (_a8 = this.plugin.agentSessionStore.get(view.hookToken)) == null ? void 0 : _a8.status;
-      return status === "working" || status === "needs-attention";
-    });
-  }
-};
-
-// src/groups/GroupSuggestModal.ts
-var import_obsidian19 = require("obsidian");
-var GroupSuggestModal = class extends import_obsidian19.SuggestModal {
-  constructor(plugin, placeholder, offerNew, onPick) {
-    super(plugin.app);
-    this.plugin = plugin;
-    this.offerNew = offerNew;
-    this.onPick = onPick;
-    this.setPlaceholder(placeholder);
-  }
-  getSuggestions(query) {
-    const options = this.plugin.groupStore.list().map((g2) => ({ choice: { kind: "group", target: g2.id }, label: g2.name }));
-    options.push({ choice: { kind: "group", target: null }, label: this.offerNew ? "Ungrouped" : "No group (ungrouped terminals only)" });
-    if (this.offerNew)
-      options.push({ choice: { kind: "new" }, label: "New group" });
-    const q2 = query.trim().toLowerCase();
-    return q2 ? options.filter((o2) => o2.label.toLowerCase().includes(q2)) : options;
-  }
-  renderSuggestion(option, el2) {
-    el2.setText(option.label);
-  }
-  onChooseSuggestion(option) {
-    this.onPick(option.choice);
-  }
-};
+var import_obsidian21 = require("obsidian");
 
 // src/groups/TabVisibility.ts
 var HIDDEN_TAB = "terminus-hidden-tab";
@@ -20873,8 +20801,383 @@ var TabVisibility = class {
   }
 };
 
+// src/groups/GroupController.ts
+var GroupController = class {
+  constructor(plugin) {
+    this.plugin = plugin;
+    /** Group id → a suggested status for its note, shown in the sidebar
+     *  until acted on or dismissed (see suggestNoteStatus). */
+    this.noteSuggestions = /* @__PURE__ */ new Map();
+    /** Each session's last status, to spot a turn starting or ending. */
+    this.lastSessionStatus = /* @__PURE__ */ new Map();
+    this.statusEl = null;
+    this.tabs = new TabVisibility(plugin);
+  }
+  get multiAgent() {
+    return this.plugin.experience === "multi-agent";
+  }
+  /** Called once from onload, after the stores exist. */
+  register() {
+    const { plugin } = this;
+    const { workspace, vault, metadataCache } = plugin.app;
+    plugin.registerEvent(
+      workspace.on("active-leaf-change", (leaf) => {
+        if (this.multiAgent)
+          this.onActiveLeaf(leaf);
+      })
+    );
+    plugin.registerEvent(
+      workspace.on("layout-change", () => {
+        if (this.multiAgent)
+          void this.loadDeferredTerminals();
+        this.applyVisibility();
+      })
+    );
+    this.store.on("change", () => this.applyVisibility());
+    plugin.registerEvent(
+      workspace.on("file-menu", (menu, file, source, leaf) => {
+        if (!this.multiAgent || !(file instanceof import_obsidian21.TFile))
+          return;
+        addNoteMenuItems(menu, plugin, file, source === "tab-header" ? leaf : void 0);
+      })
+    );
+    plugin.registerEvent(vault.on("rename", (file, oldPath) => this.store.noteMoved(oldPath, file.path)));
+    plugin.registerEvent(vault.on("delete", (file) => this.store.noteMoved(file.path, null)));
+    plugin.registerEvent(
+      metadataCache.on("changed", (file) => {
+        if (this.store.list().some((g2) => g2.note === file.path))
+          plugin.refreshTerminusViews();
+      })
+    );
+    plugin.agentSessionStore.on("change", (session) => this.suggestNoteStatus(session.token, session.status));
+    this.statusEl = plugin.addStatusBarItem();
+    this.statusEl.addClass("terminus-group-status", "mod-clickable");
+    this.statusEl.addEventListener("click", () => this.switchGroupPicker());
+    this.registerCommands();
+  }
+  registerCommands() {
+    const { plugin } = this;
+    const multiAgent = (check, run) => (checking) => {
+      if (!this.multiAgent || !check())
+        return false;
+      if (!checking)
+        run();
+      return true;
+    };
+    plugin.addCommand({
+      id: "new-group",
+      name: "New group",
+      checkCallback: multiAgent(
+        () => true,
+        () => void this.createGroup().then(async (group) => {
+          var _a8;
+          return (_a8 = await plugin.revealSidebar()) == null ? void 0 : _a8.startRename(group.id);
+        })
+      )
+    });
+    plugin.addCommand({
+      id: "switch-group",
+      name: "Switch group\u2026",
+      checkCallback: multiAgent(() => this.store.list().length > 0, () => this.switchGroupPicker())
+    });
+    plugin.addCommand({
+      id: "move-tab-to-group",
+      name: "Move tab to group\u2026",
+      checkCallback: multiAgent(
+        () => !!plugin.app.workspace.getMostRecentLeaf() && this.store.list().length > 0,
+        () => {
+          const leaf = plugin.app.workspace.getMostRecentLeaf();
+          if (leaf)
+            moveTabCommand(plugin, leaf);
+        }
+      )
+    });
+    plugin.addCommand({
+      id: "start-claude-on-note",
+      name: "Start Claude on this note",
+      checkCallback: multiAgent(
+        () => {
+          var _a8;
+          return ((_a8 = plugin.app.workspace.getActiveFile()) == null ? void 0 : _a8.extension) === "md";
+        },
+        () => {
+          const file = plugin.app.workspace.getActiveFile();
+          if (file)
+            void startClaudeOnNote(plugin, file);
+        }
+      )
+    });
+    plugin.addCommand({
+      id: "close-group",
+      name: "Close group",
+      checkCallback: multiAgent(
+        () => !!this.store.activeGroupId,
+        () => {
+          const groupId = this.store.activeGroupId;
+          if (groupId)
+            void this.closeGroupAsking(groupId);
+        }
+      )
+    });
+  }
+  /** Multi-agent starting (at load or on switching): every terminal loaded
+   *  so its group is known, dead tabs forgotten, and tabs shown or hidden.
+   *  Empty groups aren't tidied here; see removeEmptyGroups. */
+  async start() {
+    await this.loadDeferredTerminals();
+    this.store.pruneTabs(this.liveLeafIds());
+    this.applyVisibility();
+  }
+  /** Shows the selected group's tabs and hides other groups' (outside
+   *  Multi-agent, shows everything), and updates the status bar. */
+  applyVisibility() {
+    this.tabs.apply();
+    this.refreshStatus();
+  }
+  /** "⧉ Auth rotation · 4 in other groups" in the status bar; click to
+   *  switch. Empty outside Multi-agent or with no groups. */
+  refreshStatus() {
+    var _a8;
+    const el2 = this.statusEl;
+    if (!el2)
+      return;
+    const groups = this.multiAgent ? this.store.list() : [];
+    el2.toggle(groups.length > 0);
+    if (groups.length === 0)
+      return;
+    const active = this.store.get(this.store.activeGroupId);
+    const hidden = this.tabs.hiddenTerminalCount();
+    el2.setText(`\u29C9 ${(_a8 = active == null ? void 0 : active.name) != null ? _a8 : "No group"}${hidden > 0 ? ` \xB7 ${hidden} in other groups` : ""}`);
+    el2.setAttr("aria-label", "Switch group");
+  }
+  switchGroupPicker() {
+    new GroupSuggestModal(this.plugin, "Switch to group", { mode: "switch" }, (choice) => {
+      if (choice.kind === "group")
+        void this.selectGroup(choice.target);
+    }).open();
+  }
+  /**
+   * Puts a non-terminal tab in a group (null: back in every group). With
+   * `stay` false the tab came from a group's terminal or card, so that
+   * group is selected and the tab the user just opened stays in view.
+   */
+  addTabToGroup(leaf, groupId, stay = false) {
+    if (!this.multiAgent)
+      return;
+    const leafId = leaf.id;
+    if (!leafId || !groupId && !stay)
+      return;
+    this.store.setTabGroup(leafId, groupId);
+    if (!stay)
+      this.revealGroupOf(leaf);
+  }
+  /** Selects the group a tab belongs to, if it's another one. */
+  revealGroupOf(leaf) {
+    if (!this.multiAgent)
+      return;
+    const group = this.tabs.groupOf(leaf);
+    if (group && group !== this.store.activeGroupId)
+      this.store.setActive(group);
+    else
+      this.applyVisibility();
+  }
+  setGroupColor(groupId, color) {
+    this.store.setColor(groupId, color);
+    for (const view of this.terminalsIn(groupId))
+      view.refreshGroupColor();
+  }
+  /** A terminal's tab closed. A group it emptied is removed -- except while
+   *  Terminus itself is unloading, when every view closes at once. */
+  onTerminalClosed() {
+    if (this.plugin.isUnloading || !this.multiAgent)
+      return;
+    window.setTimeout(() => {
+      if (!this.plugin.isUnloading)
+        this.removeEmptyGroups();
+    }, 0);
+  }
+  /** The command's version of a group's ×: asks first only when a session
+   *  in it is mid-turn or waiting on an answer. */
+  async closeGroupAsking(groupId) {
+    const group = this.store.get(groupId);
+    if (!group)
+      return;
+    if (this.busy(this.terminalsIn(groupId)).length > 0) {
+      const ok = await ConfirmModal.confirm(this.plugin.app, `Close ${group.name}?`, "Claude is mid-turn here. Close anyway?", "Close");
+      if (!ok)
+        return;
+    }
+    this.closeGroup(groupId);
+  }
+  /**
+   * Suggests (never makes) a status change for a group's linked note: a
+   * turn ending with the note "active" suggests "review"; a new turn with
+   * it in "review" suggests "active". Only for those values, so a note
+   * whose `status` means something else is left alone, and nothing ever
+   * suggests "done". A permission prompt mid-turn isn't a turn ending.
+   */
+  suggestNoteStatus(token, status) {
+    var _a8, _b;
+    const previous = this.lastSessionStatus.get(token);
+    this.lastSessionStatus.set(token, status);
+    if (!this.multiAgent || previous === status)
+      return;
+    const group = this.store.get((_a8 = this.plugin.findTerminalView(token)) == null ? void 0 : _a8.groupId);
+    const file = noteFile(this.plugin, (_b = group == null ? void 0 : group.note) != null ? _b : null);
+    if (!group || !file)
+      return;
+    const current = noteStatus(this.plugin, file);
+    const turnEnded = previous === "working" && (status === "finished-unread" || status === "idle");
+    let suggestion = null;
+    if (turnEnded && current === "active")
+      suggestion = "review";
+    else if (previous !== "working" && status === "working" && current === "review")
+      suggestion = "active";
+    if (!suggestion || this.noteSuggestions.get(group.id) === suggestion)
+      return;
+    this.noteSuggestions.set(group.id, suggestion);
+    this.plugin.refreshTerminusViews();
+  }
+  liveLeafIds() {
+    const ids = /* @__PURE__ */ new Set();
+    this.plugin.app.workspace.iterateAllLeaves((leaf) => {
+      const id = leaf.id;
+      if (id)
+        ids.add(id);
+    });
+    return ids;
+  }
+  get store() {
+    return this.plugin.groupStore;
+  }
+  /** Every terminal, in workspace order. Only loaded views: in Multi-agent
+   *  every terminal tab is loaded at startup (see loadDeferredTerminals). */
+  terminals() {
+    return this.plugin.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE).map((leaf) => leaf.view).filter((view) => view instanceof TerminalView);
+  }
+  terminalsIn(target) {
+    return this.terminals().filter((view) => view.groupId === target);
+  }
+  /** Obsidian defers loading background tabs until they're shown, and a
+   *  deferred terminal has no shell and no group yet. Groups are about
+   *  terminals running in the background, so all of them are loaded. */
+  async loadDeferredTerminals() {
+    for (const leaf of this.plugin.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
+      const deferred = leaf;
+      if (deferred.isDeferred && deferred.loadIfDeferred)
+        await deferred.loadIfDeferred();
+    }
+  }
+  /**
+   * A new group. With `terminals`, they move into it; without, it starts
+   * with a new terminal, since a group is never empty. Either way it becomes
+   * the selected group. Nothing takes the keyboard: the caller usually puts
+   * the group's name into a rename field next.
+   */
+  async createGroup(terminals = []) {
+    const group = this.store.create();
+    if (terminals.length > 0) {
+      this.moveTerminals(terminals, group.id);
+    } else {
+      await this.newTerminal(group.id, false);
+    }
+    await this.selectGroup(group.id, false);
+    return group;
+  }
+  /** A new terminal in a group (starting in its folder, next to the
+   *  terminal last used there) or ungrouped. */
+  async newTerminal(target, focus = true, launch) {
+    var _a8, _b;
+    const { workspace } = this.plugin.app;
+    const group = this.store.get(target);
+    const anchorId = group ? this.store.lastLeaf(group.id) : void 0;
+    const anchor = anchorId && workspace.getLeafById(anchorId) || ((_a8 = this.terminalsIn(target)[0]) == null ? void 0 : _a8.leaf);
+    if (anchor)
+      workspace.setActiveLeaf(anchor, { focus: false });
+    const leaf = workspace.getLeaf("tab");
+    await leaf.setViewState({
+      type: TERMINUS_VIEW_TYPE,
+      active: focus,
+      state: { groupId: group == null ? void 0 : group.id, cwd: (_b = group == null ? void 0 : group.folder) != null ? _b : void 0, launch }
+    });
+    await workspace.revealLeaf(leaf);
+    this.applyVisibility();
+    return leaf.view instanceof TerminalView ? leaf.view : null;
+  }
+  /** Moves terminals into a group or out of all of them, then removes any
+   *  group the move left empty. */
+  moveTerminals(terminals, target) {
+    for (const view of terminals)
+      view.setGroup(target);
+    this.removeEmptyGroups();
+    this.applyVisibility();
+    this.plugin.refreshTerminusViews();
+  }
+  /** Groups with no terminals left go: a group is never empty. */
+  removeEmptyGroups() {
+    const used = new Set(this.terminals().map((view) => view.groupId));
+    for (const group of this.store.list()) {
+      if (!used.has(group.id))
+        this.store.remove(group.id);
+    }
+  }
+  /** Selects a group and brings back the terminal last used in it, giving
+   *  it the keyboard unless `focus` is false. */
+  async selectGroup(target, focus = true) {
+    var _a8;
+    this.store.setActive(target);
+    if (!target)
+      return;
+    const { workspace } = this.plugin.app;
+    const lastId = this.store.lastLeaf(target);
+    const last = lastId ? workspace.getLeafById(lastId) : null;
+    const leaf = last && last.view instanceof TerminalView && last.view.groupId === target ? last : (_a8 = this.terminalsIn(target)[0]) == null ? void 0 : _a8.leaf;
+    if (!leaf)
+      return;
+    await workspace.revealLeaf(leaf);
+    if (focus)
+      workspace.setActiveLeaf(leaf, { focus: true });
+  }
+  /** Opening a terminal from another group (its row, an inbox card, Next,
+   *  or plain tab navigation) switches to that group; and the group
+   *  remembers it as its last-used terminal. */
+  onActiveLeaf(leaf) {
+    if (!leaf || !(leaf.view instanceof TerminalView))
+      return;
+    const groupId = leaf.view.groupId;
+    const leafId = leaf.id;
+    if (groupId && leafId)
+      this.store.setLastLeaf(groupId, leafId);
+    if (groupId && groupId !== this.store.activeGroupId)
+      this.store.setActive(groupId);
+  }
+  /** Closes terminals (their tabs) and removes groups left empty. Asking
+   *  first about busy sessions is the caller's job. */
+  closeTerminals(terminals) {
+    for (const view of terminals)
+      view.leaf.detach();
+    this.removeEmptyGroups();
+  }
+  /** Closes a group's terminals and removes it. Its other tabs stay open
+   *  and become global: they may hold unsaved edits. */
+  closeGroup(groupId) {
+    for (const view of this.terminalsIn(groupId))
+      view.leaf.detach();
+    this.store.remove(groupId);
+  }
+  /** Sessions in these terminals that are mid-turn or waiting on an
+   *  answer: closing them interrupts Claude, so it's asked about first. */
+  busy(terminals) {
+    return terminals.filter((view) => {
+      var _a8;
+      const status = (_a8 = this.plugin.agentSessionStore.get(view.hookToken)) == null ? void 0 : _a8.status;
+      return status === "working" || status === "needs-attention";
+    });
+  }
+};
+
 // src/state/PendingChangesStore.ts
-var import_terminus_node_bridge24 = __toESM(require_dist());
+var import_terminus_node_bridge25 = __toESM(require_dist());
 var MAX_HISTORY = 20;
 var PendingChangesStore = class extends TypedEmitter {
   constructor() {
@@ -21004,9 +21307,9 @@ var PendingChangesStore = class extends TypedEmitter {
     const newOldText = diff.oldText.slice(0, hunk.oldStart) + chosen + diff.oldText.slice(hunk.oldEnd);
     const newNewText = diff.newText.slice(0, hunk.newStart) + chosen + diff.newText.slice(hunk.newEnd);
     if (!diff.existedBefore && newOldText === "") {
-      await (0, import_terminus_node_bridge24.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge25.deleteFileIfExists)(diff.filePath);
     } else {
-      await (0, import_terminus_node_bridge24.writeTextFile)(diff.filePath, newOldText);
+      await (0, import_terminus_node_bridge25.writeTextFile)(diff.filePath, newOldText);
     }
     entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
     if (newOldText === newNewText) {
@@ -21050,18 +21353,18 @@ var PendingChangesStore = class extends TypedEmitter {
   }
   async applyOldState(diff) {
     if (!diff.existedBefore) {
-      await (0, import_terminus_node_bridge24.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge25.deleteFileIfExists)(diff.filePath);
       return;
     }
-    await (0, import_terminus_node_bridge24.writeTextFile)(diff.filePath, diff.revertText);
+    await (0, import_terminus_node_bridge25.writeTextFile)(diff.filePath, diff.revertText);
   }
   async applyNewState(diff) {
-    await (0, import_terminus_node_bridge24.writeTextFile)(diff.filePath, diff.newText);
+    await (0, import_terminus_node_bridge25.writeTextFile)(diff.filePath, diff.newText);
   }
 };
 
 // src/state/ActionLog.ts
-var import_terminus_node_bridge25 = __toESM(require_dist());
+var import_terminus_node_bridge26 = __toESM(require_dist());
 function isActionLogEntryArray(value) {
   return Array.isArray(value);
 }
@@ -21075,7 +21378,7 @@ var ActionLog = class {
   async load() {
     if (this.loaded)
       return;
-    const raw = await (0, import_terminus_node_bridge25.readTextFileIfExists)(this.logFilePath);
+    const raw = await (0, import_terminus_node_bridge26.readTextFileIfExists)(this.logFilePath);
     if (raw && raw.trim()) {
       const parsed = JSON.parse(raw);
       this.entries = isActionLogEntryArray(parsed) ? parsed : [];
@@ -21101,8 +21404,8 @@ var ActionLog = class {
     return result;
   }
   async persist() {
-    await (0, import_terminus_node_bridge25.makeDirRecursive)((0, import_terminus_node_bridge25.pathDirname)(this.logFilePath));
-    await (0, import_terminus_node_bridge25.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
+    await (0, import_terminus_node_bridge26.makeDirRecursive)((0, import_terminus_node_bridge26.pathDirname)(this.logFilePath));
+    await (0, import_terminus_node_bridge26.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
   }
 };
 
@@ -21530,7 +21833,7 @@ var ClosedTerminalBuffer = class {
 };
 
 // src/modals/RescueClosedTerminalModal.ts
-var import_obsidian20 = require("obsidian");
+var import_obsidian22 = require("obsidian");
 function formatRelativeTime(timestampMs) {
   const seconds = Math.max(0, Math.round((Date.now() - timestampMs) / 1e3));
   if (seconds < 60)
@@ -21541,7 +21844,7 @@ function formatRelativeTime(timestampMs) {
   const hours = Math.round(minutes / 60);
   return `${hours}h ago`;
 }
-var RescueClosedTerminalModal = class extends import_obsidian20.FuzzySuggestModal {
+var RescueClosedTerminalModal = class extends import_obsidian22.FuzzySuggestModal {
   constructor(app, entries, onChoose) {
     super(app);
     this.entries = entries;
@@ -21560,14 +21863,14 @@ var RescueClosedTerminalModal = class extends import_obsidian20.FuzzySuggestModa
 };
 
 // src/modals/GettingStartedModal.ts
-var import_obsidian23 = require("obsidian");
+var import_obsidian25 = require("obsidian");
 
 // src/onboarding/gettingStarted.ts
-var import_obsidian22 = require("obsidian");
+var import_obsidian24 = require("obsidian");
 
 // src/settings.ts
-var import_obsidian21 = require("obsidian");
-var import_terminus_node_bridge26 = __toESM(require_dist());
+var import_obsidian23 = require("obsidian");
+var import_terminus_node_bridge27 = __toESM(require_dist());
 
 // src/terminal/fontCatalog.ts
 var CANDIDATE_MONOSPACE_FONTS = [
@@ -21720,7 +22023,7 @@ var MIN_AUTO_REVEAL_DELAY_MS = 0;
 var MAX_AUTO_REVEAL_DELAY_MS = 5e3;
 var MIN_SCROLLBACK_LINES = 200;
 var MAX_SCROLLBACK_LINES = 5e4;
-var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
+var TerminusSettingTab = class extends import_obsidian23.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -21731,7 +22034,7 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
   }
   /** Shared by both modes' sections: the setting itself is shared. */
   renderConfirmBulkActions(containerEl) {
-    new import_obsidian21.Setting(containerEl).setName("Confirm before bulk actions").setDesc(
+    new import_obsidian23.Setting(containerEl).setName("Confirm before bulk actions").setDesc(
       'Ask for confirmation before "Reject all" / "Keep all" (global or per-terminal). Off by default -- every bulk action is already reversible via the "Recently resolved" list.'
     ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.confirmBulkActions).onChange(async (value) => {
@@ -21742,7 +22045,7 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
   }
   /** Same slider for both modes, each writing its own value. */
   renderRevealDelay(containerEl, value, desc, save) {
-    new import_obsidian21.Setting(containerEl).setName("Reveal delay").setDesc(desc).addSlider(
+    new import_obsidian23.Setting(containerEl).setName("Reveal delay").setDesc(desc).addSlider(
       (slider) => slider.setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100).setValue(value).setDynamicTooltip().onChange(async (v3) => {
         save(v3);
         await this.plugin.saveSettings();
@@ -21751,8 +22054,8 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
   }
   renderClassicSection(containerEl) {
     const classic = this.plugin.settings.classic;
-    new import_obsidian21.Setting(containerEl).setName("Review").setHeading();
-    new import_obsidian21.Setting(containerEl).setName("Automatically reveal Pending Changes panel").setDesc(
+    new import_obsidian23.Setting(containerEl).setName("Review").setHeading();
+    new import_obsidian23.Setting(containerEl).setName("Automatically reveal Pending Changes panel").setDesc(
       "Bring the panel to front once Claude finishes a burst of edits, so a review is never sitting there unnoticed."
     ).addToggle(
       (toggle) => toggle.setValue(classic.autoRevealPendingChanges).onChange(async (value) => {
@@ -21773,8 +22076,8 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
   }
   renderMultiAgentSection(containerEl) {
     const multiAgent = this.plugin.settings.multiAgent;
-    new import_obsidian21.Setting(containerEl).setName("Agents and review").setHeading();
-    new import_obsidian21.Setting(containerEl).setName("Automatically reveal Agent inbox").setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs your attention.").addToggle(
+    new import_obsidian23.Setting(containerEl).setName("Agents and review").setHeading();
+    new import_obsidian23.Setting(containerEl).setName("Automatically reveal Agent inbox").setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs your attention.").addToggle(
       (toggle) => toggle.setValue(multiAgent.autoRevealInbox).onChange(async (value) => {
         multiAgent.autoRevealInbox = value;
         await this.plugin.saveSettings();
@@ -21790,14 +22093,14 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
       );
     }
     this.renderConfirmBulkActions(containerEl);
-    new import_obsidian21.Setting(containerEl).setName("Track subagents").setDesc(
+    new import_obsidian23.Setting(containerEl).setName("Track subagents").setDesc(
       "Show each subagent Claude starts as a row on its session's card, with the changes it made. Turning this off removes the subagent hooks from .claude/settings.local.json and credits every change to the main session."
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.trackSubagents).onChange(async (value) => {
         await this.plugin.setTrackSubagents(value);
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Show estimated cost").setDesc(
+    new import_obsidian23.Setting(containerEl).setName("Show estimated cost").setDesc(
       'Show an approximate cost ("\u2248 $0.42") from a built-in price table that is updated with each release. Off leaves tokens and context only.'
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.showEstimatedCost).onChange(async (value) => {
@@ -21806,14 +22109,14 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
         this.plugin.refreshTerminusViews();
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Show git branch on cards").setDesc("When a session's folder is a git repository, show its current branch on the session's card.").addToggle(
+    new import_obsidian23.Setting(containerEl).setName("Show git branch on cards").setDesc("When a session's folder is a git repository, show its current branch on the session's card.").addToggle(
       (toggle) => toggle.setValue(multiAgent.showGitBranch).onChange(async (value) => {
         multiAgent.showGitBranch = value;
         await this.plugin.saveSettings();
         this.plugin.refreshTerminusViews();
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Check for updates").setDesc(
+    new import_obsidian23.Setting(containerEl).setName("Check for updates").setDesc(
       "Ask GitHub for the latest release at startup and twice a day, and show an update link next to the version in the sidebar. While this is off, the plugin makes no network requests."
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.checkForUpdates).onChange(async (value) => {
@@ -21825,7 +22128,7 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     if (MULTI_AGENT_AVAILABLE) {
-      new import_obsidian21.Setting(containerEl).setName("Experience").setDesc(
+      new import_obsidian23.Setting(containerEl).setName("Experience").setDesc(
         "Classic reviews every terminal's changes in one Pending Changes panel. Multi-agent adds an Agent inbox with a card per Claude session, and groups for your terminals. Each keeps its own review settings below; the rest are shared."
       ).addDropdown(
         (dropdown) => dropdown.addOptions(EXPERIENCE_LABELS).setValue(this.plugin.settings.experience).onChange(async (value) => {
@@ -21834,7 +22137,7 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
         })
       );
     }
-    new import_obsidian21.Setting(containerEl).setName("New terminal placement").setDesc(
+    new import_obsidian23.Setting(containerEl).setName("New terminal placement").setDesc(
       'Where the ribbon icon and "Open Terminus" command open a new terminal. "Always ask" shows a quick menu at the click; any other choice opens directly there every time.'
     ).addDropdown(
       (dropdown) => dropdown.addOptions(TERMINAL_PLACEMENT_LABELS).setValue(this.plugin.settings.terminalPlacement).onChange(async (value) => {
@@ -21842,8 +22145,8 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Terminal appearance").setHeading();
-    new import_obsidian21.Setting(containerEl).setName("Terminal font size").setDesc(
+    new import_obsidian23.Setting(containerEl).setName("Terminal appearance").setHeading();
+    new import_obsidian23.Setting(containerEl).setName("Terminal font size").setDesc(
       `Applies to all open terminal panels. Also adjustable via the "Increase/Decrease terminal font size" commands (${MIN_FONT_SIZE}-${MAX_FONT_SIZE}px).`
     ).addSlider(
       (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
@@ -21851,40 +22154,40 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
       })
     );
     this.displayFontFamilySetting(containerEl);
-    new import_obsidian21.Setting(containerEl).setName("Cursor style").addDropdown(
+    new import_obsidian23.Setting(containerEl).setName("Cursor style").addDropdown(
       (dropdown) => dropdown.addOptions(CURSOR_STYLE_LABELS).setValue(this.plugin.settings.cursorStyle).onChange(async (value) => {
         await this.plugin.setCursorStyle(value);
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Cursor blink").addToggle(
+    new import_obsidian23.Setting(containerEl).setName("Cursor blink").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.cursorBlink).onChange(async (value) => {
         await this.plugin.setCursorBlink(value);
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Scrollback").setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`).addSlider(
+    new import_obsidian23.Setting(containerEl).setName("Scrollback").setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`).addSlider(
       (slider) => slider.setLimits(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, 100).setValue(this.plugin.settings.scrollbackLines).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.scrollbackLines = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Auto theme").setDesc("Terminal colors follow Obsidian's light/dark toggle. Turn off to use xterm.js's own default palette instead.").addToggle(
+    new import_obsidian23.Setting(containerEl).setName("Auto theme").setDesc("Terminal colors follow Obsidian's light/dark toggle. Turn off to use xterm.js's own default palette instead.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoThemeTerminal).onChange(async (value) => {
         await this.plugin.setAutoThemeTerminal(value);
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Startup command").setDesc('Runs automatically in every new terminal once the shell is ready (e.g. "claude"). Leave blank for none.').addText(
+    new import_obsidian23.Setting(containerEl).setName("Startup command").setDesc('Runs automatically in every new terminal once the shell is ready (e.g. "claude"). Leave blank for none.').addText(
       (text) => text.setPlaceholder("e.g. claude").setValue(this.plugin.settings.startupCommand).onChange(async (value) => {
         this.plugin.settings.startupCommand = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Wiki-link autocomplete format").setDesc('Format inserted when picking a note after typing "[[" in a terminal.').addDropdown(
+    new import_obsidian23.Setting(containerEl).setName("Wiki-link autocomplete format").setDesc('Format inserted when picking a note after typing "[[" in a terminal.').addDropdown(
       (dropdown) => dropdown.addOptions(WIKI_LINK_INSERT_FORMAT_LABELS).setValue(this.plugin.settings.wikiLinkInsertFormat).onChange(async (value) => {
         this.plugin.settings.wikiLinkInsertFormat = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Ribbon icon").setDesc(`Any Lucide icon name (e.g. "square-terminal", "terminal"). Invalid names fall back to Obsidian's default icon silently.`).addText(
+    new import_obsidian23.Setting(containerEl).setName("Ribbon icon").setDesc(`Any Lucide icon name (e.g. "square-terminal", "terminal"). Invalid names fall back to Obsidian's default icon silently.`).addText(
       (text) => text.setPlaceholder("square-terminal").setValue(this.plugin.settings.ribbonIcon).onChange(async (value) => {
         await this.plugin.setRibbonIcon(value.trim() || DEFAULT_SETTINGS.ribbonIcon);
       })
@@ -21894,16 +22197,16 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
     } else {
       this.renderClassicSection(containerEl);
     }
-    new import_obsidian21.Setting(containerEl).setName("Advanced").setHeading();
-    new import_obsidian21.Setting(containerEl).setName("Shell binary override").setDesc(
-      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge26.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
+    new import_obsidian23.Setting(containerEl).setName("Advanced").setHeading();
+    new import_obsidian23.Setting(containerEl).setName("Shell binary override").setDesc(
+      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge27.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
     ).addText(
       (text) => text.setPlaceholder("e.g. /bin/zsh").setValue(this.plugin.settings.shellBinOverride).onChange(async (value) => {
         this.plugin.settings.shellBinOverride = value.trim();
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian21.Setting(containerEl).setName("Python 3 binary override").setDesc(
+    new import_obsidian23.Setting(containerEl).setName("Python 3 binary override").setDesc(
       "Leave blank to auto-detect. Only needed if the plugin can't find python3 on its own (used to allocate the terminal's pseudo-terminal)."
     ).addText(
       (text) => text.setPlaceholder("e.g. /usr/local/bin/python3").setValue(this.plugin.settings.python3BinOverride).onChange(async (value) => {
@@ -21921,7 +22224,7 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
    *  need a full `display()` re-render, which would drop input focus. */
   displayClaudeAuthTokenSetting(containerEl) {
     let statusEl;
-    const setting = new import_obsidian21.Setting(containerEl).setName("Claude Code auth token").setDesc(
+    const setting = new import_obsidian23.Setting(containerEl).setName("Claude Code auth token").setDesc(
       `Only needed for "Explain this" / "Suggest a fix" on failed commands, and only if those hang or fail outright -- some machines can't read Claude Code's normal Keychain-based login from a spawned background process. Run "claude setup-token" in a real terminal and paste the result here. Leave blank to keep using your regular Claude Code login. Stored as plain text in this vault's plugin data, same as any other API key field.`
     ).addText((text) => {
       text.inputEl.type = "password";
@@ -21971,7 +22274,7 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
     for (const font of availableFonts)
       options[font] = font;
     options[CUSTOM_FONT_VALUE] = "Custom\u2026";
-    new import_obsidian21.Setting(containerEl).setName("Font family").setDesc(
+    new import_obsidian23.Setting(containerEl).setName("Font family").setDesc(
       "Monospace fonts detected on this system. Applies to all open terminal panels. Proportional fonts aren't listed -- a terminal aligns text to a fixed character grid, which only a monospace font can sit in evenly."
     ).addDropdown(
       (dropdown) => dropdown.addOptions(options).setValue(isCustom ? CUSTOM_FONT_VALUE : current).onChange(async (value) => {
@@ -21987,7 +22290,7 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
     );
     if (!isCustom)
       return;
-    const customSetting = new import_obsidian21.Setting(containerEl).setName("Custom font family").setDesc("Any font installed on this system, by its exact name.");
+    const customSetting = new import_obsidian23.Setting(containerEl).setName("Custom font family").setDesc("Any font installed on this system, by its exact name.");
     const warningEl = customSetting.descEl.createDiv({ cls: "terminus-setting-warning" });
     const refreshWarning = (value) => {
       warningEl.setText(this.describeCustomFontProblem(value));
@@ -22018,7 +22321,7 @@ var TerminusSettingTab = class extends import_obsidian21.PluginSettingTab {
 
 // src/onboarding/gettingStarted.ts
 function keys() {
-  const mac = import_obsidian22.Platform.isMacOS;
+  const mac = import_obsidian24.Platform.isMacOS;
   return {
     mod: mac ? "Cmd" : "Ctrl",
     alt: mac ? "Opt" : "Alt",
@@ -22137,7 +22440,7 @@ Reopen this any time with the **Terminus: Getting started** command.`;
 }
 
 // src/modals/GettingStartedModal.ts
-var GettingStartedModal = class extends import_obsidian23.Modal {
+var GettingStartedModal = class extends import_obsidian25.Modal {
   constructor(app, full) {
     super(app);
     this.full = full;
@@ -22145,7 +22448,7 @@ var GettingStartedModal = class extends import_obsidian23.Modal {
      *  embeds, internal-link hover) to a parent whose lifecycle it inherits.
      *  Modal isn't a Component, so this owns them and is unloaded on close --
      *  without it those children would leak past the modal. */
-    this.renderHost = new import_obsidian23.Component();
+    this.renderHost = new import_obsidian25.Component();
   }
   /** Short version, shown once on first load. */
   static openWelcome(app) {
@@ -22162,7 +22465,7 @@ var GettingStartedModal = class extends import_obsidian23.Modal {
     contentEl.createEl("h2", { text: this.full ? "Terminus \u2014 getting started" : "Welcome to Terminus" });
     const body = contentEl.createDiv({ cls: "terminus-getting-started-body" });
     const markdown = this.full ? buildGettingStartedMarkdown() : buildWelcomeMarkdown();
-    void import_obsidian23.MarkdownRenderer.render(this.app, markdown, body, "", this.renderHost);
+    void import_obsidian25.MarkdownRenderer.render(this.app, markdown, body, "", this.renderHost);
     const actions = contentEl.createDiv({ cls: "terminus-getting-started-actions" });
     if (!this.full) {
       actions.createEl("button", { text: "Full guide" }).addEventListener("click", () => {
@@ -22179,8 +22482,8 @@ var GettingStartedModal = class extends import_obsidian23.Modal {
 };
 
 // src/modals/MultiAgentInviteModal.ts
-var import_obsidian24 = require("obsidian");
-var MultiAgentInviteModal = class extends import_obsidian24.Modal {
+var import_obsidian26 = require("obsidian");
+var MultiAgentInviteModal = class extends import_obsidian26.Modal {
   constructor() {
     super(...arguments);
     this.resolvePromise = null;
@@ -22221,7 +22524,7 @@ var MultiAgentInviteModal = class extends import_obsidian24.Modal {
 };
 
 // src/main.ts
-var TerminusPlugin = class extends import_obsidian25.Plugin {
+var TerminusPlugin = class extends import_obsidian27.Plugin {
   constructor() {
     super(...arguments);
     this.reviewServer = new ReviewServer();
@@ -22231,13 +22534,6 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     /** Review comments queued per session (Multi-agent only). */
     this.feedbackStore = new FeedbackStore();
     this.groups = new GroupController(this);
-    this.tabs = new TabVisibility(this);
-    this.groupStatusEl = null;
-    /** Group id → a suggested status for its note, shown in the sidebar
-     *  until acted on or dismissed (see suggestNoteStatus). */
-    this.noteSuggestions = /* @__PURE__ */ new Map();
-    /** Each session's last status, to spot a turn starting or ending. */
-    this.lastSessionStatus = /* @__PURE__ */ new Map();
     /** Latest release on GitHub, once checked (Multi-agent only). */
     this.latestPluginVersion = null;
     /** Set first thing in onunload: views closing then aren't the user
@@ -22254,6 +22550,9 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     this.revealPendingChangesTimer = null;
     this.ribbonIconEl = null;
   }
+  get isUnloading() {
+    return this.unloading;
+  }
   async onload() {
     await this.loadSettings();
     this.groupStore = new GroupStore(
@@ -22263,7 +22562,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     );
     this.addSettingTab(new TerminusSettingTab(this.app, this));
     await provisionResources(this.getPluginDir());
-    this.actionLog = new ActionLog((0, import_terminus_node_bridge27.pathJoin)(this.getPluginDir(), "action-log.json"));
+    this.actionLog = new ActionLog((0, import_terminus_node_bridge28.pathJoin)(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.pendingChangesStore.on("resolved", (item) => {
       const stats = computeDiffStats(item.diff);
@@ -22299,52 +22598,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     this.registerView(DIFF_SPLIT_VIEW_TYPE, (leaf) => new DiffSplitView(leaf, this));
     this.registerView(AGENT_INBOX_VIEW_TYPE, (leaf) => new AgentInboxView(leaf, this));
     this.registerView(TERMINUS_SIDEBAR_VIEW_TYPE, (leaf) => new TerminusSidebarView(leaf, this));
-    this.registerEvent(
-      this.app.workspace.on("active-leaf-change", (leaf) => {
-        if (this.experience === "multi-agent")
-          this.groups.onActiveLeaf(leaf);
-      })
-    );
-    this.registerEvent(
-      this.app.workspace.on("layout-change", () => {
-        if (this.experience === "multi-agent")
-          void this.groups.loadDeferredTerminals();
-        this.applyGroupVisibility();
-      })
-    );
-    this.groupStore.on("change", () => this.applyGroupVisibility());
-    this.registerEvent(
-      this.app.workspace.on("file-menu", (menu, _file, source, leaf) => {
-        if (source === "tab-header" && leaf)
-          this.addGroupMenuItems(menu, leaf);
-      })
-    );
-    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.groupStore.noteMoved(oldPath, file.path)));
-    this.registerEvent(this.app.vault.on("delete", (file) => this.groupStore.noteMoved(file.path, null)));
-    this.registerEvent(
-      this.app.metadataCache.on("changed", (file) => {
-        if (this.groupStore.list().some((g2) => g2.note === file.path))
-          this.refreshTerminusViews();
-      })
-    );
-    this.agentSessionStore.on("change", (session) => this.suggestNoteStatus(session.token, session.status));
-    this.registerEvent(
-      this.app.workspace.on("file-menu", (menu, file) => {
-        if (this.experience !== "multi-agent" || !(file instanceof import_obsidian25.TFile) || file.extension !== "md")
-          return;
-        menu.addItem(
-          (item) => item.setTitle("Start Claude on this note").setIcon("square-terminal").onClick(() => void startClaudeOnNote(this, file))
-        );
-      })
-    );
-    this.groupStatusEl = this.addStatusBarItem();
-    this.groupStatusEl.addClass("terminus-group-status", "mod-clickable");
-    this.groupStatusEl.addEventListener("click", () => {
-      new GroupSuggestModal(this, "Switch to group", false, (choice) => {
-        if (choice.kind === "group")
-          void this.groups.selectGroup(choice.target);
-      }).open();
-    });
+    this.groups.register();
     this.registerInterval(window.setInterval(() => void this.checkPluginVersion(), 12 * 60 * 60 * 1e3));
     this.ribbonIconEl = this.addRibbonIcon(this.settings.ribbonIcon, "Open Terminus", (evt) => {
       void this.openTerminal(evt);
@@ -22380,98 +22634,6 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
           return false;
         if (!checking)
           void this.revealReviewView();
-        return true;
-      }
-    });
-    this.addCommand({
-      id: "new-group",
-      name: "New group",
-      checkCallback: (checking) => {
-        if (this.experience !== "multi-agent")
-          return false;
-        if (!checking) {
-          void this.groups.createGroup().then(async (group) => {
-            var _a8;
-            return (_a8 = await this.revealSidebar()) == null ? void 0 : _a8.startRename(group.id);
-          });
-        }
-        return true;
-      }
-    });
-    this.addCommand({
-      id: "switch-group",
-      name: "Switch group\u2026",
-      checkCallback: (checking) => {
-        if (this.experience !== "multi-agent" || this.groupStore.list().length === 0)
-          return false;
-        if (!checking)
-          new GroupSuggestModal(this, "Switch to group", false, (choice) => {
-            if (choice.kind === "group")
-              void this.groups.selectGroup(choice.target);
-          }).open();
-        return true;
-      }
-    });
-    this.addCommand({
-      id: "move-terminal-to-group",
-      name: "Move terminal to group\u2026",
-      checkCallback: (checking) => {
-        const view = this.app.workspace.getActiveViewOfType(TerminalView);
-        if (this.experience !== "multi-agent" || !view)
-          return false;
-        if (!checking) {
-          new GroupSuggestModal(this, "Move this terminal to", true, (choice) => {
-            if (choice.kind === "new") {
-              void this.groups.createGroup([view]).then(async (group) => {
-                var _a8;
-                return (_a8 = await this.revealSidebar()) == null ? void 0 : _a8.startRename(group.id);
-              });
-            } else {
-              this.groups.moveTerminals([view], choice.target);
-            }
-          }).open();
-        }
-        return true;
-      }
-    });
-    this.addCommand({
-      id: "add-tab-to-group",
-      name: "Add current tab to group\u2026",
-      checkCallback: (checking) => {
-        const leaf = this.app.workspace.getMostRecentLeaf();
-        if (this.experience !== "multi-agent" || !leaf || leaf.view instanceof TerminalView || this.groupStore.list().length === 0)
-          return false;
-        if (!checking) {
-          new GroupSuggestModal(this, "Add this tab to", false, (choice) => {
-            if (choice.kind === "group")
-              this.addTabToGroup(leaf, choice.target, true);
-          }).open();
-        }
-        return true;
-      }
-    });
-    this.addCommand({
-      id: "start-claude-on-note",
-      name: "Start Claude on this note",
-      checkCallback: (checking) => {
-        const file = this.app.workspace.getActiveFile();
-        if (this.experience !== "multi-agent" || !file || file.extension !== "md")
-          return false;
-        if (!checking)
-          void startClaudeOnNote(this, file);
-        return true;
-      }
-    });
-    this.addCommand({
-      id: "close-group",
-      name: "Close group",
-      checkCallback: (checking) => {
-        var _a8;
-        const groupId = (_a8 = this.groupStore) == null ? void 0 : _a8.activeGroupId;
-        if (this.experience !== "multi-agent" || !groupId)
-          return false;
-        if (!checking)
-          void this.closeGroupAsking(groupId);
         return true;
       }
     });
@@ -22603,7 +22765,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     }
     for (const view of this.groups.terminals())
       view.refreshGroupColor();
-    this.applyGroupVisibility();
+    this.groups.applyVisibility();
   }
   /**
    * Multi-agent's left sidebar, with every terminal loaded so its group is
@@ -22615,9 +22777,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
    * stays, shown as having no terminals, until its × removes it.
    */
   async startMultiAgentViews() {
-    await this.groups.loadDeferredTerminals();
-    this.groupStore.pruneTabs(this.liveLeafIds());
-    this.applyGroupVisibility();
+    await this.groups.start();
     for (const view of this.groups.terminals())
       view.refreshGroupColor();
     await this.revealSidebar(false);
@@ -22653,82 +22813,6 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
       this.refreshTerminusViews();
     }
   }
-  /** Shows the selected group's tabs and hides other groups' (or, outside
-   *  Multi-agent, shows everything), and updates the status bar. */
-  applyGroupVisibility() {
-    this.tabs.apply();
-    this.refreshGroupStatus();
-  }
-  /** "⧉ Auth rotation · 4 in other groups" in the status bar; click to
-   *  switch. Empty outside Multi-agent or with no groups. */
-  refreshGroupStatus() {
-    var _a8;
-    const el2 = this.groupStatusEl;
-    if (!el2)
-      return;
-    const groups = this.experience === "multi-agent" ? this.groupStore.list() : [];
-    el2.toggle(groups.length > 0);
-    if (groups.length === 0)
-      return;
-    const active = this.groupStore.get(this.groupStore.activeGroupId);
-    const hidden = this.tabs.hiddenTerminalCount();
-    el2.setText(`\u29C9 ${(_a8 = active == null ? void 0 : active.name) != null ? _a8 : "No group"}${hidden > 0 ? ` \xB7 ${hidden} in other groups` : ""}`);
-    el2.setAttr("aria-label", "Switch group");
-  }
-  /**
-   * Puts a non-terminal tab in a group (null: back in every group). With
-   * `stay` false the tab came from a group's terminal or card, so that
-   * group is selected and the tab the user just opened stays in view.
-   */
-  addTabToGroup(leaf, groupId, stay = false) {
-    if (this.experience !== "multi-agent")
-      return;
-    const leafId = leaf.id;
-    if (!leafId || !groupId && !stay)
-      return;
-    this.groupStore.setTabGroup(leafId, groupId);
-    if (!stay)
-      this.revealGroupOf(leaf);
-  }
-  /** Selects the group a tab belongs to, if it's another one. */
-  revealGroupOf(leaf) {
-    if (this.experience !== "multi-agent")
-      return;
-    const group = this.tabs.groupOf(leaf);
-    if (group && group !== this.groupStore.activeGroupId)
-      this.groupStore.setActive(group);
-    else
-      this.applyGroupVisibility();
-  }
-  /** "Add to group" / "Show in every group" for a tab's right-click menu. */
-  addGroupMenuItems(menu, leaf) {
-    if (this.experience !== "multi-agent")
-      return;
-    const leafId = leaf.id;
-    if (!leafId)
-      return;
-    const current = this.groupStore.tabGroup(leafId);
-    menu.addSeparator();
-    for (const group of this.groupStore.list()) {
-      menu.addItem(
-        (item) => item.setTitle(`Add to ${group.name}`).setIcon("folder-plus").setChecked(current === group.id).onClick(() => this.addTabToGroup(leaf, group.id, true))
-      );
-    }
-    if (current) {
-      menu.addItem(
-        (item) => item.setTitle("Show in every group").setIcon("folder-minus").onClick(() => this.addTabToGroup(leaf, null, true))
-      );
-    }
-  }
-  liveLeafIds() {
-    const ids = /* @__PURE__ */ new Set();
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      const id = leaf.id;
-      if (id)
-        ids.add(id);
-    });
-    return ids;
-  }
   /** Turning it on checks at once; turning it off forgets the result, so
    *  the sidebar goes back to the plain version. */
   async setCheckForUpdates(check) {
@@ -22740,51 +22824,6 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
       this.latestPluginVersion = null;
       this.refreshTerminusViews();
     }
-  }
-  /**
-   * Suggests (never makes) a status change for a group's linked note: a
-   * turn ending with the note "active" suggests "review"; a new turn with
-   * it in "review" suggests "active". Only for those values, so a note
-   * whose `status` means something else is left alone, and nothing ever
-   * suggests "done".
-   */
-  suggestNoteStatus(token, status) {
-    var _a8, _b;
-    const previous = this.lastSessionStatus.get(token);
-    this.lastSessionStatus.set(token, status);
-    if (this.experience !== "multi-agent" || previous === status)
-      return;
-    const groupId = (_a8 = this.findTerminalView(token)) == null ? void 0 : _a8.groupId;
-    const group = this.groupStore.get(groupId);
-    const file = noteFile(this, (_b = group == null ? void 0 : group.note) != null ? _b : null);
-    if (!group || !file)
-      return;
-    const current = noteStatus(this, file);
-    let suggestion = null;
-    const turnEnded = previous === "working" && (status === "finished-unread" || status === "idle");
-    if (turnEnded && current === "active")
-      suggestion = "review";
-    else if (previous !== "working" && status === "working" && current === "review")
-      suggestion = "active";
-    if (!suggestion || this.noteSuggestions.get(group.id) === suggestion)
-      return;
-    this.noteSuggestions.set(group.id, suggestion);
-    this.refreshTerminusViews();
-  }
-  setGroupColor(groupId, color) {
-    this.groupStore.setColor(groupId, color);
-    for (const view of this.groups.terminalsIn(groupId))
-      view.refreshGroupColor();
-  }
-  /** A terminal's tab closed. A group it emptied is removed -- except while
-   *  Terminus itself is unloading, when every view closes at once. */
-  onTerminalClosed() {
-    if (this.unloading || this.experience !== "multi-agent")
-      return;
-    window.setTimeout(() => {
-      if (!this.unloading)
-        this.groups.removeEmptyGroups();
-    }, 0);
   }
   /** Each experience has its own review view: closes the other one's
    *  leaves and opens this one's in their place, so the sidebar shows the
@@ -22806,7 +22845,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
       await provisionClaudeSettings(this.app, this.manifest, { experience: this.experience, trackSubagents: this.tracksSubagents });
     } catch (err) {
       console.error("Terminus: failed to provision .claude/settings.local.json", err);
-      new import_obsidian25.Notice(
+      new import_obsidian27.Notice(
         "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
       );
     }
@@ -22837,7 +22876,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     await this.saveSettings();
     if (await MultiAgentInviteModal.ask(this.app)) {
       await this.setExperience("multi-agent");
-      new import_obsidian25.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
+      new import_obsidian27.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
     }
   }
   async saveSettings() {
@@ -22878,7 +22917,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     this.settings.ribbonIcon = iconName;
     await this.saveSettings();
     if (this.ribbonIconEl)
-      (0, import_obsidian25.setIcon)(this.ribbonIconEl, iconName);
+      (0, import_obsidian27.setIcon)(this.ribbonIconEl, iconName);
   }
   forEachTerminalView(fn3) {
     for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
@@ -22894,7 +22933,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     const changes = this.pendingChangesStore.list();
     const count = changes.length;
     if (count === 0) {
-      new import_obsidian25.Notice("Terminus: no pending changes");
+      new import_obsidian27.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && changes.some(hasCollision)) {
@@ -22914,22 +22953,22 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     try {
       await this.pendingChangesStore.resolveAll(accepted);
     } catch (err) {
-      new import_obsidian25.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
+      new import_obsidian27.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
     }
   }
   async resolveOldestPendingChange(accepted) {
     const oldest = this.pendingChangesStore.list()[0];
     if (!oldest) {
-      new import_obsidian25.Notice("Terminus: no pending changes");
+      new import_obsidian27.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && !await confirmCollisionReject(this.app, [oldest]))
       return;
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian25.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge27.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian27.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge28.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian25.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge27.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian27.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge28.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -22958,7 +22997,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     return getHookBridgePath(this.app, this.manifest);
   }
   getPluginDir() {
-    return (0, import_terminus_node_bridge27.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return (0, import_terminus_node_bridge28.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
   /**
    * Every leaf of a view type, including ones Obsidian hasn't loaded yet
@@ -23065,14 +23104,14 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
       return;
     const base = this.getVaultBasePath();
     const prompt = composeFeedbackPrompt(items, (absolute) => {
-      const relative = (0, import_terminus_node_bridge27.pathRelative)(base, absolute);
+      const relative = (0, import_terminus_node_bridge28.pathRelative)(base, absolute);
       return relative.startsWith("..") ? absolute : relative;
     });
     if (!terminal.typeIntoInput(prompt))
       return;
     this.feedbackStore.clear(token);
     await this.focusTerminal(token);
-    new import_obsidian25.Notice(`Terminus: feedback added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
+    new import_obsidian27.Notice(`Terminus: feedback added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
   }
   /** Re-renders open Agent inboxes and Terminus sidebars for changes the
    *  stores don't see, such as a terminal being renamed or recoloured. */
@@ -23085,19 +23124,6 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
       if (leaf.view instanceof TerminusSidebarView)
         leaf.view.render();
     }
-  }
-  /** The command's version of a group's ×: asks first only when a session
-   *  in it is mid-turn or waiting on an answer. */
-  async closeGroupAsking(groupId) {
-    const group = this.groupStore.get(groupId);
-    if (!group)
-      return;
-    if (this.groups.busy(this.groups.terminalsIn(groupId)).length > 0) {
-      const ok = await ConfirmModal.confirm(this.app, `Close ${group.name}?`, "Claude is mid-turn here. Close anyway?", "Close");
-      if (!ok)
-        return;
-    }
-    this.groups.closeGroup(groupId);
   }
   findTerminalView(token) {
     for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
@@ -23121,7 +23147,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     var _a8;
     const waiting = this.agentSessionStore.list().filter((s15) => s15.running && s15.status === "needs-attention" && this.findTerminalView(s15.token));
     if (waiting.length === 0) {
-      new import_obsidian25.Notice("Terminus: no session needs attention");
+      new import_obsidian27.Notice("Terminus: no session needs attention");
       return;
     }
     const active = (_a8 = this.app.workspace.getActiveViewOfType(TerminalView)) == null ? void 0 : _a8.hookToken;
@@ -23143,7 +23169,7 @@ var TerminusPlugin = class extends import_obsidian25.Plugin {
     await this.openTerminalAt(placement === "ask" ? "tab" : placement);
   }
   showTerminalPlacementMenu(evt) {
-    const menu = new import_obsidian25.Menu();
+    const menu = new import_obsidian27.Menu();
     for (const placement of TERMINAL_OPEN_PLACEMENTS) {
       menu.addItem(
         (item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => void this.openTerminalAt(placement))
