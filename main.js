@@ -20993,6 +20993,9 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     }
     const needsAttention = members.some((t) => this.status(t) === "needs-attention");
     section.toggleClass("is-needs-attention", needsAttention && !active);
+    const rolled = rollUpStatus(members.map((t) => this.status(t)));
+    if (rolled)
+      row.createSpan({ cls: `terminus-sidebar-status terminus-sidebar-group-status is-${rolled}`, attr: { "aria-label": STATUS_LABELS[rolled] } });
     this.renderGroupSummary(row, members, active);
     const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
     iconButton(actions, "plus", "New terminal in this group", () => void this.plugin.groups.newTerminal(group.id));
@@ -21394,6 +21397,11 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
   }
 };
 var BRANCH_TTL_MS = 6e4;
+var STATUS_PRIORITY = ["needs-attention", "working", "finished-unread"];
+function rollUpStatus(statuses) {
+  var _a8;
+  return (_a8 = STATUS_PRIORITY.find((status) => statuses.includes(status))) != null ? _a8 : null;
+}
 function hint(el2, tooltip) {
   (0, import_obsidian21.setTooltip)(el2, tooltip);
   return el2;

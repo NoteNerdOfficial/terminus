@@ -250,6 +250,10 @@ export class TerminusSidebarView extends ItemView {
     }
     const needsAttention = members.some((t) => this.status(t) === "needs-attention");
     section.toggleClass("is-needs-attention", needsAttention && !active);
+    // The worst state among its terminals, as a dot, so a folded group still
+    // reads at a glance; the summary after it says it in words.
+    const rolled = rollUpStatus(members.map((t) => this.status(t)));
+    if (rolled) row.createSpan({ cls: `terminus-sidebar-status terminus-sidebar-group-status is-${rolled}`, attr: { "aria-label": STATUS_LABELS[rolled] } });
     this.renderGroupSummary(row, members, active);
 
     const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
@@ -646,6 +650,15 @@ export class TerminusSidebarView extends ItemView {
 type SidebarStatus = "working" | "needs-attention" | "finished-unread" | "idle";
 
 const BRANCH_TTL_MS = 60_000;
+
+/** Most urgent first. Idle says nothing at group level, so it's left out. */
+const STATUS_PRIORITY: SidebarStatus[] = ["needs-attention", "working", "finished-unread"];
+
+/** The one status that stands for several terminals: the most urgent
+ *  among them, or null when none is worth a dot. */
+function rollUpStatus(statuses: Array<SidebarStatus | null>): SidebarStatus | null {
+  return STATUS_PRIORITY.find((status) => statuses.includes(status)) ?? null;
+}
 
 function hint(el: HTMLElement, tooltip: string): HTMLElement {
   setTooltip(el, tooltip);
