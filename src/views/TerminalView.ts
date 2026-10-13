@@ -27,6 +27,7 @@ import { CommandHelpModal } from "../modals/CommandHelpModal";
 import { RenameTerminalModal } from "../modals/RenameTerminalModal";
 import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload, StopHookPayload } from "../hooks/types";
 import { getGitBranch } from "../git/gitBranch";
+import { withoutInheritedClaudeSession } from "../pty/claudeSessionEnv";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
 
@@ -927,7 +928,7 @@ export class TerminalView extends ItemView {
       cols: this.term?.cols ?? 80,
       rows: this.term?.rows ?? 24,
       env: {
-        ...getAllEnvVars(),
+        ...withoutInheritedClaudeSession(getAllEnvVars()),
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,

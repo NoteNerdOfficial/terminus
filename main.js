@@ -1136,6 +1136,32 @@ async function provisionResources(pluginDir) {
 
 // src/pty/shellDetect.ts
 var import_terminus_node_bridge4 = __toESM(require_dist());
+
+// src/pty/claudeSessionEnv.ts
+var SESSION_VARIABLES = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_SESSION_ATTENDED",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_EXECPATH",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_CODE_PLUGIN_DIRS",
+  "CLAUDE_PID",
+  "CLAUDE_EFFORT"
+];
+var SESSION_MARKERS = ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID"];
+function withoutInheritedClaudeSession(env) {
+  if (!SESSION_MARKERS.some((name) => env[name] !== void 0))
+    return env;
+  const cleaned = { ...env };
+  for (const name of SESSION_VARIABLES)
+    delete cleaned[name];
+  return cleaned;
+}
+
+// src/pty/shellDetect.ts
 var PYTHON3_CANDIDATES = [
   "/usr/bin/python3",
   "/opt/homebrew/bin/python3",
@@ -1192,7 +1218,7 @@ async function resolveLoginShellEnv() {
 }
 async function resolveSpawnEnv() {
   const loginShellEnv = await resolveLoginShellEnv();
-  return { ...(0, import_terminus_node_bridge4.getAllEnvVars)(), ...loginShellEnv };
+  return withoutInheritedClaudeSession({ ...(0, import_terminus_node_bridge4.getAllEnvVars)(), ...loginShellEnv });
 }
 
 // src/claude/headlessAssist.ts
@@ -17184,7 +17210,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
       cols: (_b = (_a8 = this.term) == null ? void 0 : _a8.cols) != null ? _b : 80,
       rows: (_d = (_c2 = this.term) == null ? void 0 : _c2.rows) != null ? _d : 24,
       env: {
-        ...(0, import_terminus_node_bridge13.getAllEnvVars)(),
+        ...withoutInheritedClaudeSession((0, import_terminus_node_bridge13.getAllEnvVars)()),
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,

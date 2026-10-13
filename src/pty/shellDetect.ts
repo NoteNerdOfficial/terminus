@@ -1,4 +1,5 @@
 import { fileExistsSync, execFileText, getEnvVar, getAllEnvVars } from "terminus-node-bridge";
+import { withoutInheritedClaudeSession } from "./claudeSessionEnv";
 
 const PYTHON3_CANDIDATES = [
   "/usr/bin/python3",
@@ -79,5 +80,7 @@ export async function resolveLoginShellEnv(): Promise<Record<string, string>> {
 
 export async function resolveSpawnEnv(): Promise<Record<string, string | undefined>> {
   const loginShellEnv = await resolveLoginShellEnv();
-  return { ...getAllEnvVars(), ...loginShellEnv };
+  // The login shell was started from Obsidian's environment, so it echoes
+  // back any inherited Claude session variables too: strip after merging.
+  return withoutInheritedClaudeSession({ ...getAllEnvVars(), ...loginShellEnv });
 }
