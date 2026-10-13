@@ -1493,13 +1493,22 @@
   font-size: var(--font-ui-small);
 }
 
-/* A group's colour, everywhere: a dot. */
-.terminus-group-dot {
+/* A group's colour, everywhere: a folder. Statuses are dots and a terminal's
+   colour is a stroke, so none of the three reads as another. */
+.terminus-group-icon {
+  display: inline-flex;
   flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: var(--terminus-group-color, var(--background-modifier-border-hover));
+  align-items: center;
+  color: var(--terminus-group-color, var(--text-faint));
+}
+
+.terminus-group-icon svg {
+  width: 14px;
+  height: 14px;
+  /* The fill is the group's colour, light, so the folder reads as a swatch
+     and not as one more outline icon. */
+  fill: color-mix(in srgb, currentColor 28%, transparent);
+  stroke-width: 2;
 }
 
 /* Icons inside text: one size, aligned with the text they sit in. */
@@ -2343,9 +2352,11 @@
   display: flex;
   flex-wrap: wrap;
   gap: 2px 0;
-  padding: 0 14px 10px;
+  /* Equal above and below: it sits between two rules. */
+  padding: 8px 14px;
   border-bottom: 1px solid var(--background-modifier-border);
   font-size: var(--font-ui-smaller);
+  line-height: 1.3;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
@@ -2426,16 +2437,18 @@
   background-color: var(--background-modifier-hover);
 }
 
-.terminus-inbox-elsewhere.is-needs-attention {
-  box-shadow: inset 2px 0 0 var(--tm-attention);
-}
-
 .terminus-inbox-elsewhere-name {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.terminus-inbox-elsewhere-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .terminus-inbox-elsewhere-group,
@@ -2632,9 +2645,9 @@
   color: var(--text-muted);
 }
 
-.terminus-inbox-group .terminus-group-dot {
-  width: 7px;
-  height: 7px;
+.terminus-inbox-group .terminus-group-icon svg {
+  width: 13px;
+  height: 13px;
 }
 
 /* The agent a session runs as (`claude --agent`), like the branch. */

@@ -18,6 +18,17 @@ export function iconButton(parent: HTMLElement, icon: string, label: string, onC
   return button;
 }
 
+/** A group's mark: a folder in the group's colour. Statuses are dots and a
+ *  terminal's colour is a stroke, so a folder says "this is a group" without
+ *  being mistaken for either. `color` is set on the span, which the CSS
+ *  reads; a group's rows also set it on the row, so it may be omitted. */
+export function groupIcon(parent: HTMLElement, color?: string | null): HTMLElement {
+  const el = parent.createSpan({ cls: "terminus-group-icon" });
+  if (color) el.style.setProperty("--terminus-group-color", color);
+  setIcon(el, "folder");
+  return el;
+}
+
 /** An icon followed by text, for the meta lines. */
 export function iconLabel(parent: HTMLElement, icon: string, text: string, cls: string): HTMLElement {
   const el = parent.createSpan({ cls });

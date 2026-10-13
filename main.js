@@ -20360,6 +20360,13 @@ function iconButton(parent, icon, label, onClick) {
   });
   return button;
 }
+function groupIcon(parent, color) {
+  const el2 = parent.createSpan({ cls: "terminus-group-icon" });
+  if (color)
+    el2.style.setProperty("--terminus-group-color", color);
+  (0, import_obsidian18.setIcon)(el2, "folder");
+  return el2;
+}
 function iconLabel(parent, icon, text, cls) {
   const el2 = parent.createSpan({ cls });
   (0, import_obsidian18.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), icon);
@@ -20601,7 +20608,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       what.setText("Showing all sessions");
     } else {
       if (scope.color)
-        what.createSpan({ cls: "terminus-group-dot" }).style.setProperty("--terminus-group-color", scope.color);
+        groupIcon(what, scope.color);
       what.createSpan({ text: `Showing ${scope.label}` });
     }
     const waiting = elsewhere.filter((card) => {
@@ -20652,8 +20659,11 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
         swatch.style.setProperty("--terminus-terminal-color", color);
       row.createSpan({ cls: "terminus-inbox-elsewhere-name", text: name, attr: { title: name } });
       const group = this.plugin.groupStore.get(terminal == null ? void 0 : terminal.groupId);
-      if (group && group.name !== name)
-        row.createSpan({ cls: "terminus-inbox-elsewhere-group", text: group.name });
+      if (group && group.name !== name) {
+        const where = row.createSpan({ cls: "terminus-inbox-elsewhere-group" });
+        groupIcon(where, group.color);
+        where.createSpan({ text: group.name });
+      }
       const pill = statusPill(card);
       (0, import_obsidian19.setTooltip)(row.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label }), pill.hint);
       if (card.changes.length > 0)
@@ -20790,7 +20800,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     const group = this.plugin.groupStore.get(terminal == null ? void 0 : terminal.groupId);
     if (group && group.name !== name) {
       const groupLabel = meta.createSpan({ cls: "terminus-inbox-group" });
-      groupLabel.createSpan({ cls: "terminus-group-dot" }).style.setProperty("--terminus-group-color", group.color);
+      groupIcon(groupLabel, group.color);
       groupLabel.createSpan({ text: group.name });
       (0, import_obsidian19.setTooltip)(groupLabel, "This terminal's group");
     }
@@ -21661,7 +21671,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     makeActivatable(row, () => void this.plugin.groups.selectGroup(group.id), (evt) => this.showGroupMenu(evt, group));
     row.setAttr("aria-current", active ? "true" : "false");
     this.renderFoldChevron(row, group.id, group.collapsed);
-    row.createSpan({ cls: "terminus-group-dot" });
+    groupIcon(row);
     if (this.renamingGroupId === group.id) {
       this.renderRenameInput(row, group);
     } else {
@@ -21750,7 +21760,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       const row = section.createDiv({ cls: "terminus-sidebar-done-row" });
       row.toggleClass("is-active", active);
       row.style.setProperty("--terminus-group-color", group.color);
-      row.createSpan({ cls: "terminus-group-dot" });
+      groupIcon(row);
       row.createSpan({ cls: "terminus-sidebar-done-name", text: group.name, attr: { title: group.name } });
       row.createSpan({ cls: "terminus-sidebar-group-state", text: active ? "Showing" : shelf.detail(group, members) });
       const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });

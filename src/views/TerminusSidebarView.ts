@@ -5,7 +5,7 @@ import { plainPreview } from "./AgentInboxView";
 import type { OpenPlacement } from "../util/leafPlacement";
 import { wakeLabel } from "../groups/snoozePresets";
 import { guardRenderDuringPress } from "./renderGuard";
-import { iconButton, iconLabel, makeActivatable } from "./uiHelpers";
+import { groupIcon, iconButton, iconLabel, makeActivatable } from "./uiHelpers";
 import { isOpenGroup, type TerminalGroup } from "../state/GroupStore";
 import type { GroupTarget } from "../groups/GroupController";
 import { refreshTabPendingDot } from "../terminal/tabHeaderColor";
@@ -273,8 +273,8 @@ export class TerminusSidebarView extends ItemView {
     row.setAttr("aria-current", active ? "true" : "false");
     this.renderFoldChevron(row, group.id, group.collapsed);
 
-    // A group's colour is a dot; a terminal's is a stroke, like its tab.
-    row.createSpan({ cls: "terminus-group-dot" });
+    // A group's colour is a folder; a terminal's is a stroke, like its tab.
+    groupIcon(row);
     if (this.renamingGroupId === group.id) {
       this.renderRenameInput(row, group);
     } else {
@@ -382,7 +382,7 @@ export class TerminusSidebarView extends ItemView {
       const row = section.createDiv({ cls: "terminus-sidebar-done-row" });
       row.toggleClass("is-active", active);
       row.style.setProperty("--terminus-group-color", group.color);
-      row.createSpan({ cls: "terminus-group-dot" });
+      groupIcon(row);
       row.createSpan({ cls: "terminus-sidebar-done-name", text: group.name, attr: { title: group.name } });
       row.createSpan({ cls: "terminus-sidebar-group-state", text: active ? "Showing" : shelf.detail(group, members) });
       const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });

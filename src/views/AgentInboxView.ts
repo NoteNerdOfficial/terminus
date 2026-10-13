@@ -10,7 +10,7 @@ import { computeDiffStats } from "../diff/renderDiff";
 import { ActionLogModal } from "../modals/ActionLogModal";
 import { ChangeRowContext, renderChangeRow, renderHistorySection, runBulkAction } from "./changeRows";
 import { guardRenderDuringPress } from "./renderGuard";
-import { iconButton, iconLabel, makeActivatable } from "./uiHelpers";
+import { groupIcon, iconButton, iconLabel, makeActivatable } from "./uiHelpers";
 import type TerminusPlugin from "../main";
 
 export const AGENT_INBOX_VIEW_TYPE = "terminus-agent-inbox";
@@ -261,7 +261,7 @@ export class AgentInboxView extends ItemView {
     if (showAll) {
       what.setText("Showing all sessions");
     } else {
-      if (scope.color) what.createSpan({ cls: "terminus-group-dot" }).style.setProperty("--terminus-group-color", scope.color);
+      if (scope.color) groupIcon(what, scope.color);
       what.createSpan({ text: `Showing ${scope.label}` });
     }
     const waiting = elsewhere.filter((card) => !card.ended && card.session?.status === "needs-attention").length;
@@ -306,7 +306,11 @@ export class AgentInboxView extends ItemView {
       if (color) swatch.style.setProperty("--terminus-terminal-color", color);
       row.createSpan({ cls: "terminus-inbox-elsewhere-name", text: name, attr: { title: name } });
       const group = this.plugin.groupStore.get(terminal?.groupId);
-      if (group && group.name !== name) row.createSpan({ cls: "terminus-inbox-elsewhere-group", text: group.name });
+      if (group && group.name !== name) {
+        const where = row.createSpan({ cls: "terminus-inbox-elsewhere-group" });
+        groupIcon(where, group.color);
+        where.createSpan({ text: group.name });
+      }
       const pill = statusPill(card);
       setTooltip(row.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label }), pill.hint);
       if (card.changes.length > 0) row.createSpan({ cls: "terminus-inbox-elsewhere-review", text: `${card.changes.length} to review` });
@@ -454,7 +458,7 @@ export class AgentInboxView extends ItemView {
     // title); the group's then adds nothing but a repeat.
     if (group && group.name !== name) {
       const groupLabel = meta.createSpan({ cls: "terminus-inbox-group" });
-      groupLabel.createSpan({ cls: "terminus-group-dot" }).style.setProperty("--terminus-group-color", group.color);
+      groupIcon(groupLabel, group.color);
       groupLabel.createSpan({ text: group.name });
       setTooltip(groupLabel, "This terminal's group");
     }
