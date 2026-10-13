@@ -138,7 +138,13 @@ export class AgentInboxView extends ItemView {
     const scope = this.selection();
     const split = this.ui.showAll ? { scoped: full, elsewhere: [] } : scopeInbox(full, scope.inScope);
     const inbox = split.scoped;
-    const elsewhere = split.elsewhere.filter((card) => !(this.ui.dismissed.has(card.token) && this.dismissible(card)));
+    // A snoozed group's sessions stay out of sight until it wakes (Show all
+    // still lists them).
+    const snoozed = (card: InboxCard) => {
+      const group = this.plugin.groupStore.get(this.plugin.findTerminalView(card.token)?.groupId);
+      return group !== undefined && group.snoozedUntil !== null;
+    };
+    const elsewhere = split.elsewhere.filter((card) => !snoozed(card) && !(this.ui.dismissed.has(card.token) && this.dismissible(card)));
     this.renderHeader(container, full.needsAttention.length, allChanges);
     this.renderScope(container, scope, elsewhere);
     this.renderTotals(container, [...inbox.needsAttention, ...inbox.working, ...inbox.finished]);

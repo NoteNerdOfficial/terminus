@@ -16643,6 +16643,285 @@ function finish(title, capitalise = true) {
   return capitalise ? t.charAt(0).toUpperCase() + t.slice(1) : t;
 }
 
+// src/state/GroupStore.ts
+function isOpenGroup(group) {
+  return group.settledAt === null && group.snoozedUntil === null;
+}
+var DEFAULT_GROUPS_DATA = {
+  groups: [],
+  activeGroupId: null,
+  lastLeafByGroup: {},
+  tabGroups: {},
+  nextNumber: 1
+};
+function resolveGroupsData(saved) {
+  const s15 = typeof saved === "object" && saved !== null ? saved : {};
+  const groups = Array.isArray(s15.groups) ? s15.groups.filter((g2) => typeof (g2 == null ? void 0 : g2.id) === "string" && typeof g2.name === "string" && typeof g2.color === "string") : [];
+  const ids = new Set(groups.map((g2) => g2.id));
+  return {
+    groups: groups.map((g2) => ({
+      ...g2,
+      // Groups from before automatic naming: "Group 3" was a placeholder,
+      // anything else was typed.
+      nameSource: isNameSource(g2.nameSource) ? g2.nameSource : /^Group \d+$/.test(g2.name) ? "placeholder" : "user",
+      folder: typeof g2.folder === "string" ? g2.folder : null,
+      note: typeof g2.note === "string" ? g2.note : null,
+      collapsed: g2.collapsed === true,
+      settledAt: typeof g2.settledAt === "number" ? g2.settledAt : null,
+      snoozedUntil: typeof g2.snoozedUntil === "number" ? g2.snoozedUntil : null,
+      snoozedAt: typeof g2.snoozedAt === "number" ? g2.snoozedAt : null,
+      wokeAt: typeof g2.wokeAt === "number" ? g2.wokeAt : null
+    })),
+    activeGroupId: typeof s15.activeGroupId === "string" && ids.has(s15.activeGroupId) ? s15.activeGroupId : null,
+    lastLeafByGroup: isStringRecord(s15.lastLeafByGroup) ? s15.lastLeafByGroup : {},
+    tabGroups: isStringRecord(s15.tabGroups) ? s15.tabGroups : {},
+    nextNumber: typeof s15.nextNumber === "number" && s15.nextNumber >= 1 ? s15.nextNumber : groups.length + 1
+  };
+}
+function isNameSource(value) {
+  return typeof value === "string" && ["placeholder", "folder", "branch", "prompt", "claude", "note", "user"].includes(value);
+}
+function isStringRecord(value) {
+  return typeof value === "object" && value !== null && Object.values(value).every((v3) => typeof v3 === "string");
+}
+var GroupStore = class extends TypedEmitter {
+  constructor(data, save, palette) {
+    super();
+    this.data = data;
+    this.save = save;
+    this.palette = palette;
+  }
+  list() {
+    return [...this.data.groups];
+  }
+  get(id) {
+    return id ? this.data.groups.find((g2) => g2.id === id) : void 0;
+  }
+  get activeGroupId() {
+    return this.data.activeGroupId;
+  }
+  /** A new group named "New group" until a clue names it (see autoName),
+   *  in the next palette colour. */
+  create() {
+    var _a8;
+    const n = this.data.nextNumber;
+    const group = {
+      id: `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      name: PLACEHOLDER_NAME,
+      nameSource: "placeholder",
+      color: (_a8 = this.palette[(n - 1) % this.palette.length]) != null ? _a8 : "",
+      folder: null,
+      note: null,
+      collapsed: false,
+      settledAt: null,
+      snoozedUntil: null,
+      snoozedAt: null,
+      wokeAt: null
+    };
+    this.data.groups.push(group);
+    this.data.nextNumber = n + 1;
+    this.changed();
+    return group;
+  }
+  /** The user's own name: final, never replaced automatically. Leaving the
+   *  rename field unchanged isn't naming it. */
+  rename(id, name) {
+    const group = this.get(id);
+    const trimmed = name.trim();
+    if (!group || !trimmed || trimmed === group.name)
+      return;
+    group.name = trimmed;
+    group.nameSource = "user";
+    this.changed();
+  }
+  /** An automatic name from a clue, applied only when that clue outranks
+   *  the one the current name came from. Returns whether it was applied. */
+  autoName(id, name, source) {
+    const group = this.get(id);
+    if (!group || !name || !outranks(source, group.nameSource))
+      return false;
+    group.name = name;
+    group.nameSource = source;
+    this.changed();
+    return true;
+  }
+  setColor(id, color) {
+    const group = this.get(id);
+    if (!group || group.color === color)
+      return;
+    group.color = color;
+    this.changed();
+  }
+  setFolder(id, folder) {
+    const group = this.get(id);
+    if (!group || group.folder === folder)
+      return;
+    group.folder = folder;
+    this.changed();
+  }
+  /** Folds or unfolds a group in the sidebar. */
+  setCollapsed(id, collapsed) {
+    const group = this.get(id);
+    if (!group || group.collapsed === collapsed)
+      return;
+    group.collapsed = collapsed;
+    this.changed();
+  }
+  /** Moves a group to just before or after another, for the sidebar's
+   *  order. Settled groups keep their places in the list; they show on the
+   *  Done shelf, so only the open ones' relative order is visible. */
+  moveGroup(id, targetId, where) {
+    if (id === targetId)
+      return;
+    const from = this.data.groups.findIndex((g2) => g2.id === id);
+    if (from === -1 || !this.get(targetId))
+      return;
+    const [group] = this.data.groups.splice(from, 1);
+    const to = this.data.groups.findIndex((g2) => g2.id === targetId);
+    this.data.groups.splice(where === "before" ? to : to + 1, 0, group);
+    this.changed();
+  }
+  /** One step up (-1) or down (+1) among the groups the sidebar shows
+   *  (the open ones). False when it's already at that end. */
+  shiftGroup(id, delta) {
+    const open = this.data.groups.filter(isOpenGroup);
+    const index = open.findIndex((g2) => g2.id === id);
+    const neighbour = open[index + delta];
+    if (index === -1 || !neighbour)
+      return false;
+    this.moveGroup(id, neighbour.id, delta < 0 ? "before" : "after");
+    return true;
+  }
+  /** Puts a group away as done, or (false) back among the open ones. */
+  setSettled(id, settled) {
+    const group = this.get(id);
+    if (!group || group.settledAt !== null === settled)
+      return;
+    group.settledAt = settled ? Date.now() : null;
+    if (settled)
+      this.clearSnooze(group);
+    this.changed();
+  }
+  /** Snoozes a group until `until`. */
+  snooze(id, until) {
+    const group = this.get(id);
+    if (!group || group.settledAt !== null)
+      return;
+    group.snoozedUntil = until;
+    group.snoozedAt = Date.now();
+    group.wokeAt = null;
+    this.changed();
+  }
+  /** Brings a snoozed group back. `woke` marks it "Woke" (a timer or a
+   *  session woke it); false is the user bringing it back themselves. */
+  unsnooze(id, woke, at3 = Date.now()) {
+    const group = this.get(id);
+    if (!group || group.snoozedUntil === null)
+      return;
+    this.clearSnooze(group);
+    group.wokeAt = woke && this.data.activeGroupId !== id ? at3 : null;
+    this.changed();
+  }
+  /** The earliest time a snoozed group is due back, or null. */
+  nextWake() {
+    const times = this.data.groups.map((g2) => g2.snoozedUntil).filter((t) => t !== null);
+    return times.length > 0 ? Math.min(...times) : null;
+  }
+  clearSnooze(group) {
+    group.snoozedUntil = null;
+    group.snoozedAt = null;
+  }
+  setNote(id, path) {
+    const group = this.get(id);
+    if (!group || group.note === path)
+      return;
+    group.note = path;
+    this.changed();
+  }
+  /** Follows a linked note's rename (or deletion, with null). */
+  noteMoved(oldPath, newPath) {
+    let changed = false;
+    for (const group of this.data.groups) {
+      if (group.note === oldPath) {
+        group.note = newPath;
+        changed = true;
+      }
+    }
+    if (changed)
+      this.changed();
+  }
+  /** Removes a group. Its tabs become global; its terminals' own `groupId`
+   *  is the caller's to clear or close. */
+  remove(id) {
+    if (!this.get(id))
+      return;
+    this.data.groups = this.data.groups.filter((g2) => g2.id !== id);
+    if (this.data.activeGroupId === id)
+      this.data.activeGroupId = null;
+    delete this.data.lastLeafByGroup[id];
+    for (const [leafId, groupId] of Object.entries(this.data.tabGroups)) {
+      if (groupId === id)
+        delete this.data.tabGroups[leafId];
+    }
+    this.changed();
+  }
+  /** Null selects no group: only ungrouped terminals and global tabs show. */
+  setActive(id) {
+    const next = id && this.get(id) ? id : null;
+    const visited = this.get(next);
+    if (visited && visited.wokeAt !== null) {
+      visited.wokeAt = null;
+      if (next === this.data.activeGroupId)
+        this.changed();
+    }
+    if (next === this.data.activeGroupId)
+      return;
+    this.data.activeGroupId = next;
+    this.changed();
+  }
+  lastLeaf(groupId) {
+    return this.data.lastLeafByGroup[groupId];
+  }
+  /** Remembered quietly: focusing a terminal is too frequent to save and
+   *  re-render for, and losing it only means refocusing the first terminal. */
+  setLastLeaf(groupId, leafId) {
+    this.data.lastLeafByGroup[groupId] = leafId;
+  }
+  tabGroup(leafId) {
+    const groupId = this.data.tabGroups[leafId];
+    return groupId && this.get(groupId) ? groupId : void 0;
+  }
+  /** Puts a non-terminal tab in a group, or (null) back in every group. */
+  setTabGroup(leafId, groupId) {
+    var _a8;
+    const current = (_a8 = this.data.tabGroups[leafId]) != null ? _a8 : null;
+    if (current === groupId)
+      return;
+    if (groupId && this.get(groupId))
+      this.data.tabGroups[leafId] = groupId;
+    else
+      delete this.data.tabGroups[leafId];
+    this.changed();
+  }
+  /** Forgets tabs that no longer exist (closed while Terminus wasn't
+   *  looking, e.g. with Obsidian quit). */
+  pruneTabs(liveLeafIds) {
+    let changed = false;
+    for (const leafId of Object.keys(this.data.tabGroups)) {
+      if (!liveLeafIds.has(leafId)) {
+        delete this.data.tabGroups[leafId];
+        changed = true;
+      }
+    }
+    if (changed)
+      this.changed();
+  }
+  changed() {
+    void this.save();
+    this.emit("change");
+  }
+};
+
 // src/groups/groupNotes.ts
 var import_obsidian7 = require("obsidian");
 var NOTE_STATUSES = ["active", "review", "parked", "done"];
@@ -16744,6 +17023,38 @@ var GroupSuggestModal = class extends import_obsidian8.SuggestModal {
   }
 };
 
+// src/groups/snoozePresets.ts
+var HOUR_MS = 60 * 60 * 1e3;
+var MORNING_HOUR = 9;
+var EVENING_HOUR = 18;
+function atHour(base, daysAhead, hour) {
+  const next = new Date(base);
+  next.setDate(next.getDate() + daysAhead);
+  next.setHours(hour, 0, 0, 0);
+  return next;
+}
+function resolveSnoozePresets(now) {
+  const presets = [
+    { id: "hour", label: "In an hour", until: now.getTime() + HOUR_MS },
+    { id: "three-hours", label: "In three hours", until: now.getTime() + 3 * HOUR_MS }
+  ];
+  const evening = atHour(now, 0, EVENING_HOUR);
+  if (evening.getTime() - now.getTime() >= 3 * HOUR_MS)
+    presets.push({ id: "evening", label: "This evening", until: evening.getTime() });
+  const tomorrow = atHour(now, 1, MORNING_HOUR);
+  presets.push({ id: "tomorrow", label: "Tomorrow morning", until: tomorrow.getTime() });
+  const daysToMonday = (8 - now.getDay()) % 7 || 7;
+  const monday = atHour(now, daysToMonday, MORNING_HOUR);
+  if (monday.getTime() !== tomorrow.getTime())
+    presets.push({ id: "next-week", label: "Next week", until: monday.getTime() });
+  return presets;
+}
+function wakeLabel(until, now = Date.now()) {
+  const date = new Date(until);
+  const time = date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return new Date(now).toDateString() === date.toDateString() ? time : `${date.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
 // src/groups/groupMenus.ts
 function subjectGroup(plugin, subject) {
   var _a8;
@@ -16832,8 +17143,8 @@ function showGroupMenu(evt, plugin, group, actions) {
     );
   }
   menu.addSeparator();
-  if (group.settledAt === null) {
-    const open = plugin.groupStore.list().filter((g2) => g2.settledAt === null);
+  if (isOpenGroup(group)) {
+    const open = plugin.groupStore.list().filter(isOpenGroup);
     const index = open.findIndex((g2) => g2.id === group.id);
     menu.addItem(
       (item) => item.setTitle("Move up").setIcon("arrow-up").setDisabled(index <= 0).onClick(() => plugin.groupStore.shiftGroup(group.id, -1))
@@ -16842,6 +17153,13 @@ function showGroupMenu(evt, plugin, group, actions) {
       (item) => item.setTitle("Move down").setIcon("arrow-down").setDisabled(index === open.length - 1).onClick(() => plugin.groupStore.shiftGroup(group.id, 1))
     );
     menu.addSeparator();
+  }
+  if (group.snoozedUntil !== null) {
+    menu.addItem((item) => item.setTitle("Wake now").setIcon("alarm-clock-off").onClick(() => plugin.groups.unsnoozeGroup(group.id)));
+  } else if (group.settledAt === null) {
+    menu.addItem(
+      (item) => item.setTitle("Snooze\u2026").setIcon("alarm-clock").setDisabled(!plugin.groups.canSnooze(group.id)).onClick(() => new SnoozeModal(plugin, group).open())
+    );
   }
   if (group.settledAt !== null) {
     menu.addItem((item) => item.setTitle("Move out of Done").setIcon("undo-2").onClick(() => plugin.groups.unsettleGroup(group.id)));
@@ -16853,6 +17171,27 @@ function showGroupMenu(evt, plugin, group, actions) {
   menu.addItem((item) => item.setTitle("Close group").setIcon("x").onClick(actions.close));
   menu.showAtMouseEvent(evt);
 }
+var SnoozeModal = class extends import_obsidian9.SuggestModal {
+  constructor(plugin, group) {
+    super(plugin.app);
+    this.plugin = plugin;
+    this.group = group;
+    this.setPlaceholder(`Snooze ${group.name} until`);
+  }
+  getSuggestions(query) {
+    const q2 = query.trim().toLowerCase();
+    return resolveSnoozePresets(/* @__PURE__ */ new Date()).filter((p2) => p2.label.toLowerCase().includes(q2));
+  }
+  renderSuggestion(preset, el2) {
+    el2.addClass("terminus-switcher-item");
+    el2.createSpan({ cls: "terminus-switcher-name", text: preset.label });
+    el2.createSpan({ cls: "terminus-switcher-meta", text: wakeLabel(preset.until) });
+  }
+  onChooseSuggestion(preset) {
+    if (!this.plugin.groups.snoozeGroup(this.group.id, preset.until))
+      new import_obsidian9.Notice("Terminus: a session in this group needs you");
+  }
+};
 function setGroupFolder(plugin, groupId, folder) {
   plugin.groupStore.setFolder(groupId, folder);
   const relative = folder ? (0, import_terminus_node_bridge13.pathRelative)(plugin.getVaultBasePath(), folder) : null;
@@ -20108,7 +20447,12 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     const scope = this.selection();
     const split = this.ui.showAll ? { scoped: full, elsewhere: [] } : scopeInbox(full, scope.inScope);
     const inbox = split.scoped;
-    const elsewhere = split.elsewhere.filter((card) => !(this.ui.dismissed.has(card.token) && this.dismissible(card)));
+    const snoozed = (card) => {
+      var _a8;
+      const group = this.plugin.groupStore.get((_a8 = this.plugin.findTerminalView(card.token)) == null ? void 0 : _a8.groupId);
+      return group !== void 0 && group.snoozedUntil !== null;
+    };
+    const elsewhere = split.elsewhere.filter((card) => !snoozed(card) && !(this.ui.dismissed.has(card.token) && this.dismissible(card)));
     this.renderHeader(container, full.needsAttention.length, allChanges);
     this.renderScope(container, scope, elsewhere);
     this.renderTotals(container, [...inbox.needsAttention, ...inbox.working, ...inbox.finished]);
@@ -20956,8 +21300,9 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     /** The terminal last used, highlighted in its row. Kept while the user
      *  works in the sidebar itself, which makes no terminal active. */
     this.focusedToken = null;
-    /** Whether the Done shelf is unfolded; folded by default. */
+    /** Whether the Snoozed and Done shelves are unfolded; folded by default. */
     this.doneOpen = false;
+    this.snoozedOpen = false;
     /** Every re-render goes through here (see renderGuard.ts). */
     this.render = () => this.guardedRender();
   }
@@ -21050,12 +21395,39 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     if (groups.length === 0 && terminals.length === 0) {
       this.renderEmpty(list);
     } else {
+      const snoozed = groups.filter((group) => group.snoozedUntil !== null);
       const settled = groups.filter((group) => group.settledAt !== null);
-      for (const group of groups.filter((g2) => g2.settledAt === null))
+      for (const group of groups.filter(isOpenGroup))
         this.renderGroup(list, group, terminals.filter((t) => t.groupId === group.id));
       this.renderUngrouped(list, terminals.filter((t) => !t.groupId || !this.plugin.groupStore.get(t.groupId)));
-      if (settled.length > 0)
-        this.renderDone(list, settled, terminals);
+      if (snoozed.length > 0) {
+        this.renderShelf(list, terminals, {
+          label: "Snoozed",
+          groups: snoozed,
+          open: this.snoozedOpen,
+          toggle: () => this.snoozedOpen = !this.snoozedOpen,
+          detail: (group, count) => {
+            var _a8;
+            return `${count} ${count === 1 ? "terminal" : "terminals"} \xB7 back ${wakeLabel((_a8 = group.snoozedUntil) != null ? _a8 : Date.now())}`;
+          },
+          restoreLabel: "Wake now",
+          restore: (group) => this.plugin.groups.unsnoozeGroup(group.id)
+        });
+      }
+      if (settled.length > 0) {
+        this.renderShelf(list, terminals, {
+          label: "Done",
+          groups: settled,
+          open: this.doneOpen,
+          toggle: () => this.doneOpen = !this.doneOpen,
+          detail: (group, count) => {
+            var _a8;
+            return `${count} ${count === 1 ? "terminal" : "terminals"} \xB7 ${timeAgo((_a8 = group.settledAt) != null ? _a8 : Date.now())}`;
+          },
+          restoreLabel: "Move out of Done",
+          restore: (group) => this.plugin.groups.unsettleGroup(group.id)
+        });
+      }
     }
     refreshTabPendingDot(this.leaf, terminals.some((t) => this.status(t) === "needs-attention"));
   }
@@ -21149,6 +21521,9 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     const rolled = rollUpStatus(members.map((t) => this.status(t)));
     if (rolled)
       row.createSpan({ cls: `terminus-sidebar-status terminus-sidebar-group-status is-${rolled}`, attr: { "aria-label": STATUS_LABELS[rolled] } });
+    if (group.wokeAt !== null) {
+      row.createSpan({ cls: "terminus-sidebar-woke", text: "Woke", attr: { title: `Back from a snooze at ${wakeLabel(group.wokeAt)}` } });
+    }
     this.renderGroupSummary(row, group.id, members, active);
     const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
     iconButton(actions, "plus", "New terminal in this group", () => void this.plugin.groups.newTerminal(group.id));
@@ -21195,27 +21570,26 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       this.renderTab(body, leaf, group);
   }
   /**
-   * The Done shelf: groups put away with Settle, one line each, under a
-   * heading that folds. Their terminals keep running; a group comes back
-   * out on its own when a session in it starts work or needs you.
+   * A shelf of groups kept out of the main list, one line each under a
+   * heading that folds: Snoozed (back at a time) and Done (put away with
+   * Settle). Their terminals keep running.
    */
-  renderDone(list, groups, terminals) {
-    var _a8;
+  renderShelf(list, terminals, shelf) {
     const section = list.createDiv({ cls: "terminus-sidebar-done" });
     const heading = section.createDiv({ cls: "terminus-sidebar-done-heading" });
-    (0, import_obsidian21.setIcon)(heading.createSpan({ cls: "terminus-sidebar-chevron" }), this.doneOpen ? "chevron-down" : "chevron-right");
-    heading.createSpan({ text: "Done" });
-    heading.createSpan({ cls: "terminus-sidebar-done-count", text: String(groups.length) });
+    (0, import_obsidian21.setIcon)(heading.createSpan({ cls: "terminus-sidebar-chevron" }), shelf.open ? "chevron-down" : "chevron-right");
+    heading.createSpan({ text: shelf.label });
+    heading.createSpan({ cls: "terminus-sidebar-done-count", text: String(shelf.groups.length) });
     const toggle = () => {
-      this.doneOpen = !this.doneOpen;
+      shelf.toggle();
       this.render();
     };
     heading.addEventListener("click", toggle);
     makeActivatable(heading, toggle, () => void 0);
-    heading.setAttr("aria-expanded", String(this.doneOpen));
-    if (!this.doneOpen)
+    heading.setAttr("aria-expanded", String(shelf.open));
+    if (!shelf.open)
       return;
-    for (const group of groups) {
+    for (const group of shelf.groups) {
       const members = terminals.filter((t) => t.groupId === group.id).length;
       const active = this.plugin.groupStore.activeGroupId === group.id;
       const row = section.createDiv({ cls: "terminus-sidebar-done-row" });
@@ -21223,12 +21597,9 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       row.style.setProperty("--terminus-group-color", group.color);
       row.createSpan({ cls: "terminus-group-dot" });
       row.createSpan({ cls: "terminus-sidebar-done-name", text: group.name, attr: { title: group.name } });
-      row.createSpan({
-        cls: "terminus-sidebar-group-state",
-        text: active ? "Showing" : `${members} ${members === 1 ? "terminal" : "terminals"} \xB7 ${timeAgo((_a8 = group.settledAt) != null ? _a8 : Date.now())}`
-      });
+      row.createSpan({ cls: "terminus-sidebar-group-state", text: active ? "Showing" : shelf.detail(group, members) });
       const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
-      iconButton(actions, "undo-2", "Move out of Done", () => this.plugin.groups.unsettleGroup(group.id));
+      iconButton(actions, "undo-2", shelf.restoreLabel, () => shelf.restore(group));
       const open = () => void this.plugin.groups.selectGroup(group.id);
       makeActivatable(row, open, (evt) => this.showGroupMenu(evt, group));
       row.addEventListener("click", open);
@@ -21712,239 +22083,6 @@ var STATUS_LABELS = {
   idle: "Idle"
 };
 
-// src/state/GroupStore.ts
-var DEFAULT_GROUPS_DATA = {
-  groups: [],
-  activeGroupId: null,
-  lastLeafByGroup: {},
-  tabGroups: {},
-  nextNumber: 1
-};
-function resolveGroupsData(saved) {
-  const s15 = typeof saved === "object" && saved !== null ? saved : {};
-  const groups = Array.isArray(s15.groups) ? s15.groups.filter((g2) => typeof (g2 == null ? void 0 : g2.id) === "string" && typeof g2.name === "string" && typeof g2.color === "string") : [];
-  const ids = new Set(groups.map((g2) => g2.id));
-  return {
-    groups: groups.map((g2) => ({
-      ...g2,
-      // Groups from before automatic naming: "Group 3" was a placeholder,
-      // anything else was typed.
-      nameSource: isNameSource(g2.nameSource) ? g2.nameSource : /^Group \d+$/.test(g2.name) ? "placeholder" : "user",
-      folder: typeof g2.folder === "string" ? g2.folder : null,
-      note: typeof g2.note === "string" ? g2.note : null,
-      collapsed: g2.collapsed === true,
-      settledAt: typeof g2.settledAt === "number" ? g2.settledAt : null
-    })),
-    activeGroupId: typeof s15.activeGroupId === "string" && ids.has(s15.activeGroupId) ? s15.activeGroupId : null,
-    lastLeafByGroup: isStringRecord(s15.lastLeafByGroup) ? s15.lastLeafByGroup : {},
-    tabGroups: isStringRecord(s15.tabGroups) ? s15.tabGroups : {},
-    nextNumber: typeof s15.nextNumber === "number" && s15.nextNumber >= 1 ? s15.nextNumber : groups.length + 1
-  };
-}
-function isNameSource(value) {
-  return typeof value === "string" && ["placeholder", "folder", "branch", "prompt", "claude", "note", "user"].includes(value);
-}
-function isStringRecord(value) {
-  return typeof value === "object" && value !== null && Object.values(value).every((v3) => typeof v3 === "string");
-}
-var GroupStore = class extends TypedEmitter {
-  constructor(data, save, palette) {
-    super();
-    this.data = data;
-    this.save = save;
-    this.palette = palette;
-  }
-  list() {
-    return [...this.data.groups];
-  }
-  get(id) {
-    return id ? this.data.groups.find((g2) => g2.id === id) : void 0;
-  }
-  get activeGroupId() {
-    return this.data.activeGroupId;
-  }
-  /** A new group named "New group" until a clue names it (see autoName),
-   *  in the next palette colour. */
-  create() {
-    var _a8;
-    const n = this.data.nextNumber;
-    const group = {
-      id: `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-      name: PLACEHOLDER_NAME,
-      nameSource: "placeholder",
-      color: (_a8 = this.palette[(n - 1) % this.palette.length]) != null ? _a8 : "",
-      folder: null,
-      note: null,
-      collapsed: false,
-      settledAt: null
-    };
-    this.data.groups.push(group);
-    this.data.nextNumber = n + 1;
-    this.changed();
-    return group;
-  }
-  /** The user's own name: final, never replaced automatically. Leaving the
-   *  rename field unchanged isn't naming it. */
-  rename(id, name) {
-    const group = this.get(id);
-    const trimmed = name.trim();
-    if (!group || !trimmed || trimmed === group.name)
-      return;
-    group.name = trimmed;
-    group.nameSource = "user";
-    this.changed();
-  }
-  /** An automatic name from a clue, applied only when that clue outranks
-   *  the one the current name came from. Returns whether it was applied. */
-  autoName(id, name, source) {
-    const group = this.get(id);
-    if (!group || !name || !outranks(source, group.nameSource))
-      return false;
-    group.name = name;
-    group.nameSource = source;
-    this.changed();
-    return true;
-  }
-  setColor(id, color) {
-    const group = this.get(id);
-    if (!group || group.color === color)
-      return;
-    group.color = color;
-    this.changed();
-  }
-  setFolder(id, folder) {
-    const group = this.get(id);
-    if (!group || group.folder === folder)
-      return;
-    group.folder = folder;
-    this.changed();
-  }
-  /** Folds or unfolds a group in the sidebar. */
-  setCollapsed(id, collapsed) {
-    const group = this.get(id);
-    if (!group || group.collapsed === collapsed)
-      return;
-    group.collapsed = collapsed;
-    this.changed();
-  }
-  /** Moves a group to just before or after another, for the sidebar's
-   *  order. Settled groups keep their places in the list; they show on the
-   *  Done shelf, so only the open ones' relative order is visible. */
-  moveGroup(id, targetId, where) {
-    if (id === targetId)
-      return;
-    const from = this.data.groups.findIndex((g2) => g2.id === id);
-    if (from === -1 || !this.get(targetId))
-      return;
-    const [group] = this.data.groups.splice(from, 1);
-    const to = this.data.groups.findIndex((g2) => g2.id === targetId);
-    this.data.groups.splice(where === "before" ? to : to + 1, 0, group);
-    this.changed();
-  }
-  /** One step up (-1) or down (+1) among the groups the sidebar shows
-   *  (the open ones). False when it's already at that end. */
-  shiftGroup(id, delta) {
-    const open = this.data.groups.filter((g2) => g2.settledAt === null);
-    const index = open.findIndex((g2) => g2.id === id);
-    const neighbour = open[index + delta];
-    if (index === -1 || !neighbour)
-      return false;
-    this.moveGroup(id, neighbour.id, delta < 0 ? "before" : "after");
-    return true;
-  }
-  /** Puts a group away as done, or (false) back among the open ones. */
-  setSettled(id, settled) {
-    const group = this.get(id);
-    if (!group || group.settledAt !== null === settled)
-      return;
-    group.settledAt = settled ? Date.now() : null;
-    this.changed();
-  }
-  setNote(id, path) {
-    const group = this.get(id);
-    if (!group || group.note === path)
-      return;
-    group.note = path;
-    this.changed();
-  }
-  /** Follows a linked note's rename (or deletion, with null). */
-  noteMoved(oldPath, newPath) {
-    let changed = false;
-    for (const group of this.data.groups) {
-      if (group.note === oldPath) {
-        group.note = newPath;
-        changed = true;
-      }
-    }
-    if (changed)
-      this.changed();
-  }
-  /** Removes a group. Its tabs become global; its terminals' own `groupId`
-   *  is the caller's to clear or close. */
-  remove(id) {
-    if (!this.get(id))
-      return;
-    this.data.groups = this.data.groups.filter((g2) => g2.id !== id);
-    if (this.data.activeGroupId === id)
-      this.data.activeGroupId = null;
-    delete this.data.lastLeafByGroup[id];
-    for (const [leafId, groupId] of Object.entries(this.data.tabGroups)) {
-      if (groupId === id)
-        delete this.data.tabGroups[leafId];
-    }
-    this.changed();
-  }
-  /** Null selects no group: only ungrouped terminals and global tabs show. */
-  setActive(id) {
-    const next = id && this.get(id) ? id : null;
-    if (next === this.data.activeGroupId)
-      return;
-    this.data.activeGroupId = next;
-    this.changed();
-  }
-  lastLeaf(groupId) {
-    return this.data.lastLeafByGroup[groupId];
-  }
-  /** Remembered quietly: focusing a terminal is too frequent to save and
-   *  re-render for, and losing it only means refocusing the first terminal. */
-  setLastLeaf(groupId, leafId) {
-    this.data.lastLeafByGroup[groupId] = leafId;
-  }
-  tabGroup(leafId) {
-    const groupId = this.data.tabGroups[leafId];
-    return groupId && this.get(groupId) ? groupId : void 0;
-  }
-  /** Puts a non-terminal tab in a group, or (null) back in every group. */
-  setTabGroup(leafId, groupId) {
-    var _a8;
-    const current = (_a8 = this.data.tabGroups[leafId]) != null ? _a8 : null;
-    if (current === groupId)
-      return;
-    if (groupId && this.get(groupId))
-      this.data.tabGroups[leafId] = groupId;
-    else
-      delete this.data.tabGroups[leafId];
-    this.changed();
-  }
-  /** Forgets tabs that no longer exist (closed while Terminus wasn't
-   *  looking, e.g. with Obsidian quit). */
-  pruneTabs(liveLeafIds) {
-    let changed = false;
-    for (const leafId of Object.keys(this.data.tabGroups)) {
-      if (!liveLeafIds.has(leafId)) {
-        delete this.data.tabGroups[leafId];
-        changed = true;
-      }
-    }
-    if (changed)
-      this.changed();
-  }
-  changed() {
-    void this.save();
-    this.emit("change");
-  }
-};
-
 // src/groups/GroupController.ts
 var import_obsidian23 = require("obsidian");
 
@@ -22084,7 +22222,7 @@ var TerminalSwitcherModal = class extends import_obsidian22.SuggestModal {
       return;
     }
     el2.createSpan({ cls: "terminus-switcher-name", text: item.group.name });
-    const settled = item.group.settledAt !== null ? " \xB7 done" : "";
+    const settled = item.group.settledAt !== null ? " \xB7 done" : item.group.snoozedUntil !== null ? " \xB7 snoozed" : "";
     el2.createSpan({ cls: "terminus-switcher-meta", text: `Group \xB7 ${item.count} ${item.count === 1 ? "terminal" : "terminals"}${settled}` });
   }
   onChooseSuggestion(item) {
@@ -22129,6 +22267,7 @@ var GroupController = class {
     /** Each session's last status, to spot a turn starting or ending. */
     this.lastSessionStatus = /* @__PURE__ */ new Map();
     this.statusEl = null;
+    this.wakeTimer = null;
     this.tabs = new TabVisibility(plugin);
   }
   get multiAgent() {
@@ -22169,6 +22308,9 @@ var GroupController = class {
     );
     plugin.agentSessionStore.on("change", (session) => this.suggestNoteStatus(session.token, session.status));
     plugin.agentSessionStore.on("change", (session) => this.unsettleForSession(session.token));
+    plugin.agentSessionStore.on("change", (session) => this.wakeForSession(session.token));
+    this.store.on("change", () => this.scheduleWake());
+    plugin.register(() => this.clearWakeTimer());
     this.statusEl = plugin.addStatusBarItem();
     this.statusEl.addClass("terminus-group-status", "mod-clickable");
     this.statusEl.addEventListener("click", () => this.switchGroupPicker());
@@ -22253,6 +22395,8 @@ var GroupController = class {
   async start() {
     await this.loadDeferredTerminals();
     this.store.pruneTabs(this.liveLeafIds());
+    this.wakeDue();
+    this.scheduleWake();
     this.applyVisibility();
   }
   /** Shows the selected group's tabs and hides other groups' (outside
@@ -22530,18 +22674,88 @@ var GroupController = class {
    *  keep running. If it was the selected group, the next open one is
    *  selected so the editor isn't left on something put away. */
   settleGroup(groupId) {
-    var _a8, _b;
     if (!this.canSettle(groupId))
       return false;
     this.store.setSettled(groupId, true);
-    if (this.store.activeGroupId === groupId) {
-      const open = this.store.list().filter((g2) => g2.settledAt === null);
-      const index = this.store.list().findIndex((g2) => g2.id === groupId);
-      const after = this.store.list().slice(index + 1).find((g2) => g2.settledAt === null);
-      const next = (_a8 = after != null ? after : [...this.store.list().slice(0, index)].reverse().find((g2) => g2.settledAt === null)) != null ? _a8 : open[0];
-      void this.selectGroup((_b = next == null ? void 0 : next.id) != null ? _b : null, false);
-    }
+    this.leaveIfSelected(groupId);
     return true;
+  }
+  /** The selected group has just left the main list (settled or
+   *  snoozed): selects the nearest open group after it, else before it,
+   *  without taking the keyboard, so the editor isn't left on it. */
+  leaveIfSelected(groupId) {
+    var _a8, _b;
+    if (this.store.activeGroupId !== groupId)
+      return;
+    const all = this.store.list();
+    const index = all.findIndex((g2) => g2.id === groupId);
+    const after = all.slice(index + 1).find(isOpenGroup);
+    const before = [...all.slice(0, index)].reverse().find(isOpenGroup);
+    void this.selectGroup((_b = (_a8 = after != null ? after : before) == null ? void 0 : _a8.id) != null ? _b : null, false);
+  }
+  /** A snooze is refused only while a session in the group needs you:
+   *  hiding that defeats the request. A working session may be snoozed,
+   *  since snoozing only changes what the sidebar shows, never the agent. */
+  canSnooze(groupId) {
+    return !this.terminalsIn(groupId).some((view) => {
+      var _a8;
+      return ((_a8 = this.plugin.agentSessionStore.get(view.hookToken)) == null ? void 0 : _a8.status) === "needs-attention";
+    });
+  }
+  snoozeGroup(groupId, until) {
+    if (!this.canSnooze(groupId))
+      return false;
+    this.store.snooze(groupId, until);
+    this.leaveIfSelected(groupId);
+    return true;
+  }
+  /** Brings a snoozed group back at the user's request. */
+  unsnoozeGroup(groupId) {
+    this.store.unsnooze(groupId, false);
+  }
+  clearWakeTimer() {
+    if (this.wakeTimer !== null)
+      window.clearTimeout(this.wakeTimer);
+    this.wakeTimer = null;
+  }
+  /** One timer, for the earliest wake; set again after it fires or the
+   *  groups change. */
+  scheduleWake() {
+    this.clearWakeTimer();
+    const next = this.store.nextWake();
+    if (next === null)
+      return;
+    const delay = Math.min(Math.max(1e3, next - Date.now()), 2e9);
+    this.wakeTimer = window.setTimeout(() => {
+      this.wakeTimer = null;
+      this.wakeDue();
+      this.scheduleWake();
+    }, delay);
+  }
+  /** Groups whose snooze has run out come back, marked "Woke". */
+  wakeDue() {
+    const now = Date.now();
+    for (const group of this.store.list()) {
+      if (group.snoozedUntil !== null && group.snoozedUntil <= now)
+        this.store.unsnooze(group.id, true, group.snoozedUntil);
+    }
+  }
+  /** A snoozed group wakes early when a session in it needs you, or when
+   *  a turn has ended since it was snoozed (finished, or failed). */
+  wakeForSession(token) {
+    var _a8, _b;
+    if (!this.multiAgent)
+      return;
+    const session = this.plugin.agentSessionStore.get(token);
+    if (!session)
+      return;
+    const groupId = (_a8 = this.terminals().find((view) => view.hookToken === token)) == null ? void 0 : _a8.groupId;
+    const group = this.store.get(groupId);
+    if (!group || group.snoozedUntil === null)
+      return;
+    const turnEnded = session.lastTurnEndedAt !== null && session.lastTurnEndedAt > ((_b = group.snoozedAt) != null ? _b : 0);
+    if (session.status === "needs-attention" || turnEnded)
+      this.store.unsnooze(group.id, true);
   }
   unsettleGroup(groupId) {
     this.store.setSettled(groupId, false);

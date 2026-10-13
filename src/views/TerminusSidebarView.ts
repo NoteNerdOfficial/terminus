@@ -3,9 +3,10 @@ import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { TerminalView } from "./TerminalView";
 import { plainPreview } from "./AgentInboxView";
 import type { OpenPlacement } from "../util/leafPlacement";
+import { wakeLabel } from "../groups/snoozePresets";
 import { guardRenderDuringPress } from "./renderGuard";
 import { iconButton, iconLabel, makeActivatable } from "./uiHelpers";
-import type { TerminalGroup } from "../state/GroupStore";
+import { isOpenGroup, type TerminalGroup } from "../state/GroupStore";
 import type { GroupTarget } from "../groups/GroupController";
 import { refreshTabPendingDot } from "../terminal/tabHeaderColor";
 import { getGitBranch } from "../git/gitBranch";
@@ -44,8 +45,9 @@ export class TerminusSidebarView extends ItemView {
   /** The terminal last used, highlighted in its row. Kept while the user
    *  works in the sidebar itself, which makes no terminal active. */
   private focusedToken: string | null = null;
-  /** Whether the Done shelf is unfolded; folded by default. */
+  /** Whether the Snoozed and Done shelves are unfolded; folded by default. */
   private doneOpen = false;
+  private snoozedOpen = false;
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -153,10 +155,32 @@ export class TerminusSidebarView extends ItemView {
     if (groups.length === 0 && terminals.length === 0) {
       this.renderEmpty(list);
     } else {
+      const snoozed = groups.filter((group) => group.snoozedUntil !== null);
       const settled = groups.filter((group) => group.settledAt !== null);
-      for (const group of groups.filter((g) => g.settledAt === null)) this.renderGroup(list, group, terminals.filter((t) => t.groupId === group.id));
+      for (const group of groups.filter(isOpenGroup)) this.renderGroup(list, group, terminals.filter((t) => t.groupId === group.id));
       this.renderUngrouped(list, terminals.filter((t) => !t.groupId || !this.plugin.groupStore.get(t.groupId)));
-      if (settled.length > 0) this.renderDone(list, settled, terminals);
+      if (snoozed.length > 0) {
+        this.renderShelf(list, terminals, {
+          label: "Snoozed",
+          groups: snoozed,
+          open: this.snoozedOpen,
+          toggle: () => (this.snoozedOpen = !this.snoozedOpen),
+          detail: (group, count) => `${count} ${count === 1 ? "terminal" : "terminals"} · back ${wakeLabel(group.snoozedUntil ?? Date.now())}`,
+          restoreLabel: "Wake now",
+          restore: (group) => this.plugin.groups.unsnoozeGroup(group.id),
+        });
+      }
+      if (settled.length > 0) {
+        this.renderShelf(list, terminals, {
+          label: "Done",
+          groups: settled,
+          open: this.doneOpen,
+          toggle: () => (this.doneOpen = !this.doneOpen),
+          detail: (group, count) => `${count} ${count === 1 ? "terminal" : "terminals"} · ${timeAgo(group.settledAt ?? Date.now())}`,
+          restoreLabel: "Move out of Done",
+          restore: (group) => this.plugin.groups.unsettleGroup(group.id),
+        });
+      }
     }
 
     refreshTabPendingDot(this.leaf, terminals.some((t) => this.status(t) === "needs-attention"));
@@ -266,6 +290,10 @@ export class TerminusSidebarView extends ItemView {
     // reads at a glance; the summary after it says it in words.
     const rolled = rollUpStatus(members.map((t) => this.status(t)));
     if (rolled) row.createSpan({ cls: `terminus-sidebar-status terminus-sidebar-group-status is-${rolled}`, attr: { "aria-label": STATUS_LABELS[rolled] } });
+    // Back from a snooze and not yet visited.
+    if (group.wokeAt !== null) {
+      row.createSpan({ cls: "terminus-sidebar-woke", text: "Woke", attr: { title: `Back from a snooze at ${wakeLabel(group.wokeAt)}` } });
+    }
     this.renderGroupSummary(row, group.id, members, active);
 
     const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
@@ -318,25 +346,37 @@ export class TerminusSidebarView extends ItemView {
   }
 
   /**
-   * The Done shelf: groups put away with Settle, one line each, under a
-   * heading that folds. Their terminals keep running; a group comes back
-   * out on its own when a session in it starts work or needs you.
+   * A shelf of groups kept out of the main list, one line each under a
+   * heading that folds: Snoozed (back at a time) and Done (put away with
+   * Settle). Their terminals keep running.
    */
-  private renderDone(list: HTMLElement, groups: TerminalGroup[], terminals: TerminalView[]): void {
+  private renderShelf(
+    list: HTMLElement,
+    terminals: TerminalView[],
+    shelf: {
+      label: string;
+      groups: TerminalGroup[];
+      open: boolean;
+      toggle: () => void;
+      detail: (group: TerminalGroup, terminals: number) => string;
+      restoreLabel: string;
+      restore: (group: TerminalGroup) => void;
+    }
+  ): void {
     const section = list.createDiv({ cls: "terminus-sidebar-done" });
     const heading = section.createDiv({ cls: "terminus-sidebar-done-heading" });
-    setIcon(heading.createSpan({ cls: "terminus-sidebar-chevron" }), this.doneOpen ? "chevron-down" : "chevron-right");
-    heading.createSpan({ text: "Done" });
-    heading.createSpan({ cls: "terminus-sidebar-done-count", text: String(groups.length) });
+    setIcon(heading.createSpan({ cls: "terminus-sidebar-chevron" }), shelf.open ? "chevron-down" : "chevron-right");
+    heading.createSpan({ text: shelf.label });
+    heading.createSpan({ cls: "terminus-sidebar-done-count", text: String(shelf.groups.length) });
     const toggle = () => {
-      this.doneOpen = !this.doneOpen;
+      shelf.toggle();
       this.render();
     };
     heading.addEventListener("click", toggle);
     makeActivatable(heading, toggle, () => undefined);
-    heading.setAttr("aria-expanded", String(this.doneOpen));
-    if (!this.doneOpen) return;
-    for (const group of groups) {
+    heading.setAttr("aria-expanded", String(shelf.open));
+    if (!shelf.open) return;
+    for (const group of shelf.groups) {
       const members = terminals.filter((t) => t.groupId === group.id).length;
       const active = this.plugin.groupStore.activeGroupId === group.id;
       const row = section.createDiv({ cls: "terminus-sidebar-done-row" });
@@ -344,12 +384,9 @@ export class TerminusSidebarView extends ItemView {
       row.style.setProperty("--terminus-group-color", group.color);
       row.createSpan({ cls: "terminus-group-dot" });
       row.createSpan({ cls: "terminus-sidebar-done-name", text: group.name, attr: { title: group.name } });
-      row.createSpan({
-        cls: "terminus-sidebar-group-state",
-        text: active ? "Showing" : `${members} ${members === 1 ? "terminal" : "terminals"} · ${timeAgo(group.settledAt ?? Date.now())}`,
-      });
+      row.createSpan({ cls: "terminus-sidebar-group-state", text: active ? "Showing" : shelf.detail(group, members) });
       const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
-      iconButton(actions, "undo-2", "Move out of Done", () => this.plugin.groups.unsettleGroup(group.id));
+      iconButton(actions, "undo-2", shelf.restoreLabel, () => shelf.restore(group));
       const open = () => void this.plugin.groups.selectGroup(group.id);
       makeActivatable(row, open, (evt) => this.showGroupMenu(evt, group));
       row.addEventListener("click", open);

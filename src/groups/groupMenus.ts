@@ -1,11 +1,12 @@
-import { FuzzySuggestModal, Menu, SuggestModal, TFolder, WorkspaceLeaf } from "obsidian";
+import { FuzzySuggestModal, Menu, Notice, SuggestModal, TFolder, WorkspaceLeaf } from "obsidian";
 import { pathJoin, pathRelative } from "terminus-node-bridge";
 import { titleFromFolder } from "./groupNaming";
 import { TerminalView } from "../views/TerminalView";
-import type { TerminalGroup } from "../state/GroupStore";
+import { isOpenGroup, type TerminalGroup } from "../state/GroupStore";
 import { openTerminalColorPicker } from "../terminal/TerminalColorPicker";
 import { linkNote, NOTE_STATUSES, NoteStatus, noteFile, noteStatus, NoteSuggestModal, openGroupNote, setNoteStatus, startClaudeOnNote } from "./groupNotes";
 import { GroupSuggestModal } from "./GroupSuggestModal";
+import { resolveSnoozePresets, wakeLabel, type SnoozePreset } from "./snoozePresets";
 import type TerminusPlugin from "../main";
 
 /**
@@ -137,8 +138,8 @@ export function showGroupMenu(evt: MouseEvent, plugin: TerminusPlugin, group: Te
     );
   }
   menu.addSeparator();
-  if (group.settledAt === null) {
-    const open = plugin.groupStore.list().filter((g) => g.settledAt === null);
+  if (isOpenGroup(group)) {
+    const open = plugin.groupStore.list().filter(isOpenGroup);
     const index = open.findIndex((g) => g.id === group.id);
     menu.addItem((item) =>
       item.setTitle("Move up").setIcon("arrow-up").setDisabled(index <= 0).onClick(() => plugin.groupStore.shiftGroup(group.id, -1))
@@ -147,6 +148,17 @@ export function showGroupMenu(evt: MouseEvent, plugin: TerminusPlugin, group: Te
       item.setTitle("Move down").setIcon("arrow-down").setDisabled(index === open.length - 1).onClick(() => plugin.groupStore.shiftGroup(group.id, 1))
     );
     menu.addSeparator();
+  }
+  if (group.snoozedUntil !== null) {
+    menu.addItem((item) => item.setTitle("Wake now").setIcon("alarm-clock-off").onClick(() => plugin.groups.unsnoozeGroup(group.id)));
+  } else if (group.settledAt === null) {
+    menu.addItem((item) =>
+      item
+        .setTitle("Snooze…")
+        .setIcon("alarm-clock")
+        .setDisabled(!plugin.groups.canSnooze(group.id))
+        .onClick(() => new SnoozeModal(plugin, group).open())
+    );
   }
   if (group.settledAt !== null) {
     menu.addItem((item) => item.setTitle("Move out of Done").setIcon("undo-2").onClick(() => plugin.groups.unsettleGroup(group.id)));
@@ -161,6 +173,32 @@ export function showGroupMenu(evt: MouseEvent, plugin: TerminusPlugin, group: Te
   }
   menu.addItem((item) => item.setTitle("Close group").setIcon("x").onClick(actions.close));
   menu.showAtMouseEvent(evt);
+}
+
+/** "Snooze until…": the presets, each with when it would wake. */
+class SnoozeModal extends SuggestModal<SnoozePreset> {
+  constructor(
+    private plugin: TerminusPlugin,
+    private group: TerminalGroup
+  ) {
+    super(plugin.app);
+    this.setPlaceholder(`Snooze ${group.name} until`);
+  }
+
+  getSuggestions(query: string): SnoozePreset[] {
+    const q = query.trim().toLowerCase();
+    return resolveSnoozePresets(new Date()).filter((p) => p.label.toLowerCase().includes(q));
+  }
+
+  renderSuggestion(preset: SnoozePreset, el: HTMLElement): void {
+    el.addClass("terminus-switcher-item");
+    el.createSpan({ cls: "terminus-switcher-name", text: preset.label });
+    el.createSpan({ cls: "terminus-switcher-meta", text: wakeLabel(preset.until) });
+  }
+
+  onChooseSuggestion(preset: SnoozePreset): void {
+    if (!this.plugin.groups.snoozeGroup(this.group.id, preset.until)) new Notice("Terminus: a session in this group needs you");
+  }
 }
 
 /** Sets where a group's new terminals start; a folder other than the vault

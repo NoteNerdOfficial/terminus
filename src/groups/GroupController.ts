@@ -1,7 +1,7 @@
 import { setIcon, TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
 import { TERMINUS_VIEW_TYPE, TerminalView } from "../views/TerminalView";
 import { DIFF_SPLIT_VIEW_TYPE } from "../views/DiffSplitView";
-import type { TerminalGroup } from "../state/GroupStore";
+import { isOpenGroup, type TerminalGroup } from "../state/GroupStore";
 import { ConfirmModal } from "../modals/ConfirmModal";
 import { TabVisibility } from "./TabVisibility";
 import { GroupSuggestModal } from "./GroupSuggestModal";
@@ -79,6 +79,10 @@ export class GroupController {
     );
     plugin.agentSessionStore.on("change", (session) => this.suggestNoteStatus(session.token, session.status));
     plugin.agentSessionStore.on("change", (session) => this.unsettleForSession(session.token));
+    plugin.agentSessionStore.on("change", (session) => this.wakeForSession(session.token));
+    // A snooze's wake time is a timer, set again whenever the groups change.
+    this.store.on("change", () => this.scheduleWake());
+    plugin.register(() => this.clearWakeTimer());
 
     this.statusEl = plugin.addStatusBarItem();
     this.statusEl.addClass("terminus-group-status", "mod-clickable");
@@ -156,6 +160,9 @@ export class GroupController {
   async start(): Promise<void> {
     await this.loadDeferredTerminals();
     this.store.pruneTabs(this.liveLeafIds());
+    // Snoozes that ran out while Obsidian was closed wake now.
+    this.wakeDue();
+    this.scheduleWake();
     this.applyVisibility();
   }
 
@@ -432,15 +439,82 @@ export class GroupController {
   settleGroup(groupId: string): boolean {
     if (!this.canSettle(groupId)) return false;
     this.store.setSettled(groupId, true);
-    if (this.store.activeGroupId === groupId) {
-      const open = this.store.list().filter((g) => g.settledAt === null);
-      const index = this.store.list().findIndex((g) => g.id === groupId);
-      // The nearest open group after it, else the nearest before, else none.
-      const after = this.store.list().slice(index + 1).find((g) => g.settledAt === null);
-      const next = after ?? [...this.store.list().slice(0, index)].reverse().find((g) => g.settledAt === null) ?? open[0];
-      void this.selectGroup(next?.id ?? null, false);
-    }
+    this.leaveIfSelected(groupId);
     return true;
+  }
+
+  /** The selected group has just left the main list (settled or
+   *  snoozed): selects the nearest open group after it, else before it,
+   *  without taking the keyboard, so the editor isn't left on it. */
+  private leaveIfSelected(groupId: string): void {
+    if (this.store.activeGroupId !== groupId) return;
+    const all = this.store.list();
+    const index = all.findIndex((g) => g.id === groupId);
+    const after = all.slice(index + 1).find(isOpenGroup);
+    const before = [...all.slice(0, index)].reverse().find(isOpenGroup);
+    void this.selectGroup((after ?? before)?.id ?? null, false);
+  }
+
+  /** A snooze is refused only while a session in the group needs you:
+   *  hiding that defeats the request. A working session may be snoozed,
+   *  since snoozing only changes what the sidebar shows, never the agent. */
+  canSnooze(groupId: string): boolean {
+    return !this.terminalsIn(groupId).some((view) => this.plugin.agentSessionStore.get(view.hookToken)?.status === "needs-attention");
+  }
+
+  snoozeGroup(groupId: string, until: number): boolean {
+    if (!this.canSnooze(groupId)) return false;
+    this.store.snooze(groupId, until);
+    this.leaveIfSelected(groupId);
+    return true;
+  }
+
+  /** Brings a snoozed group back at the user's request. */
+  unsnoozeGroup(groupId: string): void {
+    this.store.unsnooze(groupId, false);
+  }
+
+  private wakeTimer: number | null = null;
+
+  private clearWakeTimer(): void {
+    if (this.wakeTimer !== null) window.clearTimeout(this.wakeTimer);
+    this.wakeTimer = null;
+  }
+
+  /** One timer, for the earliest wake; set again after it fires or the
+   *  groups change. */
+  private scheduleWake(): void {
+    this.clearWakeTimer();
+    const next = this.store.nextWake();
+    if (next === null) return;
+    // setTimeout takes at most about 24 days; a longer snooze re-checks then.
+    const delay = Math.min(Math.max(1000, next - Date.now()), 2_000_000_000);
+    this.wakeTimer = window.setTimeout(() => {
+      this.wakeTimer = null;
+      this.wakeDue();
+      this.scheduleWake();
+    }, delay);
+  }
+
+  /** Groups whose snooze has run out come back, marked "Woke". */
+  private wakeDue(): void {
+    const now = Date.now();
+    for (const group of this.store.list()) {
+      if (group.snoozedUntil !== null && group.snoozedUntil <= now) this.store.unsnooze(group.id, true, group.snoozedUntil);
+    }
+  }
+
+  /** A snoozed group wakes early when a session in it needs you, or when
+   *  a turn has ended since it was snoozed (finished, or failed). */
+  private wakeForSession(token: string): void {
+    if (!this.multiAgent) return;
+    const session = this.plugin.agentSessionStore.get(token);
+    if (!session) return;
+    const groupId = this.terminals().find((view) => view.hookToken === token)?.groupId;
+    const group = this.store.get(groupId);
+    if (!group || group.snoozedUntil === null) return;
+    const turnEnded = session.lastTurnEndedAt !== null && session.lastTurnEndedAt > (group.snoozedAt ?? 0);
+    if (session.status === "needs-attention" || turnEnded) this.store.unsnooze(group.id, true);
   }
 
   unsettleGroup(groupId: string): void {

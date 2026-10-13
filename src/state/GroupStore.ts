@@ -24,6 +24,20 @@ export interface TerminalGroup {
    *  waits on the sidebar's Done shelf, its terminals still running, and
    *  comes back on its own when a session in it starts work or needs you. */
   settledAt: number | null;
+  /** Snoozed until this time (ms), or null. A snoozed group waits on the
+   *  sidebar's Snoozed shelf and comes back at that time, or sooner when a
+   *  session in it needs you or finishes a turn. */
+  snoozedUntil: number | null;
+  /** When it was snoozed: a turn that ended after this wakes it early. */
+  snoozedAt: number | null;
+  /** When it last woke from a snooze, until it's next selected: the
+   *  sidebar marks it "Woke" so it isn't mistaken for one that never left. */
+  wokeAt: number | null;
+}
+
+/** In the sidebar's main list: neither settled nor snoozed. */
+export function isOpenGroup(group: TerminalGroup): boolean {
+  return group.settledAt === null && group.snoozedUntil === null;
 }
 
 /** What's saved in the plugin's data. */
@@ -65,6 +79,9 @@ export function resolveGroupsData(saved: unknown): GroupsData {
       note: typeof g.note === "string" ? g.note : null,
       collapsed: g.collapsed === true,
       settledAt: typeof g.settledAt === "number" ? g.settledAt : null,
+      snoozedUntil: typeof g.snoozedUntil === "number" ? g.snoozedUntil : null,
+      snoozedAt: typeof g.snoozedAt === "number" ? g.snoozedAt : null,
+      wokeAt: typeof g.wokeAt === "number" ? g.wokeAt : null,
     })),
     activeGroupId: typeof s.activeGroupId === "string" && ids.has(s.activeGroupId) ? s.activeGroupId : null,
     lastLeafByGroup: isStringRecord(s.lastLeafByGroup) ? s.lastLeafByGroup : {},
@@ -124,6 +141,9 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
       note: null,
       collapsed: false,
       settledAt: null,
+      snoozedUntil: null,
+      snoozedAt: null,
+      wokeAt: null,
     };
     this.data.groups.push(group);
     this.data.nextNumber = n + 1;
@@ -191,7 +211,7 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
   /** One step up (-1) or down (+1) among the groups the sidebar shows
    *  (the open ones). False when it's already at that end. */
   shiftGroup(id: string, delta: -1 | 1): boolean {
-    const open = this.data.groups.filter((g) => g.settledAt === null);
+    const open = this.data.groups.filter(isOpenGroup);
     const index = open.findIndex((g) => g.id === id);
     const neighbour = open[index + delta];
     if (index === -1 || !neighbour) return false;
@@ -204,7 +224,41 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
     const group = this.get(id);
     if (!group || (group.settledAt !== null) === settled) return;
     group.settledAt = settled ? Date.now() : null;
+    // Done is stronger than a snooze: nothing is left to wake.
+    if (settled) this.clearSnooze(group);
     this.changed();
+  }
+
+  /** Snoozes a group until `until`. */
+  snooze(id: string, until: number): void {
+    const group = this.get(id);
+    if (!group || group.settledAt !== null) return;
+    group.snoozedUntil = until;
+    group.snoozedAt = Date.now();
+    group.wokeAt = null;
+    this.changed();
+  }
+
+  /** Brings a snoozed group back. `woke` marks it "Woke" (a timer or a
+   *  session woke it); false is the user bringing it back themselves. */
+  unsnooze(id: string, woke: boolean, at = Date.now()): void {
+    const group = this.get(id);
+    if (!group || group.snoozedUntil === null) return;
+    this.clearSnooze(group);
+    // A group you're already looking at has nothing to be marked for.
+    group.wokeAt = woke && this.data.activeGroupId !== id ? at : null;
+    this.changed();
+  }
+
+  /** The earliest time a snoozed group is due back, or null. */
+  nextWake(): number | null {
+    const times = this.data.groups.map((g) => g.snoozedUntil).filter((t): t is number => t !== null);
+    return times.length > 0 ? Math.min(...times) : null;
+  }
+
+  private clearSnooze(group: TerminalGroup): void {
+    group.snoozedUntil = null;
+    group.snoozedAt = null;
   }
 
   setNote(id: string, path: string | null): void {
@@ -242,6 +296,12 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
   /** Null selects no group: only ungrouped terminals and global tabs show. */
   setActive(id: string | null): void {
     const next = id && this.get(id) ? id : null;
+    // Visiting a group that woke is what clears its "Woke" mark.
+    const visited = this.get(next);
+    if (visited && visited.wokeAt !== null) {
+      visited.wokeAt = null;
+      if (next === this.data.activeGroupId) this.changed();
+    }
     if (next === this.data.activeGroupId) return;
     this.data.activeGroupId = next;
     this.changed();

@@ -75,7 +75,7 @@ export class TerminalSwitcherModal extends SuggestModal<Item> {
       return;
     }
     el.createSpan({ cls: "terminus-switcher-name", text: item.group.name });
-    const settled = item.group.settledAt !== null ? " · done" : "";
+    const settled = item.group.settledAt !== null ? " · done" : item.group.snoozedUntil !== null ? " · snoozed" : "";
     el.createSpan({ cls: "terminus-switcher-meta", text: `Group · ${item.count} ${item.count === 1 ? "terminal" : "terminals"}${settled}` });
   }
 
