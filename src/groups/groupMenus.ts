@@ -137,6 +137,17 @@ export function showGroupMenu(evt: MouseEvent, plugin: TerminusPlugin, group: Te
     );
   }
   menu.addSeparator();
+  if (group.settledAt !== null) {
+    menu.addItem((item) => item.setTitle("Move out of Done").setIcon("undo-2").onClick(() => plugin.groups.unsettleGroup(group.id)));
+  } else {
+    menu.addItem((item) =>
+      item
+        .setTitle("Settle")
+        .setIcon("check-circle-2")
+        .setDisabled(!plugin.groups.canSettle(group.id))
+        .onClick(() => plugin.groups.settleGroup(group.id))
+    );
+  }
   menu.addItem((item) => item.setTitle("Close group").setIcon("x").onClick(actions.close));
   menu.showAtMouseEvent(evt);
 }

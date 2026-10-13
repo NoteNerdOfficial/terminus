@@ -77,6 +77,7 @@ export class GroupController {
       })
     );
     plugin.agentSessionStore.on("change", (session) => this.suggestNoteStatus(session.token, session.status));
+    plugin.agentSessionStore.on("change", (session) => this.unsettleForSession(session.token));
 
     this.statusEl = plugin.addStatusBarItem();
     this.statusEl.addClass("terminus-group-status", "mod-clickable");
@@ -407,6 +408,45 @@ export class GroupController {
   closeTerminals(terminals: TerminalView[]): void {
     for (const view of terminals) view.leaf.detach();
     this.removeEmptyGroups();
+  }
+
+  /** Settling is refused while a session in the group is mid-turn or
+   *  waiting on you: putting that away would hide the very thing that
+   *  needs you. */
+  canSettle(groupId: string): boolean {
+    return this.busy(this.terminalsIn(groupId)).length === 0;
+  }
+
+  /** Puts a group away as done: it moves to the Done shelf, its terminals
+   *  keep running. If it was the selected group, the next open one is
+   *  selected so the editor isn't left on something put away. */
+  settleGroup(groupId: string): boolean {
+    if (!this.canSettle(groupId)) return false;
+    this.store.setSettled(groupId, true);
+    if (this.store.activeGroupId === groupId) {
+      const open = this.store.list().filter((g) => g.settledAt === null);
+      const index = this.store.list().findIndex((g) => g.id === groupId);
+      // The nearest open group after it, else the nearest before, else none.
+      const after = this.store.list().slice(index + 1).find((g) => g.settledAt === null);
+      const next = after ?? [...this.store.list().slice(0, index)].reverse().find((g) => g.settledAt === null) ?? open[0];
+      void this.selectGroup(next?.id ?? null, false);
+    }
+    return true;
+  }
+
+  unsettleGroup(groupId: string): void {
+    this.store.setSettled(groupId, false);
+  }
+
+  /** A settled group whose session starts work or needs you isn't done: it
+   *  comes back out. (t3code's "raise a hand" on a snoozed thread.) */
+  private unsettleForSession(token: string): void {
+    if (!this.multiAgent) return;
+    const status = this.plugin.agentSessionStore.get(token)?.status;
+    if (status !== "working" && status !== "needs-attention") return;
+    const groupId = this.terminals().find((view) => view.hookToken === token)?.groupId;
+    const group = this.store.get(groupId);
+    if (group && group.settledAt !== null) this.store.setSettled(group.id, false);
   }
 
   /** Closes a group's terminals and removes it. Its other tabs stay open

@@ -20,6 +20,10 @@ export interface TerminalGroup {
   note: string | null;
   /** Folded in the sidebar: only its row shows. */
   collapsed: boolean;
+  /** When the user put it away as done (Settle), or null. A settled group
+   *  waits on the sidebar's Done shelf, its terminals still running, and
+   *  comes back on its own when a session in it starts work or needs you. */
+  settledAt: number | null;
 }
 
 /** What's saved in the plugin's data. */
@@ -60,6 +64,7 @@ export function resolveGroupsData(saved: unknown): GroupsData {
       folder: typeof g.folder === "string" ? g.folder : null,
       note: typeof g.note === "string" ? g.note : null,
       collapsed: g.collapsed === true,
+      settledAt: typeof g.settledAt === "number" ? g.settledAt : null,
     })),
     activeGroupId: typeof s.activeGroupId === "string" && ids.has(s.activeGroupId) ? s.activeGroupId : null,
     lastLeafByGroup: isStringRecord(s.lastLeafByGroup) ? s.lastLeafByGroup : {},
@@ -118,6 +123,7 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
       folder: null,
       note: null,
       collapsed: false,
+      settledAt: null,
     };
     this.data.groups.push(group);
     this.data.nextNumber = n + 1;
@@ -166,6 +172,14 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
     const group = this.get(id);
     if (!group || group.collapsed === collapsed) return;
     group.collapsed = collapsed;
+    this.changed();
+  }
+
+  /** Puts a group away as done, or (false) back among the open ones. */
+  setSettled(id: string, settled: boolean): void {
+    const group = this.get(id);
+    if (!group || (group.settledAt !== null) === settled) return;
+    group.settledAt = settled ? Date.now() : null;
     this.changed();
   }
 

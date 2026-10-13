@@ -1821,7 +1821,75 @@
 
 /* A group's summary stays: it's what says the group needs you. */
 .terminus-sidebar-terminal:hover .terminus-sidebar-shell-tag,
-.terminus-sidebar-terminal:focus-within .terminus-sidebar-shell-tag {
+.terminus-sidebar-terminal:focus-within /* The Done shelf: groups put away, one quiet line each. */
+.terminus-sidebar-done {
+  margin-top: 10px;
+}
+
+.terminus-sidebar-done-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.terminus-sidebar-done-heading:hover,
+.terminus-sidebar-done-heading:focus-visible {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-sidebar-done-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.terminus-sidebar-done-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.terminus-sidebar-done-row:hover,
+.terminus-sidebar-done-row:focus-within {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-sidebar-done-row.is-active {
+  color: var(--text-normal);
+}
+
+.terminus-sidebar-done-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-sidebar-done-row:hover .terminus-sidebar-group-state,
+.terminus-sidebar-done-row:focus-within .terminus-sidebar-group-state {
+  display: none;
+}
+
+.terminus-sidebar-done-row:hover .terminus-sidebar-row-actions,
+.terminus-sidebar-done-row:focus-within .terminus-sidebar-row-actions {
+  display: flex;
+}
+
+.terminus-sidebar-shell-tag {
   display: none;
 }
 

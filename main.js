@@ -16832,6 +16832,13 @@ function showGroupMenu(evt, plugin, group, actions) {
     );
   }
   menu.addSeparator();
+  if (group.settledAt !== null) {
+    menu.addItem((item) => item.setTitle("Move out of Done").setIcon("undo-2").onClick(() => plugin.groups.unsettleGroup(group.id)));
+  } else {
+    menu.addItem(
+      (item) => item.setTitle("Settle").setIcon("check-circle-2").setDisabled(!plugin.groups.canSettle(group.id)).onClick(() => plugin.groups.settleGroup(group.id))
+    );
+  }
   menu.addItem((item) => item.setTitle("Close group").setIcon("x").onClick(actions.close));
   menu.showAtMouseEvent(evt);
 }
@@ -20937,6 +20944,8 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     /** The terminal last used, highlighted in its row. Kept while the user
      *  works in the sidebar itself, which makes no terminal active. */
     this.focusedToken = null;
+    /** Whether the Done shelf is unfolded; folded by default. */
+    this.doneOpen = false;
     /** Every re-render goes through here (see renderGuard.ts). */
     this.render = () => this.guardedRender();
   }
@@ -21029,9 +21038,12 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     if (groups.length === 0 && terminals.length === 0) {
       this.renderEmpty(list);
     } else {
-      for (const group of groups)
+      const settled = groups.filter((group) => group.settledAt !== null);
+      for (const group of groups.filter((g2) => g2.settledAt === null))
         this.renderGroup(list, group, terminals.filter((t) => t.groupId === group.id));
       this.renderUngrouped(list, terminals.filter((t) => !t.groupId || !this.plugin.groupStore.get(t.groupId)));
+      if (settled.length > 0)
+        this.renderDone(list, settled, terminals);
     }
     refreshTabPendingDot(this.leaf, terminals.some((t) => this.status(t) === "needs-attention"));
   }
@@ -21127,6 +21139,10 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     this.renderGroupSummary(row, group.id, members, active);
     const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
     iconButton(actions, "plus", "New terminal in this group", () => void this.plugin.groups.newTerminal(group.id));
+    iconButton(actions, "check-circle-2", "Settle: put this group away as done", () => {
+      if (!this.plugin.groups.settleGroup(group.id))
+        new import_obsidian21.Notice("Terminus: a session in this group is working or waiting on you");
+    });
     this.renderCloseButton(actions, group.id, members, "Close this group and its terminals", () => this.plugin.groups.closeGroup(group.id), row);
     row.addEventListener("click", () => void this.plugin.groups.selectGroup(group.id));
     row.addEventListener("contextmenu", (evt) => this.showGroupMenu(evt, group));
@@ -21164,6 +21180,47 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       this.renderTerminal(body, view);
     for (const leaf of tabs)
       this.renderTab(body, leaf, group);
+  }
+  /**
+   * The Done shelf: groups put away with Settle, one line each, under a
+   * heading that folds. Their terminals keep running; a group comes back
+   * out on its own when a session in it starts work or needs you.
+   */
+  renderDone(list, groups, terminals) {
+    var _a8;
+    const section = list.createDiv({ cls: "terminus-sidebar-done" });
+    const heading = section.createDiv({ cls: "terminus-sidebar-done-heading" });
+    (0, import_obsidian21.setIcon)(heading.createSpan({ cls: "terminus-sidebar-chevron" }), this.doneOpen ? "chevron-down" : "chevron-right");
+    heading.createSpan({ text: "Done" });
+    heading.createSpan({ cls: "terminus-sidebar-done-count", text: String(groups.length) });
+    const toggle = () => {
+      this.doneOpen = !this.doneOpen;
+      this.render();
+    };
+    heading.addEventListener("click", toggle);
+    makeActivatable(heading, toggle, () => void 0);
+    heading.setAttr("aria-expanded", String(this.doneOpen));
+    if (!this.doneOpen)
+      return;
+    for (const group of groups) {
+      const members = terminals.filter((t) => t.groupId === group.id).length;
+      const active = this.plugin.groupStore.activeGroupId === group.id;
+      const row = section.createDiv({ cls: "terminus-sidebar-done-row" });
+      row.toggleClass("is-active", active);
+      row.style.setProperty("--terminus-group-color", group.color);
+      row.createSpan({ cls: "terminus-group-dot" });
+      row.createSpan({ cls: "terminus-sidebar-done-name", text: group.name, attr: { title: group.name } });
+      row.createSpan({
+        cls: "terminus-sidebar-group-state",
+        text: active ? "Showing" : `${members} ${members === 1 ? "terminal" : "terminals"} \xB7 ${timeAgo((_a8 = group.settledAt) != null ? _a8 : Date.now())}`
+      });
+      const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
+      iconButton(actions, "undo-2", "Move out of Done", () => this.plugin.groups.unsettleGroup(group.id));
+      const open = () => void this.plugin.groups.selectGroup(group.id);
+      makeActivatable(row, open, (evt) => this.showGroupMenu(evt, group));
+      row.addEventListener("click", open);
+      row.addEventListener("contextmenu", (evt) => this.showGroupMenu(evt, group));
+    }
   }
   /** The chevron that folds a group.
    *  It's its own control, so a click on it folds without also selecting
@@ -21615,7 +21672,8 @@ function resolveGroupsData(saved) {
       nameSource: isNameSource(g2.nameSource) ? g2.nameSource : /^Group \d+$/.test(g2.name) ? "placeholder" : "user",
       folder: typeof g2.folder === "string" ? g2.folder : null,
       note: typeof g2.note === "string" ? g2.note : null,
-      collapsed: g2.collapsed === true
+      collapsed: g2.collapsed === true,
+      settledAt: typeof g2.settledAt === "number" ? g2.settledAt : null
     })),
     activeGroupId: typeof s15.activeGroupId === "string" && ids.has(s15.activeGroupId) ? s15.activeGroupId : null,
     lastLeafByGroup: isStringRecord(s15.lastLeafByGroup) ? s15.lastLeafByGroup : {},
@@ -21657,7 +21715,8 @@ var GroupStore = class extends TypedEmitter {
       color: (_a8 = this.palette[(n - 1) % this.palette.length]) != null ? _a8 : "",
       folder: null,
       note: null,
-      collapsed: false
+      collapsed: false,
+      settledAt: null
     };
     this.data.groups.push(group);
     this.data.nextNumber = n + 1;
@@ -21706,6 +21765,14 @@ var GroupStore = class extends TypedEmitter {
     if (!group || group.collapsed === collapsed)
       return;
     group.collapsed = collapsed;
+    this.changed();
+  }
+  /** Puts a group away as done, or (false) back among the open ones. */
+  setSettled(id, settled) {
+    const group = this.get(id);
+    if (!group || group.settledAt !== null === settled)
+      return;
+    group.settledAt = settled ? Date.now() : null;
     this.changed();
   }
   setNote(id, path) {
@@ -21938,6 +22005,7 @@ var GroupController = class {
       })
     );
     plugin.agentSessionStore.on("change", (session) => this.suggestNoteStatus(session.token, session.status));
+    plugin.agentSessionStore.on("change", (session) => this.unsettleForSession(session.token));
     this.statusEl = plugin.addStatusBarItem();
     this.statusEl.addClass("terminus-group-status", "mod-clickable");
     this.statusEl.addEventListener("click", () => this.switchGroupPicker());
@@ -22280,6 +22348,46 @@ var GroupController = class {
     for (const view of terminals)
       view.leaf.detach();
     this.removeEmptyGroups();
+  }
+  /** Settling is refused while a session in the group is mid-turn or
+   *  waiting on you: putting that away would hide the very thing that
+   *  needs you. */
+  canSettle(groupId) {
+    return this.busy(this.terminalsIn(groupId)).length === 0;
+  }
+  /** Puts a group away as done: it moves to the Done shelf, its terminals
+   *  keep running. If it was the selected group, the next open one is
+   *  selected so the editor isn't left on something put away. */
+  settleGroup(groupId) {
+    var _a8, _b;
+    if (!this.canSettle(groupId))
+      return false;
+    this.store.setSettled(groupId, true);
+    if (this.store.activeGroupId === groupId) {
+      const open = this.store.list().filter((g2) => g2.settledAt === null);
+      const index = this.store.list().findIndex((g2) => g2.id === groupId);
+      const after = this.store.list().slice(index + 1).find((g2) => g2.settledAt === null);
+      const next = (_a8 = after != null ? after : [...this.store.list().slice(0, index)].reverse().find((g2) => g2.settledAt === null)) != null ? _a8 : open[0];
+      void this.selectGroup((_b = next == null ? void 0 : next.id) != null ? _b : null, false);
+    }
+    return true;
+  }
+  unsettleGroup(groupId) {
+    this.store.setSettled(groupId, false);
+  }
+  /** A settled group whose session starts work or needs you isn't done: it
+   *  comes back out. (t3code's "raise a hand" on a snoozed thread.) */
+  unsettleForSession(token) {
+    var _a8, _b;
+    if (!this.multiAgent)
+      return;
+    const status = (_a8 = this.plugin.agentSessionStore.get(token)) == null ? void 0 : _a8.status;
+    if (status !== "working" && status !== "needs-attention")
+      return;
+    const groupId = (_b = this.terminals().find((view) => view.hookToken === token)) == null ? void 0 : _b.groupId;
+    const group = this.store.get(groupId);
+    if (group && group.settledAt !== null)
+      this.store.setSettled(group.id, false);
   }
   /** Closes a group's terminals and removes it. Its other tabs stay open
    *  and become global: they may hold unsaved edits. */

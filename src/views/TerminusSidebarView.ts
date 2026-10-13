@@ -1,4 +1,4 @@
-import { ItemView, Menu, setIcon, setTooltip, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, setIcon, setTooltip, TFile, WorkspaceLeaf } from "obsidian";
 import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { TerminalView } from "./TerminalView";
 import { plainPreview } from "./AgentInboxView";
@@ -42,6 +42,8 @@ export class TerminusSidebarView extends ItemView {
   /** The terminal last used, highlighted in its row. Kept while the user
    *  works in the sidebar itself, which makes no terminal active. */
   private focusedToken: string | null = null;
+  /** Whether the Done shelf is unfolded; folded by default. */
+  private doneOpen = false;
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -149,8 +151,10 @@ export class TerminusSidebarView extends ItemView {
     if (groups.length === 0 && terminals.length === 0) {
       this.renderEmpty(list);
     } else {
-      for (const group of groups) this.renderGroup(list, group, terminals.filter((t) => t.groupId === group.id));
+      const settled = groups.filter((group) => group.settledAt !== null);
+      for (const group of groups.filter((g) => g.settledAt === null)) this.renderGroup(list, group, terminals.filter((t) => t.groupId === group.id));
       this.renderUngrouped(list, terminals.filter((t) => !t.groupId || !this.plugin.groupStore.get(t.groupId)));
+      if (settled.length > 0) this.renderDone(list, settled, terminals);
     }
 
     refreshTabPendingDot(this.leaf, terminals.some((t) => this.status(t) === "needs-attention"));
@@ -263,6 +267,9 @@ export class TerminusSidebarView extends ItemView {
 
     const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
     iconButton(actions, "plus", "New terminal in this group", () => void this.plugin.groups.newTerminal(group.id));
+    iconButton(actions, "check-circle-2", "Settle: put this group away as done", () => {
+      if (!this.plugin.groups.settleGroup(group.id)) new Notice("Terminus: a session in this group is working or waiting on you");
+    });
     this.renderCloseButton(actions, group.id, members, "Close this group and its terminals", () => this.plugin.groups.closeGroup(group.id), row);
 
     row.addEventListener("click", () => void this.plugin.groups.selectGroup(group.id));
@@ -305,6 +312,46 @@ export class TerminusSidebarView extends ItemView {
     const body = section.createDiv({ cls: "terminus-sidebar-group-terminals" });
     for (const view of members) this.renderTerminal(body, view);
     for (const leaf of tabs) this.renderTab(body, leaf, group);
+  }
+
+  /**
+   * The Done shelf: groups put away with Settle, one line each, under a
+   * heading that folds. Their terminals keep running; a group comes back
+   * out on its own when a session in it starts work or needs you.
+   */
+  private renderDone(list: HTMLElement, groups: TerminalGroup[], terminals: TerminalView[]): void {
+    const section = list.createDiv({ cls: "terminus-sidebar-done" });
+    const heading = section.createDiv({ cls: "terminus-sidebar-done-heading" });
+    setIcon(heading.createSpan({ cls: "terminus-sidebar-chevron" }), this.doneOpen ? "chevron-down" : "chevron-right");
+    heading.createSpan({ text: "Done" });
+    heading.createSpan({ cls: "terminus-sidebar-done-count", text: String(groups.length) });
+    const toggle = () => {
+      this.doneOpen = !this.doneOpen;
+      this.render();
+    };
+    heading.addEventListener("click", toggle);
+    makeActivatable(heading, toggle, () => undefined);
+    heading.setAttr("aria-expanded", String(this.doneOpen));
+    if (!this.doneOpen) return;
+    for (const group of groups) {
+      const members = terminals.filter((t) => t.groupId === group.id).length;
+      const active = this.plugin.groupStore.activeGroupId === group.id;
+      const row = section.createDiv({ cls: "terminus-sidebar-done-row" });
+      row.toggleClass("is-active", active);
+      row.style.setProperty("--terminus-group-color", group.color);
+      row.createSpan({ cls: "terminus-group-dot" });
+      row.createSpan({ cls: "terminus-sidebar-done-name", text: group.name, attr: { title: group.name } });
+      row.createSpan({
+        cls: "terminus-sidebar-group-state",
+        text: active ? "Showing" : `${members} ${members === 1 ? "terminal" : "terminals"} · ${timeAgo(group.settledAt ?? Date.now())}`,
+      });
+      const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
+      iconButton(actions, "undo-2", "Move out of Done", () => this.plugin.groups.unsettleGroup(group.id));
+      const open = () => void this.plugin.groups.selectGroup(group.id);
+      makeActivatable(row, open, (evt) => this.showGroupMenu(evt, group));
+      row.addEventListener("click", open);
+      row.addEventListener("contextmenu", (evt) => this.showGroupMenu(evt, group));
+    }
   }
 
   /** The chevron that folds a group.
