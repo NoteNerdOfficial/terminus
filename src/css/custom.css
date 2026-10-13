@@ -1469,3 +1469,239 @@
   padding-top: var(--size-4-3);
   border-top: 1px solid var(--background-modifier-border);
 }
+
+/* Agent inbox (Multi-agent experience). The view also carries
+   terminus-pending-view, so pending-change rows, buttons and the Recently
+   resolved list look exactly as they do in Pending Changes. */
+.terminus-inbox-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  background-color: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.terminus-inbox-title {
+  flex: 1 1 auto;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.terminus-inbox-header button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.terminus-inbox-empty {
+  padding: 16px 14px;
+}
+
+.terminus-inbox-section {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 14px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.terminus-inbox-section.is-collapsible {
+  cursor: pointer;
+}
+
+.terminus-inbox-card {
+  position: relative;
+  overflow: hidden;
+  margin: 4px 8px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background-color: var(--background-primary);
+}
+
+.terminus-inbox-card.is-needs-you {
+  border-color: var(--color-orange, #e8871e);
+}
+
+.terminus-inbox-card.is-ended {
+  opacity: 0.85;
+}
+
+.terminus-inbox-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px 2px 13px;
+  cursor: pointer;
+}
+
+.terminus-inbox-card-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.terminus-inbox-chevron {
+  color: var(--text-faint);
+}
+
+.terminus-inbox-pill {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 10.5px;
+  background-color: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+.terminus-inbox-pill.is-needs-you {
+  background-color: rgba(var(--color-orange-rgb, 232, 135, 30), 0.18);
+  color: var(--color-orange, #e8871e);
+}
+
+.terminus-inbox-pill.is-working {
+  background-color: rgba(var(--interactive-accent-rgb, 124, 111, 240), 0.18);
+  color: var(--interactive-accent, #7c6ff0);
+}
+
+.terminus-inbox-pill.is-finished {
+  background-color: rgba(var(--color-blue-rgb, 62, 131, 248), 0.18);
+  color: var(--color-blue, #3e83f8);
+}
+
+.terminus-inbox-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 10px 6px 13px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.terminus-inbox-branch {
+  font-family: var(--font-monospace);
+}
+
+.terminus-inbox-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 8px 13px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  font-size: 12px;
+  background-color: rgba(var(--color-orange-rgb, 232, 135, 30), 0.12);
+}
+
+.terminus-inbox-banner span {
+  flex: 1 1 auto;
+}
+
+.terminus-inbox-quote {
+  margin: 0 10px 8px 13px;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.terminus-inbox-who,
+.terminus-inbox-subagent {
+  padding: 5px 10px 3px 13px;
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: 12px;
+}
+
+.terminus-inbox-who {
+  display: flex;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.terminus-inbox-who-label {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.terminus-inbox-subagent-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.terminus-inbox-subagent-mark {
+  width: 12px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.terminus-inbox-subagent-mark.is-running {
+  color: var(--interactive-accent, #7c6ff0);
+}
+
+.terminus-inbox-subagent-mark.is-done {
+  color: var(--color-green, #3fb950);
+}
+
+.terminus-inbox-subagent-type {
+  font-weight: 600;
+}
+
+.terminus-inbox-subagent-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.terminus-inbox-subagent-details {
+  display: flex;
+  gap: 8px;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.terminus-inbox-subagent-changes {
+  padding-left: 18px;
+}
+
+.terminus-inbox-more {
+  padding: 4px 10px 4px 31px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.terminus-inbox-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 6px 10px 6px 13px;
+  border-top: 1px solid var(--background-modifier-border);
+  background-color: var(--background-secondary);
+}
+
+.terminus-inbox-spacer {
+  flex: 1 1 auto;
+}
+
+.terminus-inbox-foot-note {
+  font-size: 11px;
+  color: var(--text-faint);
+}

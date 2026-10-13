@@ -26,6 +26,7 @@ import { refreshTabHeader, refreshPaneTitle, refreshTabPendingDot } from "../ter
 import { CommandHelpModal } from "../modals/CommandHelpModal";
 import { RenameTerminalModal } from "../modals/RenameTerminalModal";
 import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload, StopHookPayload } from "../hooks/types";
+import { getGitBranch } from "../git/gitBranch";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
 
@@ -452,7 +453,7 @@ export class TerminalView extends ItemView {
     const el = xtermContainer.createDiv({ cls: "terminus-activity" });
     el.createSpan({ cls: "terminus-activity-dot" });
     this.activityLabelEl = el.createSpan({ cls: "terminus-activity-label" });
-    el.addEventListener("click", () => void this.plugin.revealPendingChangesView());
+    el.addEventListener("click", () => void this.plugin.revealReviewView());
     this.activityEl = el;
     this.refreshActivityColor();
   }
@@ -488,6 +489,16 @@ export class TerminalView extends ItemView {
     this.clearActivity();
     this.clearPendingAttention();
     this.plugin.agentSessionStore.turnEnded(this.token, payload?.last_assistant_message, sessionIdentity(payload));
+    void this.readGitBranch();
+  }
+
+  /** Reads the session folder's git branch for its inbox card -- at
+   *  SessionStart and on Stop only, since a turn is what switches branches. */
+  private async readGitBranch(): Promise<void> {
+    if (this.plugin.experience !== "multi-agent" || !this.plugin.settings.multiAgent.showGitBranch) return;
+    const cwd = this.plugin.agentSessionStore.get(this.token)?.cwd;
+    if (!cwd) return;
+    this.plugin.agentSessionStore.branchRead(this.token, await getGitBranch(cwd));
   }
 
   /** Fires from the Notification hook -- Claude needs this terminal's
@@ -497,7 +508,7 @@ export class TerminalView extends ItemView {
   private onNeedsAttention(payload: NotificationHookPayload | undefined): void {
     this.isPendingAttention = true;
     this.refreshPendingDot();
-    this.plugin.agentSessionStore.needsAttention(this.token, payload?.notification_type, sessionIdentity(payload));
+    this.plugin.agentSessionStore.needsAttention(this.token, payload?.notification_type, payload?.message, sessionIdentity(payload));
   }
 
   /** SessionStart / SessionEnd / UserPromptSubmit, and the subagent
@@ -510,6 +521,7 @@ export class TerminalView extends ItemView {
     switch (payload.hook_event_name) {
       case "SessionStart":
         store.sessionStarted(this.token, identity);
+        void this.readGitBranch();
         break;
       case "UserPromptSubmit":
         store.promptSubmitted(this.token, identity);
@@ -583,6 +595,17 @@ export class TerminalView extends ItemView {
   private refreshIdentity(): void {
     refreshTabHeader(this.leaf, this.color);
     refreshPaneTitle(this, this.getDisplayText());
+    this.plugin.refreshAgentInbox();
+  }
+
+  /** The hook/review token: how the Agent inbox matches sessions and
+   *  pending changes to this terminal. */
+  get hookToken(): string {
+    return this.token;
+  }
+
+  get colorTag(): string | null {
+    return this.color;
   }
 
   /** Inserts a dropped file's absolute path into the terminal's input line

@@ -87,7 +87,7 @@ var require_fs = __commonJS({
     exports.pathJoin = pathJoin9;
     exports.pathBasename = pathBasename11;
     exports.pathDirname = pathDirname3;
-    exports.pathRelative = pathRelative6;
+    exports.pathRelative = pathRelative7;
     exports.fileExistsSync = fileExistsSync6;
     exports.readTextFileIfExists = readTextFileIfExists4;
     exports.writeTextFile = writeTextFile5;
@@ -109,7 +109,7 @@ var require_fs = __commonJS({
     function pathDirname3(filePath) {
       return nodePath.dirname(filePath);
     }
-    function pathRelative6(from, to) {
+    function pathRelative7(from, to) {
       return nodePath.relative(from, to);
     }
     function fileExistsSync6(filePath) {
@@ -161,7 +161,7 @@ var require_process = __commonJS({
     exports.ExecFileError = void 0;
     exports.getEnvVar = getEnvVar5;
     exports.getAllEnvVars = getAllEnvVars3;
-    exports.execFileText = execFileText4;
+    exports.execFileText = execFileText5;
     exports.spawnWithControlChannel = spawnWithControlChannel2;
     var child_process_1 = require("child_process");
     function getEnvVar5(name) {
@@ -173,7 +173,7 @@ var require_process = __commonJS({
     var ExecFileError = class extends Error {
     };
     exports.ExecFileError = ExecFileError;
-    function execFileText4(command, args, options = {}) {
+    function execFileText5(command, args, options = {}) {
       return new Promise((resolve, reject) => {
         var _a8;
         const child = (0, child_process_1.execFile)(command, args, { encoding: "utf8", ...options }, (error, stdout, stderr) => {
@@ -391,8 +391,8 @@ __export(main_exports, {
   default: () => TerminusPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian19 = require("obsidian");
-var import_terminus_node_bridge23 = __toESM(require_dist());
+var import_obsidian21 = require("obsidian");
+var import_terminus_node_bridge25 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
 var import_terminus_node_bridge = __toESM(require_dist());
@@ -15400,7 +15400,7 @@ var xr2 = class extends B3 {
 };
 
 // src/views/TerminalView.ts
-var import_terminus_node_bridge12 = __toESM(require_dist());
+var import_terminus_node_bridge13 = __toESM(require_dist());
 
 // src/node/emitter.ts
 var TypedEmitter = class {
@@ -16473,6 +16473,18 @@ var RenameTerminalModal = class extends import_obsidian6.Modal {
   }
 };
 
+// src/git/gitBranch.ts
+var import_terminus_node_bridge12 = __toESM(require_dist());
+async function getGitBranch(cwd) {
+  try {
+    const { stdout } = await (0, import_terminus_node_bridge12.execFileText)("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, maxBuffer: 64 * 1024 });
+    const branch = stdout.trim();
+    return branch && branch !== "HEAD" ? branch : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 // src/views/TerminalView.ts
 var TERMINUS_VIEW_TYPE = "terminus-view";
 var SCROLLBACK_PERSIST_LINES = 1e3;
@@ -16580,7 +16592,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     // dot the user never focuses is exactly the case it exists to catch)
     // that a timed guess would only risk clearing it too early.
     this.isPendingAttention = false;
-    this.token = (0, import_terminus_node_bridge12.randomHex)(16);
+    this.token = (0, import_terminus_node_bridge13.randomHex)(16);
     this.terminalNumber = plugin.allocateTerminalNumber();
   }
   getViewType() {
@@ -16759,7 +16771,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     const el2 = xtermContainer.createDiv({ cls: "terminus-activity" });
     el2.createSpan({ cls: "terminus-activity-dot" });
     this.activityLabelEl = el2.createSpan({ cls: "terminus-activity-label" });
-    el2.addEventListener("click", () => void this.plugin.revealPendingChangesView());
+    el2.addEventListener("click", () => void this.plugin.revealReviewView());
     this.activityEl = el2;
     this.refreshActivityColor();
   }
@@ -16772,7 +16784,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     this.activityFiles.add(filePath);
     const names = [...this.activityFiles];
     const only = names.length === 1 ? names[0] : void 0;
-    const label = only ? middleTruncate((0, import_terminus_node_bridge12.pathBasename)(only)) : `${names.length} files`;
+    const label = only ? middleTruncate((0, import_terminus_node_bridge13.pathBasename)(only)) : `${names.length} files`;
     this.activityLabelEl.setText(label);
     this.activityEl.setAttribute("aria-label", names.join("\n"));
     this.activityEl.addClass("is-active");
@@ -16789,6 +16801,18 @@ var TerminalView = class extends import_obsidian7.ItemView {
     this.clearActivity();
     this.clearPendingAttention();
     this.plugin.agentSessionStore.turnEnded(this.token, payload == null ? void 0 : payload.last_assistant_message, sessionIdentity(payload));
+    void this.readGitBranch();
+  }
+  /** Reads the session folder's git branch for its inbox card -- at
+   *  SessionStart and on Stop only, since a turn is what switches branches. */
+  async readGitBranch() {
+    var _a8;
+    if (this.plugin.experience !== "multi-agent" || !this.plugin.settings.multiAgent.showGitBranch)
+      return;
+    const cwd = (_a8 = this.plugin.agentSessionStore.get(this.token)) == null ? void 0 : _a8.cwd;
+    if (!cwd)
+      return;
+    this.plugin.agentSessionStore.branchRead(this.token, await getGitBranch(cwd));
   }
   /** Fires from the Notification hook -- Claude needs this terminal's
    *  permission, or has been sitting idle waiting on input. Either way,
@@ -16797,7 +16821,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
   onNeedsAttention(payload) {
     this.isPendingAttention = true;
     this.refreshPendingDot();
-    this.plugin.agentSessionStore.needsAttention(this.token, payload == null ? void 0 : payload.notification_type, sessionIdentity(payload));
+    this.plugin.agentSessionStore.needsAttention(this.token, payload == null ? void 0 : payload.notification_type, payload == null ? void 0 : payload.message, sessionIdentity(payload));
   }
   /** SessionStart / SessionEnd / UserPromptSubmit, and the subagent
    *  events -- only sent while the Multi-agent experience has those hooks
@@ -16810,6 +16834,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     switch (payload.hook_event_name) {
       case "SessionStart":
         store.sessionStarted(this.token, identity);
+        void this.readGitBranch();
         break;
       case "UserPromptSubmit":
         store.promptSubmitted(this.token, identity);
@@ -16882,6 +16907,15 @@ var TerminalView = class extends import_obsidian7.ItemView {
   refreshIdentity() {
     refreshTabHeader(this.leaf, this.color);
     refreshPaneTitle(this, this.getDisplayText());
+    this.plugin.refreshAgentInbox();
+  }
+  /** The hook/review token: how the Agent inbox matches sessions and
+   *  pending changes to this terminal. */
+  get hookToken() {
+    return this.token;
+  }
+  get colorTag() {
+    return this.color;
   }
   /** Inserts a dropped file's absolute path into the terminal's input line
    *  (typed, not executed -- same "propose, don't run" principle as the
@@ -16908,7 +16942,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
     const vaultPath = uriPath != null ? uriPath : text;
     const resolved = (_b = this.app.vault.getAbstractFileByPath(vaultPath)) != null ? _b : this.app.metadataCache.getFirstLinkpathDest(vaultPath, "");
     if (resolved) {
-      (_c2 = this.pty) == null ? void 0 : _c2.write(shellQuoteIfNeeded((0, import_terminus_node_bridge12.pathJoin)(this.plugin.getVaultBasePath(), resolved.path)));
+      (_c2 = this.pty) == null ? void 0 : _c2.write(shellQuoteIfNeeded((0, import_terminus_node_bridge13.pathJoin)(this.plugin.getVaultBasePath(), resolved.path)));
       return;
     }
     if (uriPath) {
@@ -17090,10 +17124,10 @@ var TerminalView = class extends import_obsidian7.ItemView {
     var _a8, _b, _c2, _d;
     const pythonBin = await this.plugin.getPython3Bin();
     const shell2 = this.plugin.getUserShell();
-    const resourcesDir = (0, import_terminus_node_bridge12.pathJoin)(this.plugin.getPluginDir(), "resources");
-    const helperPath = (0, import_terminus_node_bridge12.pathJoin)(resourcesDir, "pty_helper.py");
+    const resourcesDir = (0, import_terminus_node_bridge13.pathJoin)(this.plugin.getPluginDir(), "resources");
+    const helperPath = (0, import_terminus_node_bridge13.pathJoin)(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
-    const restoredCwdStillExists = this.restoredCwd && (0, import_terminus_node_bridge12.fileExistsSync)(this.restoredCwd);
+    const restoredCwdStillExists = this.restoredCwd && (0, import_terminus_node_bridge13.fileExistsSync)(this.restoredCwd);
     this.pty = new PtyProcess({
       pythonBin,
       helperPath,
@@ -17102,14 +17136,14 @@ var TerminalView = class extends import_obsidian7.ItemView {
       cols: (_b = (_a8 = this.term) == null ? void 0 : _a8.cols) != null ? _b : 80,
       rows: (_d = (_c2 = this.term) == null ? void 0 : _c2.rows) != null ? _d : 24,
       env: {
-        ...(0, import_terminus_node_bridge12.getAllEnvVars)(),
+        ...(0, import_terminus_node_bridge13.getAllEnvVars)(),
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
         ...getShellIntegrationEnv(shell2, resourcesDir)
       }
     });
-    this.pty.on("data", (chunk) => this.writeToTerminal((0, import_terminus_node_bridge12.bufferToBytes)(chunk)));
+    this.pty.on("data", (chunk) => this.writeToTerminal((0, import_terminus_node_bridge13.bufferToBytes)(chunk)));
     this.pty.on("stderr", (text) => new import_obsidian7.Notice(`Terminus: ${text.trim()}`));
     this.pty.on("error", (err) => new import_obsidian7.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
     this.pty.on("exit", ({ code }) => {
@@ -17205,7 +17239,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
    *  (first oldText vs latest newText) so a multi-edit turn is checked as a
    *  whole, not edit-by-edit. */
   async checkBacklinkBreakage(absoluteFilePath) {
-    const relPath = (0, import_terminus_node_bridge12.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
+    const relPath = (0, import_terminus_node_bridge13.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
     const file = this.app.vault.getAbstractFileByPath(relPath);
     if (!(file instanceof import_obsidian7.TFile))
       return;
@@ -17223,8 +17257,7 @@ function sessionIdentity(payload) {
 }
 
 // src/views/PendingChangesView.ts
-var import_obsidian13 = require("obsidian");
-var import_terminus_node_bridge19 = __toESM(require_dist());
+var import_obsidian14 = require("obsidian");
 
 // node_modules/diff/libesm/diff/base.js
 var Diff = class {
@@ -17885,9 +17918,13 @@ function renderDiffLine(container, line) {
   }
 }
 
+// src/views/changeRows.ts
+var import_obsidian13 = require("obsidian");
+var import_terminus_node_bridge20 = __toESM(require_dist());
+
 // src/editor/openWithDiff.ts
 var import_obsidian9 = require("obsidian");
-var import_terminus_node_bridge14 = __toESM(require_dist());
+var import_terminus_node_bridge15 = __toESM(require_dist());
 
 // src/editor/inlineDiff.ts
 var import_state = require("@codemirror/state");
@@ -18073,7 +18110,7 @@ function computeHunks(oldText, newText) {
 }
 
 // src/modals/collisions.ts
-var import_terminus_node_bridge13 = __toESM(require_dist());
+var import_terminus_node_bridge14 = __toESM(require_dist());
 
 // src/modals/ConfirmModal.ts
 var import_obsidian8 = require("obsidian");
@@ -18143,12 +18180,12 @@ async function confirmCollisionReject(app, changes, scope = "file") {
     const change = collided[0];
     const first = (_b = (_a8 = change.contributors[0]) == null ? void 0 : _a8.label) != null ? _b : change.panelLabel;
     const others = joinNames(laterContributors(change));
-    const file = (0, import_terminus_node_bridge13.pathBasename)(change.diff.filePath);
+    const file = (0, import_terminus_node_bridge14.pathBasename)(change.diff.filePath);
     const message = scope === "hunk" ? `${others} also edited ${file} after ${first}. Rejecting this change restores its lines to how they were before ${first}'s first edit, which may undo ${others}'s edits too.` : `${others} also edited this file after ${first}. Rejecting restores it to how it was before ${first}'s first edit, which undoes ${others}'s edits too.`;
     return ConfirmModal.confirm(app, scope === "hunk" ? "Reject this change?" : `Reject ${file}?`, message, "Reject");
   }
   const SHOWN = 3;
-  const listed = collided.slice(0, SHOWN).map((c) => `${(0, import_terminus_node_bridge13.pathBasename)(c.diff.filePath)} (${joinNames(laterContributors(c))})`).join(", ");
+  const listed = collided.slice(0, SHOWN).map((c) => `${(0, import_terminus_node_bridge14.pathBasename)(c.diff.filePath)} (${joinNames(laterContributors(c))})`).join(", ");
   const more = collided.length > SHOWN ? ` and ${collided.length - SHOWN} more` : "";
   const count = changes.length;
   return ConfirmModal.confirm(
@@ -18162,7 +18199,7 @@ async function confirmCollisionReject(app, changes, scope = "file") {
 // src/editor/openWithDiff.ts
 async function openChangedFile(plugin, change) {
   const { app } = plugin;
-  const relPath = (0, import_terminus_node_bridge14.pathRelative)(plugin.getVaultBasePath(), change.diff.filePath);
+  const relPath = (0, import_terminus_node_bridge15.pathRelative)(plugin.getVaultBasePath(), change.diff.filePath);
   const file = relPath.startsWith("..") ? null : app.vault.getAbstractFileByPath(relPath);
   if (!(file instanceof import_obsidian9.TFile)) {
     openOutsideObsidian(change.diff.filePath);
@@ -18187,7 +18224,7 @@ async function openChangedFile(plugin, change) {
     if (!accepted && !await confirmCollisionReject(plugin.app, [current]))
       return;
     store.resolveItem(change.id, accepted).catch((err) => {
-      new import_obsidian9.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge14.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian9.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge15.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   cm.dispatch({
@@ -18214,8 +18251,8 @@ function findFirstHunkLine(change) {
   return line;
 }
 function openOutsideObsidian(absolutePath) {
-  if (!(0, import_terminus_node_bridge14.fileExistsSync)(absolutePath)) {
-    new import_obsidian9.Notice(`Terminus: couldn't find ${(0, import_terminus_node_bridge14.pathBasename)(absolutePath)} on disk.`);
+  if (!(0, import_terminus_node_bridge15.fileExistsSync)(absolutePath)) {
+    new import_obsidian9.Notice(`Terminus: couldn't find ${(0, import_terminus_node_bridge15.pathBasename)(absolutePath)} on disk.`);
     return;
   }
   openWithSystemDefaultApp(absolutePath);
@@ -18223,11 +18260,11 @@ function openOutsideObsidian(absolutePath) {
 
 // src/views/DiffSplitView.ts
 var import_obsidian11 = require("obsidian");
-var import_terminus_node_bridge16 = __toESM(require_dist());
+var import_terminus_node_bridge17 = __toESM(require_dist());
 
 // src/diff/renderSplitDiff.ts
 var import_obsidian10 = require("obsidian");
-var import_terminus_node_bridge15 = __toESM(require_dist());
+var import_terminus_node_bridge16 = __toESM(require_dist());
 var EDGE = 4;
 var MIN_HIDDEN_TO_TRUNCATE = 4;
 function renderSplitDiffBody(container, app, store, change) {
@@ -18329,7 +18366,7 @@ function renderHunkControls(container, hunk, change, app, store) {
     if (!accepted && !await confirmCollisionReject(app, [(_a8 = store.get(change.id)) != null ? _a8 : change], "hunk"))
       return;
     store.resolveHunk(change.id, hunk.index, accepted).catch((err) => {
-      new import_obsidian10.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge15.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian10.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge16.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   bar.createEl("button", { text: "Reject", cls: "terminus-inline-diff-reject" }).addEventListener("click", () => void resolve(false));
@@ -18385,7 +18422,7 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
         return;
       }
       const header = container.createDiv({ cls: "terminus-split-diff-header" });
-      header.createSpan({ cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge16.pathBasename)(change.diff.filePath) });
+      header.createSpan({ cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge17.pathBasename)(change.diff.filePath) });
       if (change.editCount > 1) {
         header.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
       }
@@ -18404,7 +18441,7 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
     return DIFF_SPLIT_VIEW_TYPE;
   }
   getDisplayText() {
-    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge16.pathBasename)(this.changeId)}` : "Split Diff";
+    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge17.pathBasename)(this.changeId)}` : "Split Diff";
   }
   getIcon() {
     return "diff";
@@ -18436,7 +18473,7 @@ async function openDiffSplitView(plugin, changeId) {
 
 // src/modals/ActionLogModal.ts
 var import_obsidian12 = require("obsidian");
-var import_terminus_node_bridge17 = __toESM(require_dist());
+var import_terminus_node_bridge18 = __toESM(require_dist());
 var ActionLogModal = class extends import_obsidian12.Modal {
   constructor(app, actionLog) {
     super(app);
@@ -18476,7 +18513,7 @@ var ActionLogModal = class extends import_obsidian12.Modal {
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted"
     });
-    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge17.pathBasename)(entry.filePath) });
+    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge18.pathBasename)(entry.filePath) });
     row.createSpan({
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` \xB7 ${entry.editCount} edits` : ""}`
@@ -18486,13 +18523,13 @@ var ActionLogModal = class extends import_obsidian12.Modal {
 };
 
 // src/git/gitDiff.ts
-var import_terminus_node_bridge18 = __toESM(require_dist());
+var import_terminus_node_bridge19 = __toESM(require_dist());
 async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
-  const relPath = (0, import_terminus_node_bridge18.pathRelative)(vaultBasePath, absoluteFilePath);
+  const relPath = (0, import_terminus_node_bridge19.pathRelative)(vaultBasePath, absoluteFilePath);
   if (relPath.startsWith(".."))
     return null;
   try {
-    const { stdout } = await (0, import_terminus_node_bridge18.execFileText)("git", ["show", `HEAD:${relPath}`], {
+    const { stdout } = await (0, import_terminus_node_bridge19.execFileText)("git", ["show", `HEAD:${relPath}`], {
       cwd: vaultBasePath,
       maxBuffer: 10 * 1024 * 1024
     });
@@ -18502,9 +18539,198 @@ async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
   }
 }
 
+// src/views/changeRows.ts
+async function runBulkAction(ctx, accepted, changes, action, scopeLabel) {
+  const count = changes.length;
+  if (!accepted && changes.some(hasCollision)) {
+    if (!await confirmCollisionReject(ctx.plugin.app, changes))
+      return;
+  } else if (ctx.plugin.settings.confirmBulkActions) {
+    const verb = accepted ? "Keep" : "Reject";
+    const scope = scopeLabel ? `${scopeLabel}'s` : "all";
+    const confirmed = await ConfirmModal.confirm(
+      ctx.plugin.app,
+      `${verb} ${scope} pending changes?`,
+      `This will ${accepted ? "keep" : "revert"} ${count} ${count === 1 ? "file" : "files"}${scopeLabel ? ` from ${scopeLabel}` : ""}.`,
+      verb
+    );
+    if (!confirmed)
+      return;
+  }
+  try {
+    await action();
+  } catch (err) {
+    const target = scopeLabel ? `${scopeLabel}'s changes` : "all changes";
+    new import_obsidian13.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage2(err)}`);
+  }
+}
+function renderChangeRow(ctx, list, change, stats) {
+  const row = list.createDiv({ cls: "terminus-pending-row" });
+  const summary = row.createDiv({ cls: "terminus-pending-row-summary" });
+  const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "\u25B8" });
+  const info = summary.createDiv({ cls: "terminus-pending-info" });
+  const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
+  nameRow.createSpan({ cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge20.pathBasename)(change.diff.filePath) });
+  nameRow.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
+  nameRow.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
+  if (change.editCount > 1) {
+    nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
+  }
+  const vaultName = (0, import_terminus_node_bridge20.pathBasename)(ctx.plugin.getVaultBasePath());
+  const relativePath = (0, import_terminus_node_bridge20.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
+  info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
+  const collision = collisionLabel(change);
+  if (collision) {
+    info.createDiv({ cls: "terminus-collision-warning", text: `\u26A0 ${collision}` });
+  }
+  if (change.brokenBacklinks.length > 0) {
+    const count = change.brokenBacklinks.length;
+    info.createDiv({
+      cls: "terminus-backlink-warning",
+      text: `\u26A0 may break ${count} incoming ${count === 1 ? "link" : "links"}`
+    });
+  }
+  const stop = (e, fn3) => {
+    e.stopPropagation();
+    fn3();
+  };
+  const resolve = async (accepted) => {
+    if (!accepted && !await confirmCollisionReject(ctx.plugin.app, [change]))
+      return;
+    ctx.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err) => {
+      new import_obsidian13.Notice(
+        `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge20.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
+      );
+    });
+  };
+  const actions = summary.createDiv({ cls: "terminus-pending-row-actions" });
+  actions.createEl("button", { text: "Open", cls: "terminus-action-open" }).addEventListener(
+    "click",
+    (e) => stop(e, () => void openChangedFile(ctx.plugin, change))
+  );
+  if (change.payload.tool_name !== "NotebookEdit") {
+    actions.createEl("button", { text: "Split Diff", cls: "terminus-action-open terminus-action-split-diff" }).addEventListener(
+      "click",
+      (e) => stop(e, () => void openDiffSplitView(ctx.plugin, change.id))
+    );
+  }
+  actions.createEl("button", { text: "\u2715", cls: "terminus-icon-btn terminus-icon-btn-reject", attr: { "aria-label": "Reject" } }).addEventListener("click", (e) => stop(e, () => void resolve(false)));
+  actions.createEl("button", { text: "\u2713", cls: "terminus-icon-btn terminus-icon-btn-accept", attr: { "aria-label": "Accept" } }).addEventListener("click", (e) => stop(e, () => void resolve(true)));
+  const body = row.createDiv({ cls: "terminus-pending-row-body" });
+  body.hide();
+  renderRowBody(ctx, body, change);
+  let expanded = false;
+  summary.addEventListener("click", () => {
+    expanded = !expanded;
+    body.toggle(expanded);
+    chevron.setText(expanded ? "\u25BE" : "\u25B8");
+    row.toggleClass("is-expanded", expanded);
+    summary.toggleClass("is-expanded", expanded);
+  });
+}
+function renderRowBody(ctx, body, change) {
+  if (change.brokenBacklinks.length > 0) {
+    const warning = body.createDiv({ cls: "terminus-backlink-warning-detail" });
+    warning.createDiv({ text: "This edit removed a heading/block that other notes link to:" });
+    const list = warning.createEl("ul");
+    for (const link of change.brokenBacklinks) {
+      list.createEl("li", {
+        text: `${(0, import_terminus_node_bridge20.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
+      });
+    }
+  }
+  const toggleRow = body.createDiv({ cls: "terminus-body-view-toggle-row" });
+  const toggle = toggleRow.createDiv({ cls: "terminus-body-view-toggle" });
+  const diffBtn = toggle.createEl("button", { text: "Diff", cls: "is-active" });
+  const previewBtn = toggle.createEl("button", { text: "Preview" });
+  const gitBtn = toggle.createEl("button", { text: "vs git HEAD" });
+  const diffContainer = body.createDiv();
+  renderDiffBody(diffContainer, change.diff);
+  const previewContainer = body.createDiv({ cls: "terminus-preview-body" });
+  previewContainer.hide();
+  const gitContainer = body.createDiv();
+  gitContainer.hide();
+  const buttons = [diffBtn, previewBtn, gitBtn];
+  const containers = [diffContainer, previewContainer, gitContainer];
+  const activate = (index) => {
+    buttons.forEach((b3, i8) => b3.toggleClass("is-active", i8 === index));
+    containers.forEach((c, i8) => c.toggle(i8 === index));
+  };
+  let previewRendered = false;
+  let gitRendered = false;
+  diffBtn.addEventListener("click", () => activate(0));
+  previewBtn.addEventListener("click", () => {
+    activate(1);
+    if (previewRendered)
+      return;
+    previewRendered = true;
+    const relPath = (0, import_terminus_node_bridge20.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
+    void import_obsidian13.MarkdownRenderer.render(ctx.plugin.app, change.diff.newText, previewContainer, relPath, ctx.component);
+  });
+  gitBtn.addEventListener("click", () => {
+    activate(2);
+    if (gitRendered)
+      return;
+    gitRendered = true;
+    void renderGitDiff(ctx, gitContainer, change);
+  });
+}
+async function renderGitDiff(ctx, container, change) {
+  const headContent = await getGitHeadContent(ctx.plugin.getVaultBasePath(), change.diff.filePath);
+  container.empty();
+  if (headContent === null) {
+    container.createDiv({
+      cls: "terminus-pending-empty",
+      text: "Not tracked in git, or this vault isn't a git repository."
+    });
+    return;
+  }
+  renderDiffBody(container, {
+    filePath: change.diff.filePath,
+    oldText: headContent,
+    newText: change.diff.newText,
+    existedBefore: true,
+    revertText: headContent
+  });
+}
+function renderHistorySection(ctx, container, history) {
+  const section = container.createDiv({ cls: "terminus-history-section" });
+  const summary = section.createDiv({ cls: "terminus-history-toggle" });
+  const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "\u25B8" });
+  summary.createSpan({ text: `Recently resolved (${history.length})` });
+  const list = section.createDiv({ cls: "terminus-history-list" });
+  list.hide();
+  for (const item of history) {
+    renderHistoryRow(ctx, list, item);
+  }
+  list.createEl("button", { text: "View full log\u2026", cls: "terminus-view-full-log" }).addEventListener(
+    "click",
+    () => new ActionLogModal(ctx.plugin.app, ctx.plugin.actionLog).open()
+  );
+  let expanded = false;
+  summary.addEventListener("click", () => {
+    expanded = !expanded;
+    list.toggle(expanded);
+    chevron.setText(expanded ? "\u25BE" : "\u25B8");
+  });
+}
+function renderHistoryRow(ctx, list, item) {
+  const row = list.createDiv({ cls: "terminus-history-row" });
+  row.createSpan({
+    cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
+    text: item.accepted ? "Kept" : "Reverted"
+  });
+  row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge20.pathBasename)(item.diff.filePath) });
+  row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
+    ctx.plugin.pendingChangesStore.undo(item.historyId).catch((err) => {
+      new import_obsidian13.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
+    });
+  });
+}
+
 // src/views/PendingChangesView.ts
 var PENDING_CHANGES_VIEW_TYPE = "terminus-pending-changes";
-var PendingChangesView = class extends import_obsidian13.ItemView {
+var PendingChangesView = class extends import_obsidian14.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
@@ -18521,9 +18747,12 @@ var PendingChangesView = class extends import_obsidian13.ItemView {
         this.renderPendingSection(container, header, changes);
       }
       if (history.length > 0) {
-        this.renderHistorySection(container, history);
+        renderHistorySection(this.rows, container, history);
       }
     };
+  }
+  get rows() {
+    return { plugin: this.plugin, component: this };
   }
   getViewType() {
     return PENDING_CHANGES_VIEW_TYPE;
@@ -18570,47 +18799,15 @@ var PendingChangesView = class extends import_obsidian13.ItemView {
     const bulkRow = headerBar.createDiv({ cls: "terminus-pending-bulk-actions" });
     bulkRow.createEl("button", { text: "Reject all", cls: "terminus-btn-outline" }).addEventListener(
       "click",
-      () => void this.runBulkAction(false, changes, () => this.plugin.pendingChangesStore.resolveAll(false))
+      () => void runBulkAction(this.rows, false, changes, () => this.plugin.pendingChangesStore.resolveAll(false))
     );
     bulkRow.createEl("button", { text: "Keep all", cls: "terminus-btn-solid" }).addEventListener(
       "click",
-      () => void this.runBulkAction(true, changes, () => this.plugin.pendingChangesStore.resolveAll(true))
+      () => void runBulkAction(this.rows, true, changes, () => this.plugin.pendingChangesStore.resolveAll(true))
     );
     const groupsContainer = container.createDiv({ cls: "terminus-pending-groups" });
     for (const [panelLabel, groupChanges] of groups) {
       this.renderTerminalGroup(groupsContainer, panelLabel, groupChanges, statsById);
-    }
-  }
-  /** Shared by both the global and per-terminal Reject/Keep all buttons.
-   *  `scopeLabel` (a terminal's display name) is omitted for the global
-   *  buttons, which scopes the confirmation/error wording to "all" instead
-   *  of naming a specific terminal. Confirmation itself is opt-in (see
-   *  settings.confirmBulkActions) -- every bulk action is already
-   *  reversible via "Recently resolved", so it's off by default. A reject
-   *  that would undo another terminal's edits always asks, and that one
-   *  confirmation replaces the generic one. */
-  async runBulkAction(accepted, changes, action, scopeLabel) {
-    const count = changes.length;
-    if (!accepted && changes.some(hasCollision)) {
-      if (!await confirmCollisionReject(this.app, changes))
-        return;
-    } else if (this.plugin.settings.confirmBulkActions) {
-      const verb = accepted ? "Keep" : "Reject";
-      const scope = scopeLabel ? `${scopeLabel}'s` : "all";
-      const confirmed = await ConfirmModal.confirm(
-        this.app,
-        `${verb} ${scope} pending changes?`,
-        `This will ${accepted ? "keep" : "revert"} ${count} ${count === 1 ? "file" : "files"}${scopeLabel ? ` from ${scopeLabel}` : ""}.`,
-        verb
-      );
-      if (!confirmed)
-        return;
-    }
-    try {
-      await action();
-    } catch (err) {
-      const target = scopeLabel ? `${scopeLabel}'s changes` : "all changes";
-      new import_obsidian13.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage2(err)}`);
     }
   }
   renderTerminalGroup(container, panelLabel, changes, statsById) {
@@ -18645,19 +18842,19 @@ var PendingChangesView = class extends import_obsidian13.ItemView {
       "click",
       (e) => {
         e.stopPropagation();
-        void this.runBulkAction(false, changes, () => this.plugin.pendingChangesStore.resolveAll(false, inGroup), panelLabel);
+        void runBulkAction(this.rows, false, changes, () => this.plugin.pendingChangesStore.resolveAll(false, inGroup), panelLabel);
       }
     );
     groupBulk.createEl("button", { text: "Keep all", cls: "terminus-btn-ghost-accent" }).addEventListener(
       "click",
       (e) => {
         e.stopPropagation();
-        void this.runBulkAction(true, changes, () => this.plugin.pendingChangesStore.resolveAll(true, inGroup), panelLabel);
+        void runBulkAction(this.rows, true, changes, () => this.plugin.pendingChangesStore.resolveAll(true, inGroup), panelLabel);
       }
     );
     const list = group.createDiv({ cls: "terminus-pending-list" });
     for (const change of changes) {
-      this.renderRow(list, change, (_c2 = statsById.get(change.id)) != null ? _c2 : { added: 0, removed: 0 });
+      renderChangeRow(this.rows, list, change, (_c2 = statsById.get(change.id)) != null ? _c2 : { added: 0, removed: 0 });
     }
     let groupExpanded = true;
     groupHeader.addEventListener("click", () => {
@@ -18666,181 +18863,416 @@ var PendingChangesView = class extends import_obsidian13.ItemView {
       chevron.setText(groupExpanded ? "\u25BE" : "\u25B8");
     });
   }
-  renderRow(list, change, stats) {
-    const row = list.createDiv({ cls: "terminus-pending-row" });
-    const summary = row.createDiv({ cls: "terminus-pending-row-summary" });
-    const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "\u25B8" });
-    const info = summary.createDiv({ cls: "terminus-pending-info" });
-    const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-    nameRow.createSpan({ cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge19.pathBasename)(change.diff.filePath) });
-    nameRow.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
-    nameRow.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
-    if (change.editCount > 1) {
-      nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
+};
+
+// src/views/AgentInboxView.ts
+var import_obsidian15 = require("obsidian");
+var import_terminus_node_bridge21 = __toESM(require_dist());
+
+// src/state/inboxModel.ts
+var VISIBLE_FINISHED_SUBAGENTS = 3;
+function buildInbox(sessions, changes) {
+  var _a8, _b, _c2, _d, _e4;
+  const changesByToken = /* @__PURE__ */ new Map();
+  for (const change of changes) {
+    const owner = (_a8 = change.contributors[0]) == null ? void 0 : _a8.token;
+    if (!owner)
+      continue;
+    const list = (_b = changesByToken.get(owner)) != null ? _b : [];
+    list.push(change);
+    changesByToken.set(owner, list);
+  }
+  const sessionTokens = new Set(sessions.map((s15) => s15.token));
+  const cards = [];
+  for (const session of sessions) {
+    const cardChanges = (_c2 = changesByToken.get(session.token)) != null ? _c2 : [];
+    if (!session.running && cardChanges.length === 0)
+      continue;
+    cards.push(buildCard(session.token, session, cardChanges));
+  }
+  for (const [token, cardChanges] of changesByToken) {
+    if (!sessionTokens.has(token))
+      cards.push(buildCard(token, null, cardChanges));
+  }
+  const inbox = { needsYou: [], working: [], finished: [] };
+  for (const card of cards) {
+    if (!card.ended && ((_d = card.session) == null ? void 0 : _d.status) === "needs-you")
+      inbox.needsYou.push(card);
+    else if (!card.ended && ((_e4 = card.session) == null ? void 0 : _e4.status) === "working")
+      inbox.working.push(card);
+    else
+      inbox.finished.push(card);
+  }
+  inbox.finished.sort((a, b3) => finishedRank(a) - finishedRank(b3));
+  return inbox;
+}
+function finishedRank(card) {
+  var _a8;
+  if (card.ended)
+    return 2;
+  return ((_a8 = card.session) == null ? void 0 : _a8.status) === "finished-unread" ? 0 : 1;
+}
+function buildCard(token, session, changes) {
+  var _a8, _b, _c2, _d;
+  const leadChanges = [];
+  const byAgent = /* @__PURE__ */ new Map();
+  const runs = (_a8 = session == null ? void 0 : session.subagents) != null ? _a8 : [];
+  for (const change of changes) {
+    const author = change.agents.find((a) => a.token === token);
+    if (!(author == null ? void 0 : author.agentId)) {
+      leadChanges.push(change);
+      continue;
     }
-    const vaultName = (0, import_terminus_node_bridge19.pathBasename)(this.plugin.getVaultBasePath());
-    const relativePath = (0, import_terminus_node_bridge19.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
-    info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
-    const collision = collisionLabel(change);
-    if (collision) {
-      info.createDiv({ cls: "terminus-collision-warning", text: `\u26A0 ${collision}` });
+    let row = byAgent.get(author.agentId);
+    if (!row) {
+      const run = (_b = runs.find((r) => r.agentId === author.agentId)) != null ? _b : null;
+      row = { agentId: author.agentId, run, agentType: (_d = (_c2 = run == null ? void 0 : run.agentType) != null ? _c2 : author.agentType) != null ? _d : "subagent", changes: [] };
+      byAgent.set(author.agentId, row);
     }
-    if (change.brokenBacklinks.length > 0) {
-      const count = change.brokenBacklinks.length;
-      info.createDiv({
-        cls: "terminus-backlink-warning",
-        text: `\u26A0 may break ${count} incoming ${count === 1 ? "link" : "links"}`
-      });
+    row.changes.push(change);
+  }
+  const finishedQuiet = runs.filter((r) => !r.running && !byAgent.has(r.agentId));
+  const shownQuiet = new Set(finishedQuiet.slice(-VISIBLE_FINISHED_SUBAGENTS).map((r) => r.agentId));
+  const subagents = [];
+  for (const run of runs) {
+    const withChanges = byAgent.get(run.agentId);
+    if (withChanges)
+      subagents.push(withChanges);
+    else if (run.running || shownQuiet.has(run.agentId)) {
+      subagents.push({ agentId: run.agentId, run, agentType: run.agentType, changes: [] });
     }
-    const stop = (e, fn3) => {
-      e.stopPropagation();
-      fn3();
+  }
+  for (const row of byAgent.values())
+    if (!row.run)
+      subagents.push(row);
+  return {
+    token,
+    session,
+    ended: !session || !session.running,
+    changes,
+    leadChanges,
+    subagents,
+    hiddenSubagents: finishedQuiet.length - shownQuiet.size
+  };
+}
+
+// src/views/AgentInboxView.ts
+var AGENT_INBOX_VIEW_TYPE = "terminus-agent-inbox";
+var AgentInboxView = class extends import_obsidian15.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+    /** Per-view UI state, kept across re-renders. */
+    this.collapsedCards = /* @__PURE__ */ new Set();
+    this.finishedCollapsed = false;
+    this.render = () => {
+      const container = this.contentEl;
+      container.empty();
+      container.addClass("terminus-pending-view", "terminus-inbox-view");
+      const inbox = buildInbox(this.plugin.agentSessionStore.list(), this.plugin.pendingChangesStore.list());
+      const allChanges = this.plugin.pendingChangesStore.list();
+      this.renderHeader(container, inbox.needsYou.length, allChanges);
+      const body = container.createDiv({ cls: "terminus-inbox-body" });
+      const cardCount = inbox.needsYou.length + inbox.working.length + inbox.finished.length;
+      if (cardCount === 0) {
+        const empty = body.createDiv({ cls: "terminus-pending-empty terminus-inbox-empty" });
+        empty.appendText("No Claude sessions. Type ");
+        const command = "claude";
+        empty.createEl("code", { text: command });
+        empty.appendText(" in a terminal to start one.");
+      }
+      this.renderSection(body, "Needs you", inbox.needsYou);
+      this.renderSection(body, "Working", inbox.working);
+      if (inbox.finished.length > 0) {
+        const heading = this.renderSectionHeading(body, "Finished", inbox.finished.length, this.finishedCollapsed);
+        heading.addEventListener("click", () => {
+          this.finishedCollapsed = !this.finishedCollapsed;
+          this.render();
+        });
+        if (!this.finishedCollapsed)
+          for (const card of inbox.finished)
+            this.renderCard(body, card);
+      }
+      const history = this.plugin.pendingChangesStore.listHistory();
+      if (history.length > 0)
+        renderHistorySection(this.rows, body, history);
     };
-    const resolve = async (accepted) => {
-      if (!accepted && !await confirmCollisionReject(this.app, [change]))
-        return;
-      this.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err) => {
-        new import_obsidian13.Notice(
-          `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge19.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
-        );
-      });
-    };
-    const actions = summary.createDiv({ cls: "terminus-pending-row-actions" });
-    actions.createEl("button", { text: "Open", cls: "terminus-action-open" }).addEventListener(
-      "click",
-      (e) => stop(e, () => void openChangedFile(this.plugin, change))
-    );
-    if (change.payload.tool_name !== "NotebookEdit") {
-      actions.createEl("button", { text: "Split Diff", cls: "terminus-action-open terminus-action-split-diff" }).addEventListener(
-        "click",
-        (e) => stop(e, () => void openDiffSplitView(this.plugin, change.id))
+  }
+  get rows() {
+    return { plugin: this.plugin, component: this };
+  }
+  getViewType() {
+    return AGENT_INBOX_VIEW_TYPE;
+  }
+  getDisplayText() {
+    return "Agent inbox";
+  }
+  getIcon() {
+    return "inbox";
+  }
+  async onOpen() {
+    this.plugin.pendingChangesStore.on("change", this.render);
+    this.plugin.agentSessionStore.on("change", this.render);
+    this.render();
+  }
+  async onClose() {
+    this.plugin.pendingChangesStore.off("change", this.render);
+    this.plugin.agentSessionStore.off("change", this.render);
+  }
+  renderHeader(container, needsCount, allChanges) {
+    const header = container.createDiv({ cls: "terminus-inbox-header" });
+    header.createSpan({ cls: "terminus-inbox-title", text: "Agent inbox" });
+    const next = header.createEl("button", {
+      cls: "terminus-btn-outline",
+      text: needsCount > 0 ? `Next \u21E5 (${needsCount})` : "Next \u21E5",
+      attr: { "aria-label": "Jump to the next session that needs you" }
+    });
+    next.disabled = needsCount === 0;
+    next.addEventListener("click", () => void this.plugin.jumpToNextSessionNeedingYou());
+    const more = header.createEl("button", { cls: "terminus-btn-outline", text: "\u22EF", attr: { "aria-label": "More" } });
+    more.addEventListener("click", (evt) => {
+      const menu = new import_obsidian15.Menu();
+      const resolveEverything = (accepted) => void runBulkAction(this.rows, accepted, allChanges, () => this.plugin.pendingChangesStore.resolveAll(accepted));
+      menu.addItem(
+        (item) => item.setTitle("Keep all pending changes").setDisabled(allChanges.length === 0).onClick(() => resolveEverything(true))
       );
-    }
-    actions.createEl("button", { text: "\u2715", cls: "terminus-icon-btn terminus-icon-btn-reject", attr: { "aria-label": "Reject" } }).addEventListener("click", (e) => stop(e, () => void resolve(false)));
-    actions.createEl("button", { text: "\u2713", cls: "terminus-icon-btn terminus-icon-btn-accept", attr: { "aria-label": "Accept" } }).addEventListener("click", (e) => stop(e, () => void resolve(true)));
-    const body = row.createDiv({ cls: "terminus-pending-row-body" });
-    body.hide();
-    this.renderRowBody(body, change);
-    let expanded = false;
-    summary.addEventListener("click", () => {
-      expanded = !expanded;
-      body.toggle(expanded);
-      chevron.setText(expanded ? "\u25BE" : "\u25B8");
-      row.toggleClass("is-expanded", expanded);
-      summary.toggleClass("is-expanded", expanded);
+      menu.addItem(
+        (item) => item.setTitle("Reject all pending changes").setDisabled(allChanges.length === 0).onClick(() => resolveEverything(false))
+      );
+      menu.addSeparator();
+      menu.addItem(
+        (item) => item.setTitle("Open action log").onClick(() => new ActionLogModal(this.app, this.plugin.actionLog).open())
+      );
+      menu.showAtMouseEvent(evt);
     });
   }
-  /** Three views over the same change, switched lazily (only rendered on
-   *  first click, since Preview and Git are both more expensive than the
-   *  plain-text diff): Diff (default, word-level text diff since last
-   *  edit), Preview (renders the new content through Obsidian's own
-   *  markdown pipeline -- how the note actually looks, not just its raw
-   *  text), and "vs git HEAD" (an alternate, purely informational baseline
-   *  for vaults under version control -- has no bearing on accept/reject,
-   *  which always stays tied to the true pre-edit snapshot). */
-  renderRowBody(body, change) {
-    if (change.brokenBacklinks.length > 0) {
-      const warning = body.createDiv({ cls: "terminus-backlink-warning-detail" });
-      warning.createDiv({ text: "This edit removed a heading/block that other notes link to:" });
-      const list = warning.createEl("ul");
-      for (const link of change.brokenBacklinks) {
-        list.createEl("li", {
-          text: `${(0, import_terminus_node_bridge19.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
+  renderSection(body, label, cards) {
+    if (cards.length === 0)
+      return;
+    this.renderSectionHeading(body, label, cards.length, null);
+    for (const card of cards)
+      this.renderCard(body, card);
+  }
+  /** `collapsed` null for a section that can't collapse. */
+  renderSectionHeading(body, label, count, collapsed) {
+    const heading = body.createDiv({ cls: "terminus-inbox-section" });
+    if (collapsed !== null) {
+      heading.addClass("is-collapsible");
+      heading.createSpan({ cls: "terminus-inbox-section-chevron", text: collapsed ? "\u25B8" : "\u25BE" });
+    }
+    heading.createSpan({ text: `${label} \xB7 ${count}` });
+    return heading;
+  }
+  renderCard(body, card) {
+    var _a8, _b, _c2, _d;
+    const terminal = this.plugin.findTerminalView(card.token);
+    const firstChange = card.changes[0];
+    const name = (_b = (_a8 = terminal == null ? void 0 : terminal.getDisplayText()) != null ? _a8 : firstChange == null ? void 0 : firstChange.panelLabel) != null ? _b : "Closed terminal";
+    const color = terminal ? terminal.colorTag : (_c2 = firstChange == null ? void 0 : firstChange.panelColor) != null ? _c2 : null;
+    const session = card.session;
+    const needsYou = !card.ended && (session == null ? void 0 : session.status) === "needs-you";
+    const collapsed = this.collapsedCards.has(card.token);
+    const el2 = body.createDiv({ cls: "terminus-inbox-card" });
+    el2.toggleClass("is-needs-you", needsYou);
+    el2.toggleClass("is-ended", card.ended);
+    if (color) {
+      el2.addClass("terminus-group-colored");
+      el2.style.setProperty("--terminus-group-color", color);
+    }
+    const head = el2.createDiv({ cls: "terminus-inbox-card-head" });
+    head.createSpan({ cls: "terminus-inbox-card-name", text: name });
+    const pill = statusPill(card);
+    head.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label });
+    head.createSpan({ cls: "terminus-inbox-chevron", text: collapsed ? "\u25B8" : "\u25BE" });
+    head.addEventListener("click", () => {
+      if (collapsed)
+        this.collapsedCards.delete(card.token);
+      else
+        this.collapsedCards.add(card.token);
+      this.render();
+    });
+    const meta = el2.createDiv({ cls: "terminus-inbox-card-meta" });
+    if ((session == null ? void 0 : session.branch) && this.plugin.settings.multiAgent.showGitBranch) {
+      meta.createSpan({ cls: "terminus-inbox-branch", text: `\u2387 ${session.branch}`, attr: { title: "Git branch of this session's folder" } });
+    }
+    if ((session == null ? void 0 : session.lastTurnMs) != null && session.status !== "working") {
+      meta.createSpan({ text: `turn ${formatDuration(session.lastTurnMs)}` });
+    }
+    if (card.changes.length > 0) {
+      const { added, removed } = sumStats(card.changes);
+      meta.createSpan({ text: `${card.changes.length} pending` });
+      meta.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
+      meta.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
+    }
+    if (collapsed)
+      return;
+    if (needsYou && session) {
+      const banner = el2.createDiv({ cls: "terminus-inbox-banner" });
+      banner.createSpan({ text: `\u26A0 ${(_d = session.needsMessage) != null ? _d : needsFallback(session)}` });
+      if (terminal) {
+        banner.createEl("button", { cls: "terminus-btn-solid", text: "Answer in terminal" }).addEventListener(
+          "click",
+          () => void this.plugin.focusTerminal(card.token)
+        );
+      }
+    } else {
+      const quote = this.quoteFor(card);
+      if (quote)
+        el2.createDiv({ cls: "terminus-inbox-quote", text: quote, attr: { title: quote } });
+    }
+    if (card.leadChanges.length > 0 || card.subagents.length > 0) {
+      if (card.subagents.length > 0) {
+        const who = el2.createDiv({ cls: "terminus-inbox-who" });
+        who.createSpan({ cls: "terminus-inbox-who-label", text: "Lead" });
+        who.createSpan({ text: changeCount(card.leadChanges.length) });
+      }
+      this.renderChangeList(el2, card.leadChanges);
+      for (const sub of card.subagents)
+        this.renderSubagent(el2, sub);
+      if (card.hiddenSubagents > 0) {
+        el2.createDiv({
+          cls: "terminus-inbox-more",
+          text: `${card.hiddenSubagents} earlier ${card.hiddenSubagents === 1 ? "subagent" : "subagents"} finished`
         });
       }
     }
-    const toggleRow = body.createDiv({ cls: "terminus-body-view-toggle-row" });
-    const toggle = toggleRow.createDiv({ cls: "terminus-body-view-toggle" });
-    const diffBtn = toggle.createEl("button", { text: "Diff", cls: "is-active" });
-    const previewBtn = toggle.createEl("button", { text: "Preview" });
-    const gitBtn = toggle.createEl("button", { text: "vs git HEAD" });
-    const diffContainer = body.createDiv();
-    renderDiffBody(diffContainer, change.diff);
-    const previewContainer = body.createDiv({ cls: "terminus-preview-body" });
-    previewContainer.hide();
-    const gitContainer = body.createDiv();
-    gitContainer.hide();
-    const buttons = [diffBtn, previewBtn, gitBtn];
-    const containers = [diffContainer, previewContainer, gitContainer];
-    const activate = (index) => {
-      buttons.forEach((b3, i8) => b3.toggleClass("is-active", i8 === index));
-      containers.forEach((c, i8) => c.toggle(i8 === index));
-    };
-    let previewRendered = false;
-    let gitRendered = false;
-    diffBtn.addEventListener("click", () => activate(0));
-    previewBtn.addEventListener("click", () => {
-      activate(1);
-      if (previewRendered)
-        return;
-      previewRendered = true;
-      const relPath = (0, import_terminus_node_bridge19.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
-      void import_obsidian13.MarkdownRenderer.render(this.app, change.diff.newText, previewContainer, relPath, this);
-    });
-    gitBtn.addEventListener("click", () => {
-      activate(2);
-      if (gitRendered)
-        return;
-      gitRendered = true;
-      void this.renderGitDiff(gitContainer, change);
-    });
+    const foot = el2.createDiv({ cls: "terminus-inbox-card-foot" });
+    if (card.changes.length > 0) {
+      const ids = new Set(card.changes.map((c) => c.id));
+      const inCard = (change) => ids.has(change.id);
+      foot.createEl("button", { cls: "terminus-btn-ghost", text: "Reject all" }).addEventListener(
+        "click",
+        () => void runBulkAction(this.rows, false, card.changes, () => this.plugin.pendingChangesStore.resolveAll(false, inCard), name)
+      );
+      foot.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Keep all" }).addEventListener(
+        "click",
+        () => void runBulkAction(this.rows, true, card.changes, () => this.plugin.pendingChangesStore.resolveAll(true, inCard), name)
+      );
+    } else {
+      foot.createSpan({ cls: "terminus-inbox-foot-note", text: "No pending changes" });
+    }
+    foot.createDiv({ cls: "terminus-inbox-spacer" });
+    if (terminal) {
+      foot.createEl("button", { cls: "terminus-btn-ghost", text: "Open terminal" }).addEventListener(
+        "click",
+        () => void this.plugin.focusTerminal(card.token)
+      );
+    }
   }
-  async renderGitDiff(container, change) {
-    const headContent = await getGitHeadContent(this.plugin.getVaultBasePath(), change.diff.filePath);
-    container.empty();
-    if (headContent === null) {
-      container.createDiv({
-        cls: "terminus-pending-empty",
-        text: "Not tracked in git, or this vault isn't a git repository."
-      });
+  /** Two lines under the header: what Claude is doing, or what it said last. */
+  quoteFor(card) {
+    const session = card.session;
+    if (!session)
+      return null;
+    if (!card.ended && session.status === "working") {
+      if (!session.currentFile)
+        return "Working\u2026";
+      return `Editing ${(0, import_terminus_node_bridge21.pathRelative)(this.plugin.getVaultBasePath(), session.currentFile)}\u2026`;
+    }
+    return session.lastMessage === null ? null : plainPreview(session.lastMessage);
+  }
+  renderSubagent(el2, sub) {
+    var _a8, _b, _c2, _d;
+    const row = el2.createDiv({ cls: "terminus-inbox-subagent" });
+    const line = row.createDiv({ cls: "terminus-inbox-subagent-line" });
+    const running = (_b = (_a8 = sub.run) == null ? void 0 : _a8.running) != null ? _b : false;
+    line.createSpan({
+      cls: `terminus-inbox-subagent-mark ${running ? "is-running" : "is-done"}`,
+      text: running ? "\u25CF" : "\u2713",
+      attr: { "aria-label": running ? "Running" : "Finished" }
+    });
+    line.createSpan({ cls: "terminus-inbox-subagent-type", text: sub.agentType });
+    const description = (_c2 = sub.run) == null ? void 0 : _c2.description;
+    if (description)
+      line.createSpan({ cls: "terminus-inbox-subagent-desc", text: description, attr: { title: description } });
+    const details = row.createDiv({ cls: "terminus-inbox-subagent-details" });
+    const time = subagentTime(sub.run);
+    if (time)
+      details.createSpan({ text: time });
+    details.createSpan({ text: changeCount(sub.changes.length) });
+    if (((_d = sub.run) == null ? void 0 : _d.lastMessage) && !running) {
+      row.setAttr("title", sub.run.lastMessage);
+    }
+    if (sub.changes.length > 0) {
+      const nested = el2.createDiv({ cls: "terminus-inbox-subagent-changes" });
+      this.renderChangeList(nested, sub.changes);
+    }
+  }
+  renderChangeList(parent, changes) {
+    if (changes.length === 0)
       return;
-    }
-    renderDiffBody(container, {
-      filePath: change.diff.filePath,
-      oldText: headContent,
-      newText: change.diff.newText,
-      existedBefore: true,
-      revertText: headContent
-    });
-  }
-  renderHistorySection(container, history) {
-    const section = container.createDiv({ cls: "terminus-history-section" });
-    const summary = section.createDiv({ cls: "terminus-history-toggle" });
-    const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "\u25B8" });
-    summary.createSpan({ text: `Recently resolved (${history.length})` });
-    const list = section.createDiv({ cls: "terminus-history-list" });
-    list.hide();
-    for (const item of history) {
-      this.renderHistoryRow(list, item);
-    }
-    list.createEl("button", { text: "View full log\u2026", cls: "terminus-view-full-log" }).addEventListener(
-      "click",
-      () => new ActionLogModal(this.app, this.plugin.actionLog).open()
-    );
-    let expanded = false;
-    summary.addEventListener("click", () => {
-      expanded = !expanded;
-      list.toggle(expanded);
-      chevron.setText(expanded ? "\u25BE" : "\u25B8");
-    });
-  }
-  renderHistoryRow(list, item) {
-    const row = list.createDiv({ cls: "terminus-history-row" });
-    row.createSpan({
-      cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
-      text: item.accepted ? "Kept" : "Reverted"
-    });
-    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge19.pathBasename)(item.diff.filePath) });
-    row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
-      this.plugin.pendingChangesStore.undo(item.historyId).catch((err) => {
-        new import_obsidian13.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
-      });
-    });
+    const list = parent.createDiv({ cls: "terminus-pending-list" });
+    for (const change of changes)
+      renderChangeRow(this.rows, list, change, computeDiffStats(change.diff));
   }
 };
+function statusPill(card) {
+  const session = card.session;
+  if (card.ended || !session)
+    return { kind: "ended", label: "Session ended" };
+  switch (session.status) {
+    case "needs-you":
+      return { kind: "needs-you", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" ? "Waiting for you" : "Needs you" };
+    case "working":
+      return { kind: "working", label: "Working" };
+    case "finished-unread":
+      return { kind: "finished", label: "Finished" };
+    case "idle":
+      return { kind: "idle", label: "Idle" };
+  }
+}
+function plainPreview(markdown) {
+  let text = markdown.replace(/```[\s\S]*?```/g, " ").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^\s{0,3}(#{1,6}\s+|[-*+]\s+|\d+\.\s+|>\s?)/gm, "");
+  for (let previous = ""; previous !== text; ) {
+    previous = text;
+    text = text.replace(/(\*\*|\*|`)(\S(?:[^]*?\S)?)\1/g, "$2");
+  }
+  return text.replace(/\s+/g, " ").trim();
+}
+function needsFallback(session) {
+  if (session.needs === "permission")
+    return "Claude needs your permission.";
+  if (session.needs === "input")
+    return "Claude is waiting for your input.";
+  return "Claude needs you.";
+}
+function subagentTime(run) {
+  if (!run)
+    return null;
+  if (run.running)
+    return `started ${formatClock(run.startedAt)}`;
+  return run.endedAt === null ? null : formatDuration(run.endedAt - run.startedAt);
+}
+function changeCount(n) {
+  if (n === 0)
+    return "no changes";
+  return `${n} ${n === 1 ? "change" : "changes"}`;
+}
+function sumStats(changes) {
+  let added = 0;
+  let removed = 0;
+  for (const change of changes) {
+    const stats = computeDiffStats(change.diff);
+    added += stats.added;
+    removed += stats.removed;
+  }
+  return { added, removed };
+}
+function formatDuration(ms3) {
+  const seconds = Math.max(0, Math.round(ms3 / 1e3));
+  if (seconds < 60)
+    return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60)
+    return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+function formatClock(at3) {
+  return new Date(at3).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
 // src/state/PendingChangesStore.ts
-var import_terminus_node_bridge20 = __toESM(require_dist());
+var import_terminus_node_bridge22 = __toESM(require_dist());
 var MAX_HISTORY = 20;
 var PendingChangesStore = class extends TypedEmitter {
   constructor() {
@@ -18970,9 +19402,9 @@ var PendingChangesStore = class extends TypedEmitter {
     const newOldText = diff.oldText.slice(0, hunk.oldStart) + chosen + diff.oldText.slice(hunk.oldEnd);
     const newNewText = diff.newText.slice(0, hunk.newStart) + chosen + diff.newText.slice(hunk.newEnd);
     if (!diff.existedBefore && newOldText === "") {
-      await (0, import_terminus_node_bridge20.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge22.deleteFileIfExists)(diff.filePath);
     } else {
-      await (0, import_terminus_node_bridge20.writeTextFile)(diff.filePath, newOldText);
+      await (0, import_terminus_node_bridge22.writeTextFile)(diff.filePath, newOldText);
     }
     entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
     if (newOldText === newNewText) {
@@ -19016,18 +19448,18 @@ var PendingChangesStore = class extends TypedEmitter {
   }
   async applyOldState(diff) {
     if (!diff.existedBefore) {
-      await (0, import_terminus_node_bridge20.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge22.deleteFileIfExists)(diff.filePath);
       return;
     }
-    await (0, import_terminus_node_bridge20.writeTextFile)(diff.filePath, diff.revertText);
+    await (0, import_terminus_node_bridge22.writeTextFile)(diff.filePath, diff.revertText);
   }
   async applyNewState(diff) {
-    await (0, import_terminus_node_bridge20.writeTextFile)(diff.filePath, diff.newText);
+    await (0, import_terminus_node_bridge22.writeTextFile)(diff.filePath, diff.newText);
   }
 };
 
 // src/state/ActionLog.ts
-var import_terminus_node_bridge21 = __toESM(require_dist());
+var import_terminus_node_bridge23 = __toESM(require_dist());
 function isActionLogEntryArray(value) {
   return Array.isArray(value);
 }
@@ -19041,7 +19473,7 @@ var ActionLog = class {
   async load() {
     if (this.loaded)
       return;
-    const raw = await (0, import_terminus_node_bridge21.readTextFileIfExists)(this.logFilePath);
+    const raw = await (0, import_terminus_node_bridge23.readTextFileIfExists)(this.logFilePath);
     if (raw && raw.trim()) {
       const parsed = JSON.parse(raw);
       this.entries = isActionLogEntryArray(parsed) ? parsed : [];
@@ -19067,8 +19499,8 @@ var ActionLog = class {
     return result;
   }
   async persist() {
-    await (0, import_terminus_node_bridge21.makeDirRecursive)((0, import_terminus_node_bridge21.pathDirname)(this.logFilePath));
-    await (0, import_terminus_node_bridge21.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
+    await (0, import_terminus_node_bridge23.makeDirRecursive)((0, import_terminus_node_bridge23.pathDirname)(this.logFilePath));
+    await (0, import_terminus_node_bridge23.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
   }
 };
 
@@ -19101,14 +19533,14 @@ var AgentSessionStore = class extends TypedEmitter {
   /** UserPromptSubmit: a turn starts. */
   promptSubmitted(token, identity, at3 = Date.now()) {
     const s15 = this.ensure(token, identity);
-    this.update({ ...s15, status: "working", needs: null, turnStartedAt: at3, currentFile: null });
+    this.update({ ...s15, status: "working", needs: null, needsMessage: null, turnStartedAt: at3, currentFile: null });
   }
   /** PreToolUse on a file edit: Claude is working, so any permission prompt
    *  it was waiting on has been answered. */
   fileEdited(token, filePath, identity) {
     var _a8;
     const s15 = this.ensure(token, identity);
-    this.update({ ...s15, status: "working", needs: null, currentFile: filePath, turnStartedAt: (_a8 = s15.turnStartedAt) != null ? _a8 : Date.now() });
+    this.update({ ...s15, status: "working", needs: null, needsMessage: null, currentFile: filePath, turnStartedAt: (_a8 = s15.turnStartedAt) != null ? _a8 : Date.now() });
   }
   /** The lead called the Agent tool. SubagentStart doesn't carry the task
    *  description, so this is queued for the start it's about to cause. */
@@ -19175,6 +19607,7 @@ var AgentSessionStore = class extends TypedEmitter {
       ...s15,
       status: "finished-unread",
       needs: null,
+      needsMessage: null,
       currentFile: null,
       lastMessage: lastMessage === void 0 ? s15.lastMessage : truncate(lastMessage),
       lastTurnMs: s15.turnStartedAt === null ? s15.lastTurnMs : at3 - s15.turnStartedAt,
@@ -19182,9 +19615,18 @@ var AgentSessionStore = class extends TypedEmitter {
     });
   }
   /** Notification: Claude needs permission or is waiting on input. */
-  needsAttention(token, notificationType, identity) {
+  needsAttention(token, notificationType, message, identity) {
     const s15 = this.ensure(token, identity);
-    this.update({ ...s15, status: "needs-you", needs: needsKindOf(notificationType) });
+    if (notificationType === "idle_prompt" && s15.status !== "working")
+      return;
+    this.update({ ...s15, status: "needs-you", needs: needsKindOf(notificationType), needsMessage: (message == null ? void 0 : message.trim()) || null });
+  }
+  /** The git branch read for this session's folder; see AgentSession.branch. */
+  branchRead(token, branch) {
+    const s15 = this.sessions.get(token);
+    if (!s15 || s15.branch === branch)
+      return;
+    this.update({ ...s15, branch });
   }
   /** The user looked at the terminal: a finished turn counts as read. A
    *  session that needs you still does until Claude moves on. */
@@ -19206,6 +19648,7 @@ var AgentSessionStore = class extends TypedEmitter {
       running: false,
       status: "idle",
       needs: null,
+      needsMessage: null,
       currentFile: null,
       turnStartedAt: null,
       endedAt: at3,
@@ -19250,12 +19693,14 @@ var AgentSessionStore = class extends TypedEmitter {
       running: true,
       status: "idle",
       needs: null,
+      needsMessage: null,
       lastMessage: null,
       turnStartedAt: null,
       lastTurnMs: null,
       currentFile: null,
       transcriptPath: null,
       cwd: null,
+      branch: null,
       endedAt: null,
       subagents: []
     };
@@ -19309,7 +19754,7 @@ var ClosedTerminalBuffer = class {
 };
 
 // src/modals/RescueClosedTerminalModal.ts
-var import_obsidian14 = require("obsidian");
+var import_obsidian16 = require("obsidian");
 function formatRelativeTime(timestampMs) {
   const seconds = Math.max(0, Math.round((Date.now() - timestampMs) / 1e3));
   if (seconds < 60)
@@ -19320,7 +19765,7 @@ function formatRelativeTime(timestampMs) {
   const hours = Math.round(minutes / 60);
   return `${hours}h ago`;
 }
-var RescueClosedTerminalModal = class extends import_obsidian14.FuzzySuggestModal {
+var RescueClosedTerminalModal = class extends import_obsidian16.FuzzySuggestModal {
   constructor(app, entries, onChoose) {
     super(app);
     this.entries = entries;
@@ -19339,14 +19784,14 @@ var RescueClosedTerminalModal = class extends import_obsidian14.FuzzySuggestModa
 };
 
 // src/modals/GettingStartedModal.ts
-var import_obsidian17 = require("obsidian");
+var import_obsidian19 = require("obsidian");
 
 // src/onboarding/gettingStarted.ts
-var import_obsidian16 = require("obsidian");
+var import_obsidian18 = require("obsidian");
 
 // src/settings.ts
-var import_obsidian15 = require("obsidian");
-var import_terminus_node_bridge22 = __toESM(require_dist());
+var import_obsidian17 = require("obsidian");
+var import_terminus_node_bridge24 = __toESM(require_dist());
 
 // src/terminal/fontCatalog.ts
 var CANDIDATE_MONOSPACE_FONTS = [
@@ -19496,7 +19941,7 @@ var MIN_AUTO_REVEAL_DELAY_MS = 0;
 var MAX_AUTO_REVEAL_DELAY_MS = 5e3;
 var MIN_SCROLLBACK_LINES = 200;
 var MAX_SCROLLBACK_LINES = 5e4;
-var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
+var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -19507,7 +19952,7 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
   }
   /** Shared by both modes' sections: the setting itself is shared. */
   renderConfirmBulkActions(containerEl) {
-    new import_obsidian15.Setting(containerEl).setName("Confirm before bulk actions").setDesc(
+    new import_obsidian17.Setting(containerEl).setName("Confirm before bulk actions").setDesc(
       'Ask for confirmation before "Reject all" / "Keep all" (global or per-terminal). Off by default -- every bulk action is already reversible via the "Recently resolved" list.'
     ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.confirmBulkActions).onChange(async (value) => {
@@ -19518,7 +19963,7 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
   }
   /** Same slider for both modes, each writing its own value. */
   renderRevealDelay(containerEl, value, desc, save) {
-    new import_obsidian15.Setting(containerEl).setName("Reveal delay").setDesc(desc).addSlider(
+    new import_obsidian17.Setting(containerEl).setName("Reveal delay").setDesc(desc).addSlider(
       (slider) => slider.setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100).setValue(value).setDynamicTooltip().onChange(async (v3) => {
         save(v3);
         await this.plugin.saveSettings();
@@ -19527,8 +19972,8 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
   }
   renderClassicSection(containerEl) {
     const classic = this.plugin.settings.classic;
-    new import_obsidian15.Setting(containerEl).setName("Review").setHeading();
-    new import_obsidian15.Setting(containerEl).setName("Automatically reveal Pending Changes panel").setDesc(
+    new import_obsidian17.Setting(containerEl).setName("Review").setHeading();
+    new import_obsidian17.Setting(containerEl).setName("Automatically reveal Pending Changes panel").setDesc(
       "Bring the panel to front once Claude finishes a burst of edits, so a review is never sitting there unnoticed."
     ).addToggle(
       (toggle) => toggle.setValue(classic.autoRevealPendingChanges).onChange(async (value) => {
@@ -19549,8 +19994,8 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
   }
   renderMultiAgentSection(containerEl) {
     const multiAgent = this.plugin.settings.multiAgent;
-    new import_obsidian15.Setting(containerEl).setName("Agents and review").setHeading();
-    new import_obsidian15.Setting(containerEl).setName("Automatically reveal Agent inbox").setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs you.").addToggle(
+    new import_obsidian17.Setting(containerEl).setName("Agents and review").setHeading();
+    new import_obsidian17.Setting(containerEl).setName("Automatically reveal Agent inbox").setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs you.").addToggle(
       (toggle) => toggle.setValue(multiAgent.autoRevealInbox).onChange(async (value) => {
         multiAgent.autoRevealInbox = value;
         await this.plugin.saveSettings();
@@ -19566,14 +20011,14 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
       );
     }
     this.renderConfirmBulkActions(containerEl);
-    new import_obsidian15.Setting(containerEl).setName("Track subagents").setDesc(
+    new import_obsidian17.Setting(containerEl).setName("Track subagents").setDesc(
       "Show each subagent Claude starts as a row on its session's card, with the changes it made. Turning this off removes the subagent hooks from .claude/settings.local.json and credits every change to the main session."
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.trackSubagents).onChange(async (value) => {
         await this.plugin.setTrackSubagents(value);
       })
     );
-    new import_obsidian15.Setting(containerEl).setName("Show estimated cost").setDesc(
+    new import_obsidian17.Setting(containerEl).setName("Show estimated cost").setDesc(
       'Show an approximate cost ("\u2248 $0.42") from a built-in price table that is updated with each release. Off leaves tokens and context only.'
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.showEstimatedCost).onChange(async (value) => {
@@ -19581,7 +20026,7 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian15.Setting(containerEl).setName("Show git branch on cards").setDesc("When a session's folder is a git repository, show its current branch on the session's card.").addToggle(
+    new import_obsidian17.Setting(containerEl).setName("Show git branch on cards").setDesc("When a session's folder is a git repository, show its current branch on the session's card.").addToggle(
       (toggle) => toggle.setValue(multiAgent.showGitBranch).onChange(async (value) => {
         multiAgent.showGitBranch = value;
         await this.plugin.saveSettings();
@@ -19592,7 +20037,7 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     if (MULTI_AGENT_AVAILABLE) {
-      new import_obsidian15.Setting(containerEl).setName("Experience").setDesc(
+      new import_obsidian17.Setting(containerEl).setName("Experience").setDesc(
         "Classic reviews every terminal's changes in one Pending Changes panel. Multi-agent adds an Agent inbox with a card per Claude session, and groups for your terminals. Each keeps its own review settings below; the rest are shared."
       ).addDropdown(
         (dropdown) => dropdown.addOptions(EXPERIENCE_LABELS).setValue(this.plugin.settings.experience).onChange(async (value) => {
@@ -19601,7 +20046,7 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
         })
       );
     }
-    new import_obsidian15.Setting(containerEl).setName("New terminal placement").setDesc(
+    new import_obsidian17.Setting(containerEl).setName("New terminal placement").setDesc(
       'Where the ribbon icon and "Open Terminus" command open a new terminal. "Always ask" shows a quick menu at the click; any other choice opens directly there every time.'
     ).addDropdown(
       (dropdown) => dropdown.addOptions(TERMINAL_PLACEMENT_LABELS).setValue(this.plugin.settings.terminalPlacement).onChange(async (value) => {
@@ -19609,8 +20054,8 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian15.Setting(containerEl).setName("Terminal appearance").setHeading();
-    new import_obsidian15.Setting(containerEl).setName("Terminal font size").setDesc(
+    new import_obsidian17.Setting(containerEl).setName("Terminal appearance").setHeading();
+    new import_obsidian17.Setting(containerEl).setName("Terminal font size").setDesc(
       `Applies to all open terminal panels. Also adjustable via the "Increase/Decrease terminal font size" commands (${MIN_FONT_SIZE}-${MAX_FONT_SIZE}px).`
     ).addSlider(
       (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
@@ -19618,40 +20063,40 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
       })
     );
     this.displayFontFamilySetting(containerEl);
-    new import_obsidian15.Setting(containerEl).setName("Cursor style").addDropdown(
+    new import_obsidian17.Setting(containerEl).setName("Cursor style").addDropdown(
       (dropdown) => dropdown.addOptions(CURSOR_STYLE_LABELS).setValue(this.plugin.settings.cursorStyle).onChange(async (value) => {
         await this.plugin.setCursorStyle(value);
       })
     );
-    new import_obsidian15.Setting(containerEl).setName("Cursor blink").addToggle(
+    new import_obsidian17.Setting(containerEl).setName("Cursor blink").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.cursorBlink).onChange(async (value) => {
         await this.plugin.setCursorBlink(value);
       })
     );
-    new import_obsidian15.Setting(containerEl).setName("Scrollback").setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`).addSlider(
+    new import_obsidian17.Setting(containerEl).setName("Scrollback").setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`).addSlider(
       (slider) => slider.setLimits(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, 100).setValue(this.plugin.settings.scrollbackLines).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.scrollbackLines = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian15.Setting(containerEl).setName("Auto theme").setDesc("Terminal colors follow Obsidian's light/dark toggle. Turn off to use xterm.js's own default palette instead.").addToggle(
+    new import_obsidian17.Setting(containerEl).setName("Auto theme").setDesc("Terminal colors follow Obsidian's light/dark toggle. Turn off to use xterm.js's own default palette instead.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoThemeTerminal).onChange(async (value) => {
         await this.plugin.setAutoThemeTerminal(value);
       })
     );
-    new import_obsidian15.Setting(containerEl).setName("Startup command").setDesc('Runs automatically in every new terminal once the shell is ready (e.g. "claude"). Leave blank for none.').addText(
+    new import_obsidian17.Setting(containerEl).setName("Startup command").setDesc('Runs automatically in every new terminal once the shell is ready (e.g. "claude"). Leave blank for none.').addText(
       (text) => text.setPlaceholder("e.g. claude").setValue(this.plugin.settings.startupCommand).onChange(async (value) => {
         this.plugin.settings.startupCommand = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian15.Setting(containerEl).setName("Wiki-link autocomplete format").setDesc('Format inserted when picking a note after typing "[[" in a terminal.').addDropdown(
+    new import_obsidian17.Setting(containerEl).setName("Wiki-link autocomplete format").setDesc('Format inserted when picking a note after typing "[[" in a terminal.').addDropdown(
       (dropdown) => dropdown.addOptions(WIKI_LINK_INSERT_FORMAT_LABELS).setValue(this.plugin.settings.wikiLinkInsertFormat).onChange(async (value) => {
         this.plugin.settings.wikiLinkInsertFormat = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian15.Setting(containerEl).setName("Ribbon icon").setDesc(`Any Lucide icon name (e.g. "square-terminal", "terminal"). Invalid names fall back to Obsidian's default icon silently.`).addText(
+    new import_obsidian17.Setting(containerEl).setName("Ribbon icon").setDesc(`Any Lucide icon name (e.g. "square-terminal", "terminal"). Invalid names fall back to Obsidian's default icon silently.`).addText(
       (text) => text.setPlaceholder("square-terminal").setValue(this.plugin.settings.ribbonIcon).onChange(async (value) => {
         await this.plugin.setRibbonIcon(value.trim() || DEFAULT_SETTINGS.ribbonIcon);
       })
@@ -19661,16 +20106,16 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
     } else {
       this.renderClassicSection(containerEl);
     }
-    new import_obsidian15.Setting(containerEl).setName("Advanced").setHeading();
-    new import_obsidian15.Setting(containerEl).setName("Shell binary override").setDesc(
-      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge22.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
+    new import_obsidian17.Setting(containerEl).setName("Advanced").setHeading();
+    new import_obsidian17.Setting(containerEl).setName("Shell binary override").setDesc(
+      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge24.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
     ).addText(
       (text) => text.setPlaceholder("e.g. /bin/zsh").setValue(this.plugin.settings.shellBinOverride).onChange(async (value) => {
         this.plugin.settings.shellBinOverride = value.trim();
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian15.Setting(containerEl).setName("Python 3 binary override").setDesc(
+    new import_obsidian17.Setting(containerEl).setName("Python 3 binary override").setDesc(
       "Leave blank to auto-detect. Only needed if the plugin can't find python3 on its own (used to allocate the terminal's pseudo-terminal)."
     ).addText(
       (text) => text.setPlaceholder("e.g. /usr/local/bin/python3").setValue(this.plugin.settings.python3BinOverride).onChange(async (value) => {
@@ -19688,7 +20133,7 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
    *  need a full `display()` re-render, which would drop input focus. */
   displayClaudeAuthTokenSetting(containerEl) {
     let statusEl;
-    const setting = new import_obsidian15.Setting(containerEl).setName("Claude Code auth token").setDesc(
+    const setting = new import_obsidian17.Setting(containerEl).setName("Claude Code auth token").setDesc(
       `Only needed for "Explain this" / "Suggest a fix" on failed commands, and only if those hang or fail outright -- some machines can't read Claude Code's normal Keychain-based login from a spawned background process. Run "claude setup-token" in a real terminal and paste the result here. Leave blank to keep using your regular Claude Code login. Stored as plain text in this vault's plugin data, same as any other API key field.`
     ).addText((text) => {
       text.inputEl.type = "password";
@@ -19738,7 +20183,7 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
     for (const font of availableFonts)
       options[font] = font;
     options[CUSTOM_FONT_VALUE] = "Custom\u2026";
-    new import_obsidian15.Setting(containerEl).setName("Font family").setDesc(
+    new import_obsidian17.Setting(containerEl).setName("Font family").setDesc(
       "Monospace fonts detected on this system. Applies to all open terminal panels. Proportional fonts aren't listed -- a terminal aligns text to a fixed character grid, which only a monospace font can sit in evenly."
     ).addDropdown(
       (dropdown) => dropdown.addOptions(options).setValue(isCustom ? CUSTOM_FONT_VALUE : current).onChange(async (value) => {
@@ -19754,7 +20199,7 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
     );
     if (!isCustom)
       return;
-    const customSetting = new import_obsidian15.Setting(containerEl).setName("Custom font family").setDesc("Any font installed on this system, by its exact name.");
+    const customSetting = new import_obsidian17.Setting(containerEl).setName("Custom font family").setDesc("Any font installed on this system, by its exact name.");
     const warningEl = customSetting.descEl.createDiv({ cls: "terminus-setting-warning" });
     const refreshWarning = (value) => {
       warningEl.setText(this.describeCustomFontProblem(value));
@@ -19785,7 +20230,7 @@ var TerminusSettingTab = class extends import_obsidian15.PluginSettingTab {
 
 // src/onboarding/gettingStarted.ts
 function keys() {
-  const mac = import_obsidian16.Platform.isMacOS;
+  const mac = import_obsidian18.Platform.isMacOS;
   return {
     mod: mac ? "Cmd" : "Ctrl",
     alt: mac ? "Opt" : "Alt",
@@ -19904,7 +20349,7 @@ Reopen this any time with the **Terminus: Getting started** command.`;
 }
 
 // src/modals/GettingStartedModal.ts
-var GettingStartedModal = class extends import_obsidian17.Modal {
+var GettingStartedModal = class extends import_obsidian19.Modal {
   constructor(app, full) {
     super(app);
     this.full = full;
@@ -19912,7 +20357,7 @@ var GettingStartedModal = class extends import_obsidian17.Modal {
      *  embeds, internal-link hover) to a parent whose lifecycle it inherits.
      *  Modal isn't a Component, so this owns them and is unloaded on close --
      *  without it those children would leak past the modal. */
-    this.renderHost = new import_obsidian17.Component();
+    this.renderHost = new import_obsidian19.Component();
   }
   /** Short version, shown once on first load. */
   static openWelcome(app) {
@@ -19929,7 +20374,7 @@ var GettingStartedModal = class extends import_obsidian17.Modal {
     contentEl.createEl("h2", { text: this.full ? "Terminus \u2014 getting started" : "Welcome to Terminus" });
     const body = contentEl.createDiv({ cls: "terminus-getting-started-body" });
     const markdown = this.full ? buildGettingStartedMarkdown() : buildWelcomeMarkdown();
-    void import_obsidian17.MarkdownRenderer.render(this.app, markdown, body, "", this.renderHost);
+    void import_obsidian19.MarkdownRenderer.render(this.app, markdown, body, "", this.renderHost);
     const actions = contentEl.createDiv({ cls: "terminus-getting-started-actions" });
     if (!this.full) {
       actions.createEl("button", { text: "Full guide" }).addEventListener("click", () => {
@@ -19946,8 +20391,8 @@ var GettingStartedModal = class extends import_obsidian17.Modal {
 };
 
 // src/modals/MultiAgentInviteModal.ts
-var import_obsidian18 = require("obsidian");
-var MultiAgentInviteModal = class extends import_obsidian18.Modal {
+var import_obsidian20 = require("obsidian");
+var MultiAgentInviteModal = class extends import_obsidian20.Modal {
   constructor() {
     super(...arguments);
     this.resolvePromise = null;
@@ -19988,7 +20433,7 @@ var MultiAgentInviteModal = class extends import_obsidian18.Modal {
 };
 
 // src/main.ts
-var TerminusPlugin = class extends import_obsidian19.Plugin {
+var TerminusPlugin = class extends import_obsidian21.Plugin {
   constructor() {
     super(...arguments);
     this.reviewServer = new ReviewServer();
@@ -20007,7 +20452,7 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     await this.loadSettings();
     this.addSettingTab(new TerminusSettingTab(this.app, this));
     await provisionResources(this.getPluginDir());
-    this.actionLog = new ActionLog((0, import_terminus_node_bridge23.pathJoin)(this.getPluginDir(), "action-log.json"));
+    this.actionLog = new ActionLog((0, import_terminus_node_bridge25.pathJoin)(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.pendingChangesStore.on("resolved", (item) => {
       const stats = computeDiffStats(item.diff);
@@ -20030,7 +20475,7 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
       this.revealPendingChangesTimer = window.setTimeout(() => {
         this.revealPendingChangesTimer = null;
         if (reveal.enabled)
-          void this.revealPendingChangesView();
+          void this.revealReviewView();
         if (this.shouldInviteToMultiAgent())
           void this.showMultiAgentInvite();
       }, reveal.delayMs);
@@ -20041,6 +20486,7 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     this.registerView(TERMINUS_VIEW_TYPE, (leaf) => new TerminalView(leaf, this));
     this.registerView(PENDING_CHANGES_VIEW_TYPE, (leaf) => new PendingChangesView(leaf, this));
     this.registerView(DIFF_SPLIT_VIEW_TYPE, (leaf) => new DiffSplitView(leaf, this));
+    this.registerView(AGENT_INBOX_VIEW_TYPE, (leaf) => new AgentInboxView(leaf, this));
     this.ribbonIconEl = this.addRibbonIcon(this.settings.ribbonIcon, "Open Terminus", (evt) => {
       void this.openTerminal(evt);
     });
@@ -20059,7 +20505,35 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     this.addCommand({
       id: "open-pending-changes",
       name: "Open Pending Changes",
-      callback: () => void this.revealPendingChangesView()
+      checkCallback: (checking) => {
+        if (this.experience !== "classic")
+          return false;
+        if (!checking)
+          void this.revealReviewView();
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "open-agent-inbox",
+      name: "Open agent inbox",
+      checkCallback: (checking) => {
+        if (this.experience !== "multi-agent")
+          return false;
+        if (!checking)
+          void this.revealReviewView();
+        return true;
+      }
+    });
+    this.addCommand({
+      id: "next-session-needing-you",
+      name: "Jump to next session that needs you",
+      checkCallback: (checking) => {
+        if (this.experience !== "multi-agent")
+          return false;
+        if (!checking)
+          void this.jumpToNextSessionNeedingYou();
+        return true;
+      }
     });
     this.addCommand({
       id: "increase-terminal-font-size",
@@ -20120,7 +20594,7 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
       }
     });
     this.app.workspace.onLayoutReady(() => {
-      void this.revealPendingChangesView();
+      void this.revealReviewView();
       void this.showWelcomeIfFirstRun();
     });
   }
@@ -20166,6 +20640,20 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     this.settings.experience = experience;
     await this.saveSettings();
     await this.provisionHooks();
+    await this.swapReviewView();
+  }
+  /** Each experience has its own review view: closes the other one's
+   *  leaves and opens this one's in their place, so the sidebar shows the
+   *  view the experience calls for. Pending changes live in the store, so
+   *  nothing is lost either way. */
+  async swapReviewView() {
+    const stale = this.experience === "multi-agent" ? PENDING_CHANGES_VIEW_TYPE : AGENT_INBOX_VIEW_TYPE;
+    const [first, ...rest] = this.app.workspace.getLeavesOfType(stale);
+    if (!first)
+      return;
+    for (const leaf of rest)
+      leaf.detach();
+    await first.setViewState({ type: this.reviewViewType, active: false });
   }
   /** Writes this experience's hooks into the vault's
    *  .claude/settings.local.json; see provisionClaudeSettings. */
@@ -20174,13 +20662,13 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
       await provisionClaudeSettings(this.app, this.manifest, { experience: this.experience, trackSubagents: this.tracksSubagents });
     } catch (err) {
       console.error("Terminus: failed to provision .claude/settings.local.json", err);
-      new import_obsidian19.Notice(
+      new import_obsidian21.Notice(
         "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
       );
     }
   }
-  /** The active mode's auto-reveal settings. Until the Agent inbox exists,
-   *  Multi-agent's reveal brings up Pending Changes like Classic's does. */
+  /** The active mode's auto-reveal settings: Classic reveals Pending
+   *  Changes, Multi-agent the Agent inbox. */
   autoRevealSettings() {
     if (this.experience === "multi-agent") {
       const { autoRevealInbox, autoRevealDelayMs: autoRevealDelayMs2 } = this.settings.multiAgent;
@@ -20205,7 +20693,7 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     await this.saveSettings();
     if (await MultiAgentInviteModal.ask(this.app)) {
       await this.setExperience("multi-agent");
-      new import_obsidian19.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
+      new import_obsidian21.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
     }
   }
   async saveSettings() {
@@ -20246,7 +20734,7 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     this.settings.ribbonIcon = iconName;
     await this.saveSettings();
     if (this.ribbonIconEl)
-      (0, import_obsidian19.setIcon)(this.ribbonIconEl, iconName);
+      (0, import_obsidian21.setIcon)(this.ribbonIconEl, iconName);
   }
   forEachTerminalView(fn3) {
     for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
@@ -20255,14 +20743,14 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     }
   }
   /** Same confirm-before-bulk-actions gate as the panel's own Reject/Keep
-   *  all buttons (see PendingChangesView.runBulkAction) -- these command-
+   *  all buttons (see changeRows.ts's runBulkAction) -- these command-
    *  palette/hotkey entries are just as consequential, so they shouldn't
    *  bypass the setting just because they're triggered a different way. */
   async runBulkPendingChangesCommand(accepted) {
     const changes = this.pendingChangesStore.list();
     const count = changes.length;
     if (count === 0) {
-      new import_obsidian19.Notice("Terminus: no pending changes");
+      new import_obsidian21.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && changes.some(hasCollision)) {
@@ -20282,22 +20770,22 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     try {
       await this.pendingChangesStore.resolveAll(accepted);
     } catch (err) {
-      new import_obsidian19.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
+      new import_obsidian21.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
     }
   }
   async resolveOldestPendingChange(accepted) {
     const oldest = this.pendingChangesStore.list()[0];
     if (!oldest) {
-      new import_obsidian19.Notice("Terminus: no pending changes");
+      new import_obsidian21.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && !await confirmCollisionReject(this.app, [oldest]))
       return;
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian19.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge23.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian21.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge25.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian19.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge23.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian21.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge25.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -20326,17 +20814,63 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     return getHookBridgePath(this.app, this.manifest);
   }
   getPluginDir() {
-    return (0, import_terminus_node_bridge23.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return (0, import_terminus_node_bridge25.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
-  async revealPendingChangesView() {
+  /** Pending Changes in Classic, the Agent inbox in Multi-agent. */
+  get reviewViewType() {
+    return this.experience === "multi-agent" ? AGENT_INBOX_VIEW_TYPE : PENDING_CHANGES_VIEW_TYPE;
+  }
+  /** Reveals the active experience's review view, opening it in the right
+   *  sidebar if it isn't open. */
+  async revealReviewView() {
     var _a8, _b;
     const { workspace } = this.app;
-    let leaf = (_a8 = workspace.getLeavesOfType(PENDING_CHANGES_VIEW_TYPE)[0]) != null ? _a8 : null;
+    const type = this.reviewViewType;
+    let leaf = (_a8 = workspace.getLeavesOfType(type)[0]) != null ? _a8 : null;
     if (!leaf) {
       leaf = (_b = workspace.getRightLeaf(false)) != null ? _b : workspace.getLeaf("tab");
-      await leaf.setViewState({ type: PENDING_CHANGES_VIEW_TYPE, active: true });
+      await leaf.setViewState({ type, active: true });
     }
     await workspace.revealLeaf(leaf);
+  }
+  /** Re-renders open Agent inboxes for changes the stores don't see, such
+   *  as a terminal being renamed or recoloured. */
+  refreshAgentInbox() {
+    for (const leaf of this.app.workspace.getLeavesOfType(AGENT_INBOX_VIEW_TYPE)) {
+      if (leaf.view instanceof AgentInboxView)
+        leaf.view.render();
+    }
+  }
+  findTerminalView(token) {
+    for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
+      if (leaf.view instanceof TerminalView && leaf.view.hookToken === token)
+        return leaf.view;
+    }
+    return null;
+  }
+  /** Brings a terminal to the front and gives it the keyboard (its own
+   *  active-leaf-change handler focuses xterm and marks the session seen). */
+  async focusTerminal(token) {
+    const view = this.findTerminalView(token);
+    if (!view)
+      return;
+    await this.app.workspace.revealLeaf(view.leaf);
+    this.app.workspace.setActiveLeaf(view.leaf, { focus: true });
+  }
+  /** Cycles through running sessions that need you, in inbox order,
+   *  starting after the terminal that's active now. */
+  async jumpToNextSessionNeedingYou() {
+    var _a8;
+    const waiting = this.agentSessionStore.list().filter((s15) => s15.running && s15.status === "needs-you" && this.findTerminalView(s15.token));
+    if (waiting.length === 0) {
+      new import_obsidian21.Notice("Terminus: no session needs you");
+      return;
+    }
+    const active = (_a8 = this.app.workspace.getActiveViewOfType(TerminalView)) == null ? void 0 : _a8.hookToken;
+    const index = waiting.findIndex((s15) => s15.token === active);
+    const next = waiting[(index + 1) % waiting.length];
+    if (next)
+      await this.focusTerminal(next.token);
   }
   /** Ribbon clicks always carry a MouseEvent to anchor a placement menu to;
    *  a command-palette/hotkey invocation doesn't, so "Always ask" falls
@@ -20351,7 +20885,7 @@ var TerminusPlugin = class extends import_obsidian19.Plugin {
     await this.openTerminalAt(placement === "ask" ? "tab" : placement);
   }
   showTerminalPlacementMenu(evt) {
-    const menu = new import_obsidian19.Menu();
+    const menu = new import_obsidian21.Menu();
     for (const placement of TERMINAL_OPEN_PLACEMENTS) {
       menu.addItem(
         (item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => void this.openTerminalAt(placement))

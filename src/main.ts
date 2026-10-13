@@ -8,6 +8,7 @@ import { resolveClaudeBin } from "./claude/headlessAssist";
 import { TERMINUS_VIEW_TYPE, TerminalView } from "./views/TerminalView";
 import { PENDING_CHANGES_VIEW_TYPE, PendingChangesView } from "./views/PendingChangesView";
 import { DIFF_SPLIT_VIEW_TYPE, DiffSplitView } from "./views/DiffSplitView";
+import { AGENT_INBOX_VIEW_TYPE, AgentInboxView } from "./views/AgentInboxView";
 import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore";
 import { ActionLog } from "./state/ActionLog";
 import { AgentSessionStore } from "./state/AgentSessionStore";
@@ -91,7 +92,7 @@ export default class TerminusPlugin extends Plugin {
       if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
       this.revealPendingChangesTimer = window.setTimeout(() => {
         this.revealPendingChangesTimer = null;
-        if (reveal.enabled) void this.revealPendingChangesView();
+        if (reveal.enabled) void this.revealReviewView();
         if (this.shouldInviteToMultiAgent()) void this.showMultiAgentInvite();
       }, reveal.delayMs);
     });
@@ -105,6 +106,7 @@ export default class TerminusPlugin extends Plugin {
     this.registerView(TERMINUS_VIEW_TYPE, (leaf) => new TerminalView(leaf, this));
     this.registerView(PENDING_CHANGES_VIEW_TYPE, (leaf) => new PendingChangesView(leaf, this));
     this.registerView(DIFF_SPLIT_VIEW_TYPE, (leaf) => new DiffSplitView(leaf, this));
+    this.registerView(AGENT_INBOX_VIEW_TYPE, (leaf) => new AgentInboxView(leaf, this));
 
     this.ribbonIconEl = this.addRibbonIcon(this.settings.ribbonIcon, "Open Terminus", (evt) => {
       void this.openTerminal(evt);
@@ -123,10 +125,33 @@ export default class TerminusPlugin extends Plugin {
       });
     }
 
+    // Each experience offers only its own review view.
     this.addCommand({
       id: "open-pending-changes",
       name: "Open Pending Changes",
-      callback: () => void this.revealPendingChangesView(),
+      checkCallback: (checking) => {
+        if (this.experience !== "classic") return false;
+        if (!checking) void this.revealReviewView();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "open-agent-inbox",
+      name: "Open agent inbox",
+      checkCallback: (checking) => {
+        if (this.experience !== "multi-agent") return false;
+        if (!checking) void this.revealReviewView();
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "next-session-needing-you",
+      name: "Jump to next session that needs you",
+      checkCallback: (checking) => {
+        if (this.experience !== "multi-agent") return false;
+        if (!checking) void this.jumpToNextSessionNeedingYou();
+        return true;
+      },
     });
 
     this.addCommand({
@@ -195,7 +220,7 @@ export default class TerminusPlugin extends Plugin {
     // revealed reactively once Claude's first change lands) if the user
     // goes looking for it.
     this.app.workspace.onLayoutReady(() => {
-      void this.revealPendingChangesView();
+      void this.revealReviewView();
       void this.showWelcomeIfFirstRun();
     });
   }
@@ -247,6 +272,20 @@ export default class TerminusPlugin extends Plugin {
     // when a session starts, so sessions already running keep the set they
     // started with.
     await this.provisionHooks();
+    await this.swapReviewView();
+  }
+
+  /** Each experience has its own review view: closes the other one's
+   *  leaves and opens this one's in their place, so the sidebar shows the
+   *  view the experience calls for. Pending changes live in the store, so
+   *  nothing is lost either way. */
+  private async swapReviewView(): Promise<void> {
+    const stale = this.experience === "multi-agent" ? PENDING_CHANGES_VIEW_TYPE : AGENT_INBOX_VIEW_TYPE;
+    const [first, ...rest] = this.app.workspace.getLeavesOfType(stale);
+    if (!first) return;
+    for (const leaf of rest) leaf.detach();
+    // Reuses the leaf so the new view lands where the old one was.
+    await first.setViewState({ type: this.reviewViewType, active: false });
   }
 
   /** Writes this experience's hooks into the vault's
@@ -262,8 +301,8 @@ export default class TerminusPlugin extends Plugin {
     }
   }
 
-  /** The active mode's auto-reveal settings. Until the Agent inbox exists,
-   *  Multi-agent's reveal brings up Pending Changes like Classic's does. */
+  /** The active mode's auto-reveal settings: Classic reveals Pending
+   *  Changes, Multi-agent the Agent inbox. */
   private autoRevealSettings(): { enabled: boolean; delayMs: number } {
     if (this.experience === "multi-agent") {
       const { autoRevealInbox, autoRevealDelayMs } = this.settings.multiAgent;
@@ -349,7 +388,7 @@ export default class TerminusPlugin extends Plugin {
   }
 
   /** Same confirm-before-bulk-actions gate as the panel's own Reject/Keep
-   *  all buttons (see PendingChangesView.runBulkAction) -- these command-
+   *  all buttons (see changeRows.ts's runBulkAction) -- these command-
    *  palette/hotkey entries are just as consequential, so they shouldn't
    *  bypass the setting just because they're triggered a different way. */
   private async runBulkPendingChangesCommand(accepted: boolean): Promise<void> {
@@ -424,14 +463,62 @@ export default class TerminusPlugin extends Plugin {
     return pathJoin(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
 
-  async revealPendingChangesView(): Promise<void> {
+  /** Pending Changes in Classic, the Agent inbox in Multi-agent. */
+  private get reviewViewType(): string {
+    return this.experience === "multi-agent" ? AGENT_INBOX_VIEW_TYPE : PENDING_CHANGES_VIEW_TYPE;
+  }
+
+  /** Reveals the active experience's review view, opening it in the right
+   *  sidebar if it isn't open. */
+  async revealReviewView(): Promise<void> {
     const { workspace } = this.app;
-    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(PENDING_CHANGES_VIEW_TYPE)[0] ?? null;
+    const type = this.reviewViewType;
+    let leaf: WorkspaceLeaf | null = workspace.getLeavesOfType(type)[0] ?? null;
     if (!leaf) {
       leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf("tab");
-      await leaf.setViewState({ type: PENDING_CHANGES_VIEW_TYPE, active: true });
+      await leaf.setViewState({ type, active: true });
     }
     await workspace.revealLeaf(leaf);
+  }
+
+  /** Re-renders open Agent inboxes for changes the stores don't see, such
+   *  as a terminal being renamed or recoloured. */
+  refreshAgentInbox(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(AGENT_INBOX_VIEW_TYPE)) {
+      if (leaf.view instanceof AgentInboxView) leaf.view.render();
+    }
+  }
+
+  findTerminalView(token: string): TerminalView | null {
+    for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
+      if (leaf.view instanceof TerminalView && leaf.view.hookToken === token) return leaf.view;
+    }
+    return null;
+  }
+
+  /** Brings a terminal to the front and gives it the keyboard (its own
+   *  active-leaf-change handler focuses xterm and marks the session seen). */
+  async focusTerminal(token: string): Promise<void> {
+    const view = this.findTerminalView(token);
+    if (!view) return;
+    await this.app.workspace.revealLeaf(view.leaf);
+    this.app.workspace.setActiveLeaf(view.leaf, { focus: true });
+  }
+
+  /** Cycles through running sessions that need you, in inbox order,
+   *  starting after the terminal that's active now. */
+  async jumpToNextSessionNeedingYou(): Promise<void> {
+    const waiting = this.agentSessionStore
+      .list()
+      .filter((s) => s.running && s.status === "needs-you" && this.findTerminalView(s.token));
+    if (waiting.length === 0) {
+      new Notice("Terminus: no session needs you");
+      return;
+    }
+    const active = this.app.workspace.getActiveViewOfType(TerminalView)?.hookToken;
+    const index = waiting.findIndex((s) => s.token === active);
+    const next = waiting[(index + 1) % waiting.length];
+    if (next) await this.focusTerminal(next.token);
   }
 
   /** Ribbon clicks always carry a MouseEvent to anchor a placement menu to;

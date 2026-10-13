@@ -46,7 +46,8 @@ export type PreToolUseHookPayload =
 
 // Session-level hook payloads. SessionStart, SessionEnd, UserPromptSubmit
 // and Stop were captured from a real `claude` 2.1.296 run; Notification
-// fires only interactively and wasn't captured, so its fields beyond the
+// fires only interactively; an idle_prompt one was captured from a live
+// 2.1.296 session (message + notification_type), and its fields beyond the
 // common ones are optional and taken from Claude Code's hook docs.
 
 interface SessionHookPayloadBase {

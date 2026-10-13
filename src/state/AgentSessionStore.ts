@@ -21,6 +21,9 @@ export interface AgentSession {
   status: AgentStatus;
   /** Set only while `status` is `needs-you`, and only when the payload said which. */
   needs: NeedsKind | null;
+  /** What Claude asked for ("Claude needs your permission to use Bash"),
+   *  while `status` is `needs-you` and the payload carried one. */
+  needsMessage: string | null;
   /** Claude's closing message from the last turn, truncated. */
   lastMessage: string | null;
   turnStartedAt: number | null;
@@ -30,6 +33,9 @@ export interface AgentSession {
   currentFile: string | null;
   transcriptPath: string | null;
   cwd: string | null;
+  /** The git branch of `cwd`, read at SessionStart and on Stop. Null outside
+   *  a repo, with git missing, or before the first read. */
+  branch: string | null;
   endedAt: number | null;
   /** Subagents this session started, oldest first. Empty unless subagents
    *  are tracked (Multi-agent, "Track subagents" on). */
@@ -110,14 +116,14 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
   /** UserPromptSubmit: a turn starts. */
   promptSubmitted(token: string, identity: SessionIdentity, at = Date.now()): void {
     const s = this.ensure(token, identity);
-    this.update({ ...s, status: "working", needs: null, turnStartedAt: at, currentFile: null });
+    this.update({ ...s, status: "working", needs: null, needsMessage: null, turnStartedAt: at, currentFile: null });
   }
 
   /** PreToolUse on a file edit: Claude is working, so any permission prompt
    *  it was waiting on has been answered. */
   fileEdited(token: string, filePath: string, identity: SessionIdentity): void {
     const s = this.ensure(token, identity);
-    this.update({ ...s, status: "working", needs: null, currentFile: filePath, turnStartedAt: s.turnStartedAt ?? Date.now() });
+    this.update({ ...s, status: "working", needs: null, needsMessage: null, currentFile: filePath, turnStartedAt: s.turnStartedAt ?? Date.now() });
   }
 
   /** The lead called the Agent tool. SubagentStart doesn't carry the task
@@ -194,6 +200,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       ...s,
       status: "finished-unread",
       needs: null,
+      needsMessage: null,
       currentFile: null,
       lastMessage: lastMessage === undefined ? s.lastMessage : truncate(lastMessage),
       lastTurnMs: s.turnStartedAt === null ? s.lastTurnMs : at - s.turnStartedAt,
@@ -202,9 +209,21 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
   }
 
   /** Notification: Claude needs permission or is waiting on input. */
-  needsAttention(token: string, notificationType: string | undefined, identity: SessionIdentity): void {
+  needsAttention(token: string, notificationType: string | undefined, message: string | undefined, identity: SessionIdentity): void {
     const s = this.ensure(token, identity);
-    this.update({ ...s, status: "needs-you", needs: needsKindOf(notificationType) });
+    // Claude Code sends idle_prompt about a minute after every finished turn
+    // (seen in a live 2.1.296 session). After a Stop that's no news: the
+    // card already says Finished, and moving every finished session into
+    // Needs you would empty the Finished section.
+    if (notificationType === "idle_prompt" && s.status !== "working") return;
+    this.update({ ...s, status: "needs-you", needs: needsKindOf(notificationType), needsMessage: message?.trim() || null });
+  }
+
+  /** The git branch read for this session's folder; see AgentSession.branch. */
+  branchRead(token: string, branch: string | null): void {
+    const s = this.sessions.get(token);
+    if (!s || s.branch === branch) return;
+    this.update({ ...s, branch });
   }
 
   /** The user looked at the terminal: a finished turn counts as read. A
@@ -226,6 +245,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       running: false,
       status: "idle",
       needs: null,
+      needsMessage: null,
       currentFile: null,
       turnStartedAt: null,
       endedAt: at,
@@ -273,12 +293,14 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       running: true,
       status: "idle",
       needs: null,
+      needsMessage: null,
       lastMessage: null,
       turnStartedAt: null,
       lastTurnMs: null,
       currentFile: null,
       transcriptPath: null,
       cwd: null,
+      branch: null,
       endedAt: null,
       subagents: [],
     };
