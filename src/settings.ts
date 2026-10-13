@@ -68,6 +68,9 @@ export interface MultiAgentSettings {
   trackSubagents: boolean;
   showEstimatedCost: boolean;
   showGitBranch: boolean;
+  /** Asks GitHub for the latest release (the sidebar's update link). Off by
+   *  default: with it off, Terminus makes no network requests at all. */
+  checkForUpdates: boolean;
 }
 
 export interface TerminusSettings {
@@ -113,6 +116,7 @@ export const DEFAULT_MULTI_AGENT_SETTINGS: MultiAgentSettings = {
   trackSubagents: true,
   showEstimatedCost: true,
   showGitBranch: true,
+  checkForUpdates: false,
 };
 
 export const DEFAULT_SETTINGS: TerminusSettings = {
@@ -307,6 +311,17 @@ export class TerminusSettingTab extends PluginSettingTab {
           multiAgent.showGitBranch = value;
           await this.plugin.saveSettings();
           this.plugin.refreshTerminusViews();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Check for updates")
+      .setDesc(
+        "Ask GitHub for the latest release at startup and twice a day, and show an update link next to the version in the sidebar. While this is off, the plugin makes no network requests."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(multiAgent.checkForUpdates).onChange(async (value) => {
+          await this.plugin.setCheckForUpdates(value);
         })
       );
   }

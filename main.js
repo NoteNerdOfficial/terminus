@@ -20010,7 +20010,8 @@ var TerminusSidebarView = class extends import_obsidian17.ItemView {
     });
   }
   /** "v1.0.36", or "v1.0.36 · Update" as an accent link when GitHub has a
-   *  newer release; opens Terminus in Community plugins either way. */
+   *  newer release (only with "Check for updates" on); opens Terminus in
+   *  Community plugins either way. */
   renderVersion(parent) {
     const status = this.plugin.pluginVersionStatus();
     const outdated = status.state === "outdated";
@@ -20025,7 +20026,7 @@ var TerminusSidebarView = class extends import_obsidian17.ItemView {
     });
     (0, import_obsidian17.setTooltip)(
       link,
-      outdated ? `Version ${status.latest} is available. Open Community plugins to update.` : status.state === "current" ? "You're on the latest version." : "Check Community plugins for updates."
+      outdated ? `Version ${status.latest} is available. Open Community plugins to update.` : status.state === "current" ? "You're on the latest version." : this.plugin.settings.multiAgent.checkForUpdates ? "Check Community plugins for updates." : "Update checks are off (Settings \u2192 Terminus). Open Community plugins to check."
     );
   }
   renderGroup(list, group, members) {
@@ -21498,7 +21499,8 @@ var DEFAULT_MULTI_AGENT_SETTINGS = {
   autoRevealDelayMs: 800,
   trackSubagents: true,
   showEstimatedCost: true,
-  showGitBranch: true
+  showGitBranch: true,
+  checkForUpdates: false
 };
 var DEFAULT_SETTINGS = {
   experience: "classic",
@@ -21635,6 +21637,13 @@ var TerminusSettingTab = class extends import_obsidian20.PluginSettingTab {
         multiAgent.showGitBranch = value;
         await this.plugin.saveSettings();
         this.plugin.refreshTerminusViews();
+      })
+    );
+    new import_obsidian20.Setting(containerEl).setName("Check for updates").setDesc(
+      "Ask GitHub for the latest release at startup and twice a day, and show an update link next to the version in the sidebar. While this is off, the plugin makes no network requests."
+    ).addToggle(
+      (toggle) => toggle.setValue(multiAgent.checkForUpdates).onChange(async (value) => {
+        await this.plugin.setCheckForUpdates(value);
       })
     );
   }
@@ -22423,10 +22432,11 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
     return versionStatus(this.manifest.version, this.latestPluginVersion);
   }
   /** One request to GitHub's releases API (the README's "Network use").
-   *  Only in Multi-agent, whose sidebar is the only place it shows. A
-   *  failed check keeps the last result. */
+   *  Only when "Check for updates" is on (off by default) and in
+   *  Multi-agent, whose sidebar is the only place it shows. A failed check
+   *  keeps the last result. */
   async checkPluginVersion() {
-    if (this.experience !== "multi-agent")
+    if (this.experience !== "multi-agent" || !this.settings.multiAgent.checkForUpdates)
       return;
     const latest = await fetchLatestPluginVersion();
     if (latest && latest !== this.latestPluginVersion) {
@@ -22509,6 +22519,18 @@ var TerminusPlugin = class extends import_obsidian24.Plugin {
         ids.add(id);
     });
     return ids;
+  }
+  /** Turning it on checks at once; turning it off forgets the result, so
+   *  the sidebar goes back to the plain version. */
+  async setCheckForUpdates(check) {
+    this.settings.multiAgent.checkForUpdates = check;
+    await this.saveSettings();
+    if (check) {
+      await this.checkPluginVersion();
+    } else {
+      this.latestPluginVersion = null;
+      this.refreshTerminusViews();
+    }
   }
   setGroupColor(groupId, color) {
     this.groupStore.setColor(groupId, color);

@@ -448,10 +448,11 @@ export default class TerminusPlugin extends Plugin {
   }
 
   /** One request to GitHub's releases API (the README's "Network use").
-   *  Only in Multi-agent, whose sidebar is the only place it shows. A
-   *  failed check keeps the last result. */
+   *  Only when "Check for updates" is on (off by default) and in
+   *  Multi-agent, whose sidebar is the only place it shows. A failed check
+   *  keeps the last result. */
   private async checkPluginVersion(): Promise<void> {
-    if (this.experience !== "multi-agent") return;
+    if (this.experience !== "multi-agent" || !this.settings.multiAgent.checkForUpdates) return;
     const latest = await fetchLatestPluginVersion();
     if (latest && latest !== this.latestPluginVersion) {
       this.latestPluginVersion = latest;
@@ -534,6 +535,19 @@ export default class TerminusPlugin extends Plugin {
       if (id) ids.add(id);
     });
     return ids;
+  }
+
+  /** Turning it on checks at once; turning it off forgets the result, so
+   *  the sidebar goes back to the plain version. */
+  async setCheckForUpdates(check: boolean): Promise<void> {
+    this.settings.multiAgent.checkForUpdates = check;
+    await this.saveSettings();
+    if (check) {
+      await this.checkPluginVersion();
+    } else {
+      this.latestPluginVersion = null;
+      this.refreshTerminusViews();
+    }
   }
 
   setGroupColor(groupId: string, color: string): void {

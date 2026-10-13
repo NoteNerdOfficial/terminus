@@ -138,7 +138,8 @@ export class TerminusSidebarView extends ItemView {
   }
 
   /** "v1.0.36", or "v1.0.36 · Update" as an accent link when GitHub has a
-   *  newer release; opens Terminus in Community plugins either way. */
+   *  newer release (only with "Check for updates" on); opens Terminus in
+   *  Community plugins either way. */
   private renderVersion(parent: HTMLElement): void {
     const status = this.plugin.pluginVersionStatus();
     const outdated = status.state === "outdated";
@@ -157,7 +158,9 @@ export class TerminusSidebarView extends ItemView {
         ? `Version ${status.latest} is available. Open Community plugins to update.`
         : status.state === "current"
           ? "You're on the latest version."
-          : "Check Community plugins for updates."
+          : this.plugin.settings.multiAgent.checkForUpdates
+            ? "Check Community plugins for updates."
+            : "Update checks are off (Settings → Terminus). Open Community plugins to check."
     );
   }
 
