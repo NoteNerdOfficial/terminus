@@ -2,6 +2,7 @@ import { ItemView, Menu, setIcon, setTooltip, TFile, WorkspaceLeaf } from "obsid
 import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { TerminalView } from "./TerminalView";
 import { plainPreview } from "./AgentInboxView";
+import type { OpenPlacement } from "../util/leafPlacement";
 import { guardRenderDuringPress } from "./renderGuard";
 import { iconButton, iconLabel, makeActivatable } from "./uiHelpers";
 import type { TerminalGroup } from "../state/GroupStore";
@@ -195,11 +196,13 @@ export class TerminusSidebarView extends ItemView {
     };
     // Opens where the "Terminal placement" setting says, asking with the
     // ribbon's menu when it's "Always ask".
-    plusButton("Terminal", "New ungrouped terminal").addEventListener("click", (evt) => {
-      void this.plugin.choosePlacement(evt).then((placement) => {
-        if (placement) void this.plugin.groups.newTerminal(null, true, undefined, placement);
-      });
-    });
+    const open = (placement: OpenPlacement) => void this.plugin.groups.newTerminal(null, true, undefined, placement);
+    plusButton("Terminal", "New ungrouped terminal").addEventListener("click", (evt) => this.plugin.choosePlacement(evt, open));
+    // The same, but always asking, for a one-off placement that leaves the
+    // setting alone.
+    iconButton(actions, "chevron-down", "Open a terminal in a new tab, split or window", (evt) => this.plugin.askPlacement(evt, open)).addClass(
+      "terminus-sidebar-plus-more"
+    );
     plusButton("Group", "New group, with a new terminal in it").addEventListener("click", () => {
       void this.plugin.groups.createGroup().then((group) => this.startRename(group.id));
     });

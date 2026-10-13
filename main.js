@@ -21071,12 +21071,11 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
       (0, import_obsidian21.setTooltip)(button, tooltip);
       return button;
     };
-    plusButton("Terminal", "New ungrouped terminal").addEventListener("click", (evt) => {
-      void this.plugin.choosePlacement(evt).then((placement) => {
-        if (placement)
-          void this.plugin.groups.newTerminal(null, true, void 0, placement);
-      });
-    });
+    const open = (placement) => void this.plugin.groups.newTerminal(null, true, void 0, placement);
+    plusButton("Terminal", "New ungrouped terminal").addEventListener("click", (evt) => this.plugin.choosePlacement(evt, open));
+    iconButton(actions, "chevron-down", "Open a terminal in a new tab, split or window", (evt) => this.plugin.askPlacement(evt, open)).addClass(
+      "terminus-sidebar-plus-more"
+    );
     plusButton("Group", "New group, with a new terminal in it").addEventListener("click", () => {
       void this.plugin.groups.createGroup().then((group) => this.startRename(group.id));
     });
@@ -23790,12 +23789,12 @@ var TerminusPlugin = class extends import_obsidian28.Plugin {
     this.groups.register();
     this.registerInterval(window.setInterval(() => void this.checkPluginVersion(), 12 * 60 * 60 * 1e3));
     this.ribbonIconEl = this.addRibbonIcon(this.settings.ribbonIcon, "Open Terminus", (evt) => {
-      void this.openTerminal(evt);
+      this.openTerminal(evt);
     });
     this.addCommand({
       id: "open",
       name: "Open",
-      callback: () => void this.openTerminal()
+      callback: () => this.openTerminal()
     });
     for (const placement of TERMINAL_OPEN_PLACEMENTS) {
       this.addCommand({
@@ -24394,47 +24393,36 @@ var TerminusPlugin = class extends import_obsidian28.Plugin {
     if (next)
       await this.focusTerminal(next.token);
   }
-  /** The placement for a new terminal: the setting, or, when it's "Always
-   *  ask", the user's pick from a menu at `evt` (null if they dismiss it).
-   *  Ribbon clicks always carry a MouseEvent to anchor the menu to; a
-   *  command-palette/hotkey invocation doesn't, so "Always ask" falls back
-   *  to a plain new tab there rather than showing a menu with no sensible
-   *  place to appear. `allowWindow` false is for terminals that belong to a
-   *  group, whose tabs are shown and hidden with it: a new window then
-   *  becomes a tab. */
-  choosePlacement(evt, allowWindow = true) {
+  /** Calls `onPick` with the placement for a new terminal: the setting, or,
+   *  when it's "Always ask", the user's pick from a menu at `evt` (nothing
+   *  happens if they dismiss it). Ribbon clicks always carry a MouseEvent to
+   *  anchor the menu to; a command-palette/hotkey invocation doesn't, so
+   *  "Always ask" falls back to a plain new tab there rather than showing a
+   *  menu with no sensible place to appear. `allowWindow` false is for
+   *  terminals that belong to a group, whose tabs are shown and hidden with
+   *  it: a new window then becomes a tab. */
+  choosePlacement(evt, onPick, allowWindow = true) {
     const setting = this.settings.terminalPlacement;
     const allowed = TERMINAL_OPEN_PLACEMENTS.filter((p2) => allowWindow || p2 !== "window");
     if (setting !== "ask")
-      return Promise.resolve(allowed.includes(setting) ? setting : "tab");
-    if (!evt)
-      return Promise.resolve("tab");
-    return this.askPlacement(evt, allowed);
+      onPick(allowed.includes(setting) ? setting : "tab");
+    else if (evt)
+      this.askPlacement(evt, onPick, allowed);
+    else
+      onPick("tab");
   }
-  /** The placement menu, anchored at `evt`; resolves null when dismissed. */
-  askPlacement(evt, allowed = TERMINAL_OPEN_PLACEMENTS) {
-    return new Promise((resolve) => {
-      const menu = new import_obsidian28.Menu();
-      let picked = false;
-      for (const placement of allowed) {
-        menu.addItem(
-          (item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => {
-            picked = true;
-            resolve(placement);
-          })
-        );
-      }
-      menu.onHide(() => {
-        if (!picked)
-          resolve(null);
-      });
-      menu.showAtMouseEvent(evt);
-    });
+  /** The placement menu, anchored at `evt`. A callback rather than a
+   *  promise: Obsidian hides the menu before it runs an item's click, so
+   *  "dismissed" can't be told apart from "picked" by the hide event. */
+  askPlacement(evt, onPick, allowed = TERMINAL_OPEN_PLACEMENTS) {
+    const menu = new import_obsidian28.Menu();
+    for (const placement of allowed) {
+      menu.addItem((item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => onPick(placement)));
+    }
+    menu.showAtMouseEvent(evt);
   }
-  async openTerminal(evt) {
-    const placement = await this.choosePlacement(evt);
-    if (placement)
-      await this.openTerminalAt(placement);
+  openTerminal(evt) {
+    this.choosePlacement(evt, (placement) => void this.openTerminalAt(placement));
   }
   /** Always opens a NEW terminal -- multiple concurrent terminals (each
    *  running their own `claude` session) are supported; the hook/review

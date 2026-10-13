@@ -163,13 +163,13 @@ export default class TerminusPlugin extends Plugin {
     this.registerInterval(window.setInterval(() => void this.checkPluginVersion(), 12 * 60 * 60 * 1000));
 
     this.ribbonIconEl = this.addRibbonIcon(this.settings.ribbonIcon, "Open Terminus", (evt) => {
-      void this.openTerminal(evt);
+      this.openTerminal(evt);
     });
 
     this.addCommand({
       id: "open",
       name: "Open",
-      callback: () => void this.openTerminal(),
+      callback: () => this.openTerminal(),
     });
     for (const placement of TERMINAL_OPEN_PLACEMENTS) {
       this.addCommand({
@@ -786,45 +786,35 @@ export default class TerminusPlugin extends Plugin {
     if (next) await this.focusTerminal(next.token);
   }
 
-  /** The placement for a new terminal: the setting, or, when it's "Always
-   *  ask", the user's pick from a menu at `evt` (null if they dismiss it).
-   *  Ribbon clicks always carry a MouseEvent to anchor the menu to; a
-   *  command-palette/hotkey invocation doesn't, so "Always ask" falls back
-   *  to a plain new tab there rather than showing a menu with no sensible
-   *  place to appear. `allowWindow` false is for terminals that belong to a
-   *  group, whose tabs are shown and hidden with it: a new window then
-   *  becomes a tab. */
-  choosePlacement(evt?: MouseEvent, allowWindow = true): Promise<OpenPlacement | null> {
+  /** Calls `onPick` with the placement for a new terminal: the setting, or,
+   *  when it's "Always ask", the user's pick from a menu at `evt` (nothing
+   *  happens if they dismiss it). Ribbon clicks always carry a MouseEvent to
+   *  anchor the menu to; a command-palette/hotkey invocation doesn't, so
+   *  "Always ask" falls back to a plain new tab there rather than showing a
+   *  menu with no sensible place to appear. `allowWindow` false is for
+   *  terminals that belong to a group, whose tabs are shown and hidden with
+   *  it: a new window then becomes a tab. */
+  choosePlacement(evt: MouseEvent | undefined, onPick: (placement: OpenPlacement) => void, allowWindow = true): void {
     const setting = this.settings.terminalPlacement;
     const allowed = TERMINAL_OPEN_PLACEMENTS.filter((p) => allowWindow || p !== "window");
-    if (setting !== "ask") return Promise.resolve(allowed.includes(setting) ? setting : "tab");
-    if (!evt) return Promise.resolve("tab");
-    return this.askPlacement(evt, allowed);
+    if (setting !== "ask") onPick(allowed.includes(setting) ? setting : "tab");
+    else if (evt) this.askPlacement(evt, onPick, allowed);
+    else onPick("tab");
   }
 
-  /** The placement menu, anchored at `evt`; resolves null when dismissed. */
-  askPlacement(evt: MouseEvent, allowed: OpenPlacement[] = TERMINAL_OPEN_PLACEMENTS): Promise<OpenPlacement | null> {
-    return new Promise((resolve) => {
-      const menu = new Menu();
-      let picked = false;
-      for (const placement of allowed) {
-        menu.addItem((item) =>
-          item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => {
-            picked = true;
-            resolve(placement);
-          })
-        );
-      }
-      menu.onHide(() => {
-        if (!picked) resolve(null);
-      });
-      menu.showAtMouseEvent(evt);
-    });
+  /** The placement menu, anchored at `evt`. A callback rather than a
+   *  promise: Obsidian hides the menu before it runs an item's click, so
+   *  "dismissed" can't be told apart from "picked" by the hide event. */
+  askPlacement(evt: MouseEvent, onPick: (placement: OpenPlacement) => void, allowed: OpenPlacement[] = TERMINAL_OPEN_PLACEMENTS): void {
+    const menu = new Menu();
+    for (const placement of allowed) {
+      menu.addItem((item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => onPick(placement)));
+    }
+    menu.showAtMouseEvent(evt);
   }
 
-  private async openTerminal(evt?: MouseEvent): Promise<void> {
-    const placement = await this.choosePlacement(evt);
-    if (placement) await this.openTerminalAt(placement);
+  private openTerminal(evt?: MouseEvent): void {
+    this.choosePlacement(evt, (placement) => void this.openTerminalAt(placement));
   }
 
   /** Always opens a NEW terminal -- multiple concurrent terminals (each
