@@ -39,6 +39,9 @@ export interface AgentSession {
   currentFile: string | null;
   transcriptPath: string | null;
   cwd: string | null;
+  /** The last turn ended in an error (StopFailure) rather than a Stop;
+   *  lastMessage then holds the error. */
+  lastTurnFailed: boolean;
   /** The git branch of `cwd`, read at SessionStart and on Stop. Null outside
    *  a repo, with git missing, or before the first read. */
   branch: string | null;
@@ -59,10 +62,34 @@ export interface SubagentRun {
    *  couldn't be matched to the lead's Agent call; show the type instead. */
   description: string | null;
   running: boolean;
+  /** How it ended; null while running. */
+  outcome: SubagentOutcome | null;
+  /** The readable error, for a failed run. */
+  error: string | null;
+  /** Listed in a background_tasks list at some point: only a run known to
+   *  be in the background can be judged stopped by its absence from one. */
+  seenInBackground: boolean;
   startedAt: number;
   endedAt: number | null;
   lastMessage: string | null;
   transcriptPath: string | null;
+}
+
+/**
+ * - `done`: SubagentStop.
+ * - `failed`: StopFailure with its agent_id (an API error, captured from
+ *   2.1.296); no SubagentStop follows.
+ * - `stopped`: it dropped out of the running background tasks with neither
+ *   of those, as a subagent the lead stops with TaskStop does (no hook
+ *   reports that), or its session ended.
+ */
+export type SubagentOutcome = "done" | "failed" | "stopped";
+
+/** A background task as Stop and SubagentStop list them. */
+export interface ReportedBackgroundTask {
+  id: string;
+  type: string;
+  description?: string;
 }
 
 /** The lead's Agent tool call, waiting for the SubagentStart it causes. */
@@ -153,6 +180,9 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       agentType,
       description: this.takeLaunch(token, agentType)?.description ?? null,
       running: true,
+      outcome: null,
+      error: null,
+      seenInBackground: false,
       startedAt: at,
       endedAt: null,
       lastMessage: null,
@@ -161,23 +191,40 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
     this.update({ ...s, subagents: capSubagents([...s.subagents, run]) });
   }
 
-  /** SubagentStop. Its background_tasks list the stopping subagent with its
-   *  description, which settles any guess made at the start. */
-  subagentStopped(
+  /** SubagentStop (`done`) or a subagent's StopFailure (`failed`). A
+   *  SubagentStop's background_tasks list the stopping subagent with its
+   *  description, which settles any guess made at the start. An end that
+   *  arrives after the run was judged stopped (see backgroundTasksReported)
+   *  overrides that judgement. */
+  subagentEnded(
     token: string,
-    stop: { agentId: string; agentType: string; lastMessage?: string; transcriptPath?: string; description?: string },
+    end: {
+      agentId: string;
+      agentType: string;
+      outcome: "done" | "failed";
+      lastMessage?: string;
+      error?: string;
+      transcriptPath?: string;
+      description?: string;
+    },
     identity: SessionIdentity,
     at = Date.now()
   ): void {
     const s = this.ensure(token, identity);
-    const existing = s.subagents.find((run) => run.agentId === stop.agentId);
+    const existing = s.subagents.find((run) => run.agentId === end.agentId);
+    // Claude Code's internal helpers send a SubagentStop with no type and no
+    // start; they aren't subagents anyone started.
+    if (!existing && !end.agentType.trim()) return;
     // A stop with no start on record: the start landed before Terminus
     // loaded, or the hooks were installed mid-run.
     const base: SubagentRun = existing ?? {
-      agentId: stop.agentId,
-      agentType: stop.agentType,
+      agentId: end.agentId,
+      agentType: end.agentType,
       description: null,
       running: true,
+      outcome: null,
+      error: null,
+      seenInBackground: false,
       startedAt: at,
       endedAt: null,
       lastMessage: null,
@@ -185,18 +232,54 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
     };
     const run: SubagentRun = {
       ...base,
-      description: stop.description?.trim() || base.description,
+      description: end.description?.trim() || base.description,
       running: false,
-      endedAt: at,
-      lastMessage: stop.lastMessage === undefined ? base.lastMessage : truncate(stop.lastMessage),
-      transcriptPath: stop.transcriptPath ?? base.transcriptPath,
+      outcome: end.outcome,
+      error: end.outcome === "failed" ? truncate(end.error || end.lastMessage || "Failed") : null,
+      endedAt: base.running || base.endedAt === null ? at : base.endedAt,
+      lastMessage: end.lastMessage === undefined ? base.lastMessage : truncate(end.lastMessage),
+      transcriptPath: end.transcriptPath ?? base.transcriptPath,
     };
     const subagents = existing ? s.subagents.map((r) => (r === existing ? run : r)) : capSubagents([...s.subagents, run]);
     this.update({ ...s, subagents });
   }
 
+  /**
+   * Stop and SubagentStop list the background tasks still running. A
+   * subagent stopped by the lead (TaskStop) sends no hook of its own, so a
+   * running subagent missing from a list is judged stopped -- from any list
+   * if it was listed before, and from Stop's even if not: the lead waits for
+   * a foreground subagent, so at Stop every running one is a background
+   * one. Undefined `tasks` (a bridge that sent no body) tells nothing.
+   */
+  backgroundTasksReported(token: string, tasks: ReportedBackgroundTask[] | undefined, atTurnEnd: boolean, at = Date.now()): void {
+    if (!tasks) return;
+    const s = this.sessions.get(token);
+    if (!s || s.subagents.length === 0) return;
+    const listed = new Map(tasks.filter((t) => t.type === "subagent").map((t) => [t.id, t]));
+    let changed = false;
+    const subagents = s.subagents.map((run) => {
+      const task = listed.get(run.agentId);
+      if (task) {
+        const description = run.description ?? (task.description?.trim() || null);
+        if (run.seenInBackground && description === run.description) return run;
+        changed = true;
+        return { ...run, seenInBackground: true, description };
+      }
+      if (!run.running || !(atTurnEnd || run.seenInBackground)) return run;
+      changed = true;
+      return { ...run, running: false, outcome: "stopped" as const, endedAt: at };
+    });
+    if (changed) this.update({ ...s, subagents });
+  }
+
+  /** The lead's StopFailure: the turn ended in an error, with no Stop. */
+  turnFailed(token: string, error: string | undefined, identity: SessionIdentity, at = Date.now()): void {
+    this.turnEnded(token, error ?? "The turn ended with an error.", identity, at, true);
+  }
+
   /** Stop: the turn is over. */
-  turnEnded(token: string, lastMessage: string | undefined, identity: SessionIdentity, at = Date.now()): void {
+  turnEnded(token: string, lastMessage: string | undefined, identity: SessionIdentity, at = Date.now(), failed = false): void {
     // Every launch has had its SubagentStart by now (it follows the Agent
     // call at once); one left over was denied, so it must not be matched to
     // a later turn's subagent.
@@ -207,6 +290,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       status: "finished-unread",
       needs: null,
       needsMessage: null,
+      lastTurnFailed: failed,
       currentFile: null,
       lastMessage: lastMessage === undefined ? s.lastMessage : truncate(lastMessage),
       lastTurnMs: s.turnStartedAt === null ? s.lastTurnMs : at - s.turnStartedAt,
@@ -282,7 +366,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       turnStartedAt: null,
       endedAt: at,
       // Subagents live in the lead's process, so they've ended with it.
-      subagents: s.subagents.map((run) => (run.running ? { ...run, running: false, endedAt: at } : run)),
+      subagents: s.subagents.map((run) => (run.running ? { ...run, running: false, outcome: "stopped" as const, endedAt: at } : run)),
     });
   }
 
@@ -327,6 +411,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       needs: null,
       needsMessage: null,
       lastMessage: null,
+      lastTurnFailed: false,
       turnStartedAt: null,
       lastTurnMs: null,
       currentFile: null,

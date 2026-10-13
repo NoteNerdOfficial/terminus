@@ -1707,6 +1707,27 @@
   color: var(--text-faint);
 }
 
+.terminus-inbox-subagent-mark.is-failed {
+  color: var(--color-red, #e5534b);
+}
+
+.terminus-inbox-subagent-mark.is-stopped {
+  color: var(--text-faint);
+}
+
+.terminus-inbox-subagent-error {
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--color-red, #e5534b);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-inbox-quote.is-failed {
+  color: var(--color-red, #e5534b);
+}
+
 /**
  * Copyright (c) 2014 The xterm.js authors. All rights reserved.
  * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)

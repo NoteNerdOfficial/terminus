@@ -24,7 +24,7 @@ export interface RegisteredPanel {
    *  the two it was; undefined for a bodyless call, like onTurnEnd. */
   onNeedsAttention(payload: NotificationHookPayload | undefined): void;
 
-  /** SessionStart, SessionEnd and UserPromptSubmit, plus the lead's Agent
+  /** SessionStart, SessionEnd, UserPromptSubmit and StopFailure, plus the lead's Agent
    *  tool call, SubagentStart and SubagentStop when subagents are tracked --
    *  all from the session-event bridge, installed only in the Multi-agent
    *  experience. */
@@ -35,7 +35,7 @@ const MAX_BODY_BYTES = 5 * 1024 * 1024; // generous cap for a Write tool's full 
 // Status payloads are small; Stop's closing message is the largest field.
 const STATUS_BODY_MAX_BYTES = 1024 * 1024;
 
-const SESSION_EVENTS = new Set(["SessionStart", "SessionEnd", "UserPromptSubmit"]);
+const SESSION_EVENTS = new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "StopFailure"]);
 const SUBAGENT_EVENTS = new Set(["SubagentStart", "SubagentStop"]);
 const AGENT_TOOLS = new Set(["Agent", "Task"]);
 

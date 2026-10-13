@@ -398,7 +398,7 @@ var import_terminus_node_bridge25 = __toESM(require_dist());
 var import_terminus_node_bridge = __toESM(require_dist());
 var MAX_BODY_BYTES = 5 * 1024 * 1024;
 var STATUS_BODY_MAX_BYTES = 1024 * 1024;
-var SESSION_EVENTS = /* @__PURE__ */ new Set(["SessionStart", "SessionEnd", "UserPromptSubmit"]);
+var SESSION_EVENTS = /* @__PURE__ */ new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "StopFailure"]);
 var SUBAGENT_EVENTS = /* @__PURE__ */ new Set(["SubagentStart", "SubagentStop"]);
 var AGENT_TOOLS = /* @__PURE__ */ new Set(["Agent", "Task"]);
 function isSessionEvent(value) {
@@ -540,7 +540,7 @@ var import_terminus_node_bridge2 = __toESM(require_dist());
 function isClaudeSettingsFile(value) {
   return typeof value === "object" && value !== null;
 }
-var MULTI_AGENT_ONLY_EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit"];
+var MULTI_AGENT_ONLY_EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit", "StopFailure"];
 var SUBAGENT_EVENTS2 = ["SubagentStart", "SubagentStop"];
 var MATCHER = "Edit|Write|NotebookEdit";
 var AGENT_MATCHER = "Agent|Task";
@@ -971,7 +971,8 @@ exit 0
 # Session-event hook bridge for the Terminus Obsidian plugin.
 #
 # One bridge for the hooks the Multi-agent experience adds on top of the
-# three Classic ones: SessionStart, SessionEnd and UserPromptSubmit, and,
+# three Classic ones: SessionStart, SessionEnd, UserPromptSubmit and
+# StopFailure (a turn that ended in an error, the lead's or a subagent's), and,
 # while subagents are tracked, the lead's Agent tool call (PreToolUse),
 # SubagentStart and SubagentStop. Each payload carries its own
 # hook_event_name, so they share a script and a route (/session-event)
@@ -16799,9 +16800,20 @@ var TerminalView = class extends import_obsidian7.ItemView {
    *  past the debounced Pending Changes reveal the chip needs to outlast
    *  (see main.ts), so there's nothing left to stay up for. */
   onTurnEnd(payload) {
+    this.endTurn(payload == null ? void 0 : payload.last_assistant_message, sessionIdentity(payload), false);
+    if (this.plugin.tracksSubagents) {
+      this.plugin.agentSessionStore.backgroundTasksReported(this.token, payload == null ? void 0 : payload.background_tasks, true);
+    }
+  }
+  /** Stop, or the lead's StopFailure (Multi-agent only): either way the turn
+   *  is over and no Stop is coming. */
+  endTurn(message, identity, failed) {
     this.clearActivity();
     this.clearPendingAttention();
-    this.plugin.agentSessionStore.turnEnded(this.token, payload == null ? void 0 : payload.last_assistant_message, sessionIdentity(payload));
+    if (failed)
+      this.plugin.agentSessionStore.turnFailed(this.token, message, identity);
+    else
+      this.plugin.agentSessionStore.turnEnded(this.token, message, identity);
     if (this.app.workspace.getActiveViewOfType(TerminalView) === this && document.hasFocus()) {
       this.plugin.agentSessionStore.seen(this.token);
     }
@@ -16841,7 +16853,7 @@ var TerminalView = class extends import_obsidian7.ItemView {
    *  installed. Subagent events are dropped once tracking is off, since
    *  a session started earlier keeps sending them. */
   onSessionEvent(payload) {
-    var _a8, _b;
+    var _a8, _b, _c2;
     const store = this.plugin.agentSessionStore;
     const identity = sessionIdentity(payload);
     switch (payload.hook_event_name) {
@@ -16866,17 +16878,35 @@ var TerminalView = class extends import_obsidian7.ItemView {
       case "SubagentStop":
         if (!this.plugin.tracksSubagents)
           break;
-        store.subagentStopped(
+        store.subagentEnded(
           this.token,
           {
             agentId: payload.agent_id,
             agentType: payload.agent_type,
+            outcome: "done",
             lastMessage: payload.last_assistant_message,
             transcriptPath: payload.agent_transcript_path,
             description: (_b = (_a8 = payload.background_tasks) == null ? void 0 : _a8.find((task) => task.id === payload.agent_id)) == null ? void 0 : _b.description
           },
           identity
         );
+        store.backgroundTasksReported(this.token, payload.background_tasks, false);
+        break;
+      case "StopFailure":
+        if (!payload.agent_id) {
+          this.endTurn(payload.last_assistant_message || payload.error, identity, true);
+        } else if (this.plugin.tracksSubagents) {
+          store.subagentEnded(
+            this.token,
+            {
+              agentId: payload.agent_id,
+              agentType: (_c2 = payload.agent_type) != null ? _c2 : "",
+              outcome: "failed",
+              error: payload.last_assistant_message || payload.error
+            },
+            identity
+          );
+        }
         break;
     }
   }
@@ -18944,14 +18974,14 @@ function buildCard(token, session, changes) {
     }
     row.changes.push(change);
   }
-  const finishedQuiet = runs.filter((r) => !r.running && !byAgent.has(r.agentId));
+  const finishedQuiet = runs.filter((r) => !r.running && r.outcome !== "failed" && !byAgent.has(r.agentId));
   const shownQuiet = new Set(finishedQuiet.slice(-VISIBLE_FINISHED_SUBAGENTS).map((r) => r.agentId));
   const subagents = [];
   for (const run of runs) {
     const withChanges = byAgent.get(run.agentId);
     if (withChanges)
       subagents.push(withChanges);
-    else if (run.running || shownQuiet.has(run.agentId)) {
+    else if (run.running || run.outcome === "failed" || shownQuiet.has(run.agentId)) {
       subagents.push({ agentId: run.agentId, run, agentType: run.agentType, changes: [] });
     }
   }
@@ -19131,8 +19161,14 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     }
     if (!needsAttention || (session == null ? void 0 : session.needs) === "unread-turn") {
       const quote = this.quoteFor(card);
-      if (quote)
-        el2.createDiv({ cls: "terminus-inbox-quote", text: quote, attr: { title: quote } });
+      if (quote) {
+        const failed = (session == null ? void 0 : session.lastTurnFailed) && session.status !== "working";
+        el2.createDiv({
+          cls: `terminus-inbox-quote${failed ? " is-failed" : ""}`,
+          text: failed ? `\u2717 Turn failed: ${quote}` : quote,
+          attr: { title: quote }
+        });
+      }
     }
     if (card.leadChanges.length > 0 || card.subagents.length > 0) {
       if (card.subagents.length > 0) {
@@ -19186,15 +19222,12 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     return session.lastMessage === null ? null : plainPreview(session.lastMessage);
   }
   renderSubagent(el2, sub) {
-    var _a8, _b, _c2, _d;
+    var _a8, _b, _c2, _d, _e4, _f;
     const row = el2.createDiv({ cls: "terminus-inbox-subagent" });
     const line = row.createDiv({ cls: "terminus-inbox-subagent-line" });
     const running = (_b = (_a8 = sub.run) == null ? void 0 : _a8.running) != null ? _b : false;
-    line.createSpan({
-      cls: `terminus-inbox-subagent-mark ${running ? "is-running" : "is-done"}`,
-      text: running ? "\u25CF" : "\u2713",
-      attr: { "aria-label": running ? "Running" : "Finished" }
-    });
+    const mark = subagentMark(sub.run);
+    line.createSpan({ cls: `terminus-inbox-subagent-mark is-${mark.kind}`, text: mark.symbol, attr: { "aria-label": mark.label } });
     line.createSpan({ cls: "terminus-inbox-subagent-type", text: sub.agentType });
     const description = (_c2 = sub.run) == null ? void 0 : _c2.description;
     if (description)
@@ -19204,7 +19237,9 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     if (time)
       details.createSpan({ text: time });
     details.createSpan({ text: changeCount(sub.changes.length) });
-    if (((_d = sub.run) == null ? void 0 : _d.lastMessage) && !running) {
+    if (((_d = sub.run) == null ? void 0 : _d.outcome) === "failed" && sub.run.error) {
+      row.createDiv({ cls: "terminus-inbox-subagent-error", text: (_e4 = sub.run.error.split("\n")[0]) != null ? _e4 : "", attr: { title: sub.run.error } });
+    } else if (((_f = sub.run) == null ? void 0 : _f.lastMessage) && !running) {
       row.setAttr("title", sub.run.lastMessage);
     }
     if (sub.changes.length > 0) {
@@ -19250,12 +19285,33 @@ function needsFallback(session) {
     return "Claude is waiting for your input.";
   return "Claude needs your attention.";
 }
+function subagentMark(run) {
+  if (!run)
+    return { kind: "done", symbol: "\u2713", label: "Finished" };
+  if (run.running)
+    return { kind: "running", symbol: "\u25CF", label: "Running" };
+  switch (run.outcome) {
+    case "failed":
+      return { kind: "failed", symbol: "\u2717", label: "Failed" };
+    case "stopped":
+      return { kind: "stopped", symbol: "\u25A0", label: "Stopped" };
+    default:
+      return { kind: "done", symbol: "\u2713", label: "Finished" };
+  }
+}
 function subagentTime(run) {
   if (!run)
     return null;
   if (run.running)
     return `started ${formatClock(run.startedAt)}`;
-  return run.endedAt === null ? null : formatDuration(run.endedAt - run.startedAt);
+  if (run.endedAt === null)
+    return null;
+  const duration = formatDuration(run.endedAt - run.startedAt);
+  if (run.outcome === "failed")
+    return `Failed after ${duration}`;
+  if (run.outcome === "stopped")
+    return `Stopped after ${duration}`;
+  return duration;
 }
 function changeCount(n) {
   if (n === 0)
@@ -19579,6 +19635,9 @@ var AgentSessionStore = class extends TypedEmitter {
       agentType,
       description: (_b = (_a8 = this.takeLaunch(token, agentType)) == null ? void 0 : _a8.description) != null ? _b : null,
       running: true,
+      outcome: null,
+      error: null,
+      seenInBackground: false,
       startedAt: at3,
       endedAt: null,
       lastMessage: null,
@@ -19586,17 +19645,25 @@ var AgentSessionStore = class extends TypedEmitter {
     };
     this.update({ ...s15, subagents: capSubagents([...s15.subagents, run]) });
   }
-  /** SubagentStop. Its background_tasks list the stopping subagent with its
-   *  description, which settles any guess made at the start. */
-  subagentStopped(token, stop, identity, at3 = Date.now()) {
+  /** SubagentStop (`done`) or a subagent's StopFailure (`failed`). A
+   *  SubagentStop's background_tasks list the stopping subagent with its
+   *  description, which settles any guess made at the start. An end that
+   *  arrives after the run was judged stopped (see backgroundTasksReported)
+   *  overrides that judgement. */
+  subagentEnded(token, end, identity, at3 = Date.now()) {
     var _a8, _b;
     const s15 = this.ensure(token, identity);
-    const existing = s15.subagents.find((run2) => run2.agentId === stop.agentId);
+    const existing = s15.subagents.find((run2) => run2.agentId === end.agentId);
+    if (!existing && !end.agentType.trim())
+      return;
     const base = existing != null ? existing : {
-      agentId: stop.agentId,
-      agentType: stop.agentType,
+      agentId: end.agentId,
+      agentType: end.agentType,
       description: null,
       running: true,
+      outcome: null,
+      error: null,
+      seenInBackground: false,
       startedAt: at3,
       endedAt: null,
       lastMessage: null,
@@ -19604,17 +19671,57 @@ var AgentSessionStore = class extends TypedEmitter {
     };
     const run = {
       ...base,
-      description: ((_a8 = stop.description) == null ? void 0 : _a8.trim()) || base.description,
+      description: ((_a8 = end.description) == null ? void 0 : _a8.trim()) || base.description,
       running: false,
-      endedAt: at3,
-      lastMessage: stop.lastMessage === void 0 ? base.lastMessage : truncate(stop.lastMessage),
-      transcriptPath: (_b = stop.transcriptPath) != null ? _b : base.transcriptPath
+      outcome: end.outcome,
+      error: end.outcome === "failed" ? truncate(end.error || end.lastMessage || "Failed") : null,
+      endedAt: base.running || base.endedAt === null ? at3 : base.endedAt,
+      lastMessage: end.lastMessage === void 0 ? base.lastMessage : truncate(end.lastMessage),
+      transcriptPath: (_b = end.transcriptPath) != null ? _b : base.transcriptPath
     };
     const subagents = existing ? s15.subagents.map((r) => r === existing ? run : r) : capSubagents([...s15.subagents, run]);
     this.update({ ...s15, subagents });
   }
+  /**
+   * Stop and SubagentStop list the background tasks still running. A
+   * subagent stopped by the lead (TaskStop) sends no hook of its own, so a
+   * running subagent missing from a list is judged stopped -- from any list
+   * if it was listed before, and from Stop's even if not: the lead waits for
+   * a foreground subagent, so at Stop every running one is a background
+   * one. Undefined `tasks` (a bridge that sent no body) tells nothing.
+   */
+  backgroundTasksReported(token, tasks, atTurnEnd, at3 = Date.now()) {
+    if (!tasks)
+      return;
+    const s15 = this.sessions.get(token);
+    if (!s15 || s15.subagents.length === 0)
+      return;
+    const listed = new Map(tasks.filter((t) => t.type === "subagent").map((t) => [t.id, t]));
+    let changed = false;
+    const subagents = s15.subagents.map((run) => {
+      var _a8, _b;
+      const task = listed.get(run.agentId);
+      if (task) {
+        const description = (_b = run.description) != null ? _b : ((_a8 = task.description) == null ? void 0 : _a8.trim()) || null;
+        if (run.seenInBackground && description === run.description)
+          return run;
+        changed = true;
+        return { ...run, seenInBackground: true, description };
+      }
+      if (!run.running || !(atTurnEnd || run.seenInBackground))
+        return run;
+      changed = true;
+      return { ...run, running: false, outcome: "stopped", endedAt: at3 };
+    });
+    if (changed)
+      this.update({ ...s15, subagents });
+  }
+  /** The lead's StopFailure: the turn ended in an error, with no Stop. */
+  turnFailed(token, error, identity, at3 = Date.now()) {
+    this.turnEnded(token, error != null ? error : "The turn ended with an error.", identity, at3, true);
+  }
   /** Stop: the turn is over. */
-  turnEnded(token, lastMessage, identity, at3 = Date.now()) {
+  turnEnded(token, lastMessage, identity, at3 = Date.now(), failed = false) {
     this.launches.delete(token);
     const s15 = this.ensure(token, identity);
     this.update({
@@ -19622,6 +19729,7 @@ var AgentSessionStore = class extends TypedEmitter {
       status: "finished-unread",
       needs: null,
       needsMessage: null,
+      lastTurnFailed: failed,
       currentFile: null,
       lastMessage: lastMessage === void 0 ? s15.lastMessage : truncate(lastMessage),
       lastTurnMs: s15.turnStartedAt === null ? s15.lastTurnMs : at3 - s15.turnStartedAt,
@@ -19694,7 +19802,7 @@ var AgentSessionStore = class extends TypedEmitter {
       turnStartedAt: null,
       endedAt: at3,
       // Subagents live in the lead's process, so they've ended with it.
-      subagents: s15.subagents.map((run) => run.running ? { ...run, running: false, endedAt: at3 } : run)
+      subagents: s15.subagents.map((run) => run.running ? { ...run, running: false, outcome: "stopped", endedAt: at3 } : run)
     });
   }
   /** Forgets a terminal entirely, for when nothing needs its record any more. */
@@ -19736,6 +19844,7 @@ var AgentSessionStore = class extends TypedEmitter {
       needs: null,
       needsMessage: null,
       lastMessage: null,
+      lastTurnFailed: false,
       turnStartedAt: null,
       lastTurnMs: null,
       currentFile: null,

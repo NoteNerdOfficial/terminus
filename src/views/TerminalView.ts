@@ -489,9 +489,19 @@ export class TerminalView extends ItemView {
    *  past the debounced Pending Changes reveal the chip needs to outlast
    *  (see main.ts), so there's nothing left to stay up for. */
   private onTurnEnd(payload: StopHookPayload | undefined): void {
+    this.endTurn(payload?.last_assistant_message, sessionIdentity(payload), false);
+    if (this.plugin.tracksSubagents) {
+      this.plugin.agentSessionStore.backgroundTasksReported(this.token, payload?.background_tasks, true);
+    }
+  }
+
+  /** Stop, or the lead's StopFailure (Multi-agent only): either way the turn
+   *  is over and no Stop is coming. */
+  private endTurn(message: string | undefined, identity: ReturnType<typeof sessionIdentity>, failed: boolean): void {
     this.clearActivity();
     this.clearPendingAttention();
-    this.plugin.agentSessionStore.turnEnded(this.token, payload?.last_assistant_message, sessionIdentity(payload));
+    if (failed) this.plugin.agentSessionStore.turnFailed(this.token, message, identity);
+    else this.plugin.agentSessionStore.turnEnded(this.token, message, identity);
     // Watching the terminal as the turn ends counts as reading it, or a
     // minute later idle_prompt would flag a turn already being looked at.
     if (this.app.workspace.getActiveViewOfType(TerminalView) === this && document.hasFocus()) {
@@ -554,17 +564,37 @@ export class TerminalView extends ItemView {
         break;
       case "SubagentStop":
         if (!this.plugin.tracksSubagents) break;
-        store.subagentStopped(
+        store.subagentEnded(
           this.token,
           {
             agentId: payload.agent_id,
             agentType: payload.agent_type,
+            outcome: "done",
             lastMessage: payload.last_assistant_message,
             transcriptPath: payload.agent_transcript_path,
             description: payload.background_tasks?.find((task) => task.id === payload.agent_id)?.description,
           },
           identity
         );
+        store.backgroundTasksReported(this.token, payload.background_tasks, false);
+        break;
+      case "StopFailure":
+        if (!payload.agent_id) {
+          // Prefer the readable message; the code ("model_not_found") is
+          // the fallback.
+          this.endTurn(payload.last_assistant_message || payload.error, identity, true);
+        } else if (this.plugin.tracksSubagents) {
+          store.subagentEnded(
+            this.token,
+            {
+              agentId: payload.agent_id,
+              agentType: payload.agent_type ?? "",
+              outcome: "failed",
+              error: payload.last_assistant_message || payload.error,
+            },
+            identity
+          );
+        }
         break;
     }
   }

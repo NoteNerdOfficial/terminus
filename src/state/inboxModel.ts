@@ -37,7 +37,7 @@ export interface Inbox {
 }
 
 /** Finished subagents with nothing pending still show, up to this many
- *  (the most recent); running ones and ones with changes always do. */
+ *  (the most recent); running, failed and ones with changes always do. */
 export const VISIBLE_FINISHED_SUBAGENTS = 10;
 
 /**
@@ -104,13 +104,14 @@ function buildCard(token: string, session: AgentSession | null, changes: Pending
     row.changes.push(change);
   }
 
-  const finishedQuiet = runs.filter((r) => !r.running && !byAgent.has(r.agentId));
+  // Failed runs always show, like running ones: a failure shouldn't fold away.
+  const finishedQuiet = runs.filter((r) => !r.running && r.outcome !== "failed" && !byAgent.has(r.agentId));
   const shownQuiet = new Set(finishedQuiet.slice(-VISIBLE_FINISHED_SUBAGENTS).map((r) => r.agentId));
   const subagents: InboxSubagent[] = [];
   for (const run of runs) {
     const withChanges = byAgent.get(run.agentId);
     if (withChanges) subagents.push(withChanges);
-    else if (run.running || shownQuiet.has(run.agentId)) {
+    else if (run.running || run.outcome === "failed" || shownQuiet.has(run.agentId)) {
       subagents.push({ agentId: run.agentId, run, agentType: run.agentType, changes: [] });
     }
   }

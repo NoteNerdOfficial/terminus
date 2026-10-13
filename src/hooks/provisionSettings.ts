@@ -30,13 +30,14 @@ type HookEvent =
   | "SessionStart"
   | "SessionEnd"
   | "UserPromptSubmit"
+  | "StopFailure"
   | "SubagentStart"
   | "SubagentStop";
 
 /** Hooks only the Multi-agent experience installs, all through the one
  *  session-event bridge. Switching back to Classic removes them again, so a
  *  Classic vault's settings file looks exactly as it did before. */
-const MULTI_AGENT_ONLY_EVENTS: HookEvent[] = ["SessionStart", "SessionEnd", "UserPromptSubmit"];
+const MULTI_AGENT_ONLY_EVENTS: HookEvent[] = ["SessionStart", "SessionEnd", "UserPromptSubmit", "StopFailure"];
 
 /** Subagent tracking's hooks, also on the session-event bridge: installed
  *  only in Multi-agent with "Track subagents" on. */
@@ -103,7 +104,7 @@ export interface HookOptions {
  * wires our hooks for the given options -- always PreToolUse (record each
  * write for review), Stop (turn is over), and Notification (Claude needs
  * permission or is waiting on the user); in Multi-agent also SessionStart,
- * SessionEnd and UserPromptSubmit, plus, while subagents are tracked, the
+ * SessionEnd, UserPromptSubmit and StopFailure, plus, while subagents are tracked, the
  * Agent tool's PreToolUse, SubagentStart and SubagentStop. Hooks the options
  * don't call for are removed. Never clobbers hooks or settings the user
  * already has there.

@@ -2,7 +2,8 @@
 # Session-event hook bridge for the Terminus Obsidian plugin.
 #
 # One bridge for the hooks the Multi-agent experience adds on top of the
-# three Classic ones: SessionStart, SessionEnd and UserPromptSubmit, and,
+# three Classic ones: SessionStart, SessionEnd, UserPromptSubmit and
+# StopFailure (a turn that ended in an error, the lead's or a subagent's), and,
 # while subagents are tracked, the lead's Agent tool call (PreToolUse),
 # SubagentStart and SubagentStop. Each payload carries its own
 # hook_event_name, so they share a script and a route (/session-event)

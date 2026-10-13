@@ -193,7 +193,14 @@ export class AgentInboxView extends ItemView {
     // what you'd want to read first, so it shows too.
     if (!needsAttention || session?.needs === "unread-turn") {
       const quote = this.quoteFor(card);
-      if (quote) el.createDiv({ cls: "terminus-inbox-quote", text: quote, attr: { title: quote } });
+      if (quote) {
+        const failed = session?.lastTurnFailed && session.status !== "working";
+        el.createDiv({
+          cls: `terminus-inbox-quote${failed ? " is-failed" : ""}`,
+          text: failed ? `✗ Turn failed: ${quote}` : quote,
+          attr: { title: quote },
+        });
+      }
     }
 
     if (card.leadChanges.length > 0 || card.subagents.length > 0) {
@@ -248,11 +255,8 @@ export class AgentInboxView extends ItemView {
     const row = el.createDiv({ cls: "terminus-inbox-subagent" });
     const line = row.createDiv({ cls: "terminus-inbox-subagent-line" });
     const running = sub.run?.running ?? false;
-    line.createSpan({
-      cls: `terminus-inbox-subagent-mark ${running ? "is-running" : "is-done"}`,
-      text: running ? "●" : "✓",
-      attr: { "aria-label": running ? "Running" : "Finished" },
-    });
+    const mark = subagentMark(sub.run);
+    line.createSpan({ cls: `terminus-inbox-subagent-mark is-${mark.kind}`, text: mark.symbol, attr: { "aria-label": mark.label } });
     line.createSpan({ cls: "terminus-inbox-subagent-type", text: sub.agentType });
     const description = sub.run?.description;
     if (description) line.createSpan({ cls: "terminus-inbox-subagent-desc", text: description, attr: { title: description } });
@@ -261,7 +265,10 @@ export class AgentInboxView extends ItemView {
     const time = subagentTime(sub.run);
     if (time) details.createSpan({ text: time });
     details.createSpan({ text: changeCount(sub.changes.length) });
-    if (sub.run?.lastMessage && !running) {
+    if (sub.run?.outcome === "failed" && sub.run.error) {
+      // First line only; the full error is on hover.
+      row.createDiv({ cls: "terminus-inbox-subagent-error", text: sub.run.error.split("\n")[0] ?? "", attr: { title: sub.run.error } });
+    } else if (sub.run?.lastMessage && !running) {
       row.setAttr("title", sub.run.lastMessage);
     }
 
@@ -315,10 +322,30 @@ function needsFallback(session: AgentSession): string {
   return "Claude needs your attention.";
 }
 
+/** ● running, ✓ done, ✗ failed (red), ■ stopped (grey: stopping isn't
+ *  failing). The label says it in words too, for screen readers and for
+ *  anyone who can't tell the colours apart. */
+function subagentMark(run: SubagentRun | null): { kind: string; symbol: string; label: string } {
+  if (!run) return { kind: "done", symbol: "✓", label: "Finished" };
+  if (run.running) return { kind: "running", symbol: "●", label: "Running" };
+  switch (run.outcome) {
+    case "failed":
+      return { kind: "failed", symbol: "✗", label: "Failed" };
+    case "stopped":
+      return { kind: "stopped", symbol: "■", label: "Stopped" };
+    default:
+      return { kind: "done", symbol: "✓", label: "Finished" };
+  }
+}
+
 function subagentTime(run: SubagentRun | null): string | null {
   if (!run) return null;
   if (run.running) return `started ${formatClock(run.startedAt)}`;
-  return run.endedAt === null ? null : formatDuration(run.endedAt - run.startedAt);
+  if (run.endedAt === null) return null;
+  const duration = formatDuration(run.endedAt - run.startedAt);
+  if (run.outcome === "failed") return `Failed after ${duration}`;
+  if (run.outcome === "stopped") return `Stopped after ${duration}`;
+  return duration;
 }
 
 function changeCount(n: number): string {

@@ -108,6 +108,9 @@ export interface BackgroundTask {
   agent_type?: string;
 }
 
+/** Also sent, with an empty agent_type and no SubagentStart before it, for
+ *  Claude Code's own internal helpers (captured from 2.1.296); those aren't
+ *  subagents the user started. */
 export interface SubagentStopHookPayload extends SessionHookPayloadBase {
   hook_event_name: "SubagentStop";
   agent_id: string;
@@ -124,11 +127,27 @@ export type SessionEventHookPayload =
   | UserPromptSubmitHookPayload
   | AgentToolHookPayload
   | SubagentStartHookPayload
-  | SubagentStopHookPayload;
+  | SubagentStopHookPayload
+  | StopFailureHookPayload;
 
 export interface StopHookPayload extends SessionHookPayloadBase {
   hook_event_name: "Stop";
   stop_hook_active: boolean;
+  last_assistant_message?: string;
+  /** Background tasks still running as the turn ends; see BackgroundTask. */
+  background_tasks?: BackgroundTask[];
+}
+
+/** Sent instead of Stop or SubagentStop when a turn ends in an error (an
+ *  API error such as model_not_found, captured from 2.1.296). With
+ *  agent_id it's a subagent that failed; without, the lead's turn. */
+export interface StopFailureHookPayload extends SessionHookPayloadBase {
+  hook_event_name: "StopFailure";
+  agent_id?: string;
+  agent_type?: string;
+  /** An error code, e.g. "model_not_found". */
+  error?: string;
+  /** The readable error message. */
   last_assistant_message?: string;
 }
 
