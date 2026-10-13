@@ -1,5 +1,5 @@
 import { Menu, Notice, Plugin, WorkspaceLeaf, setIcon } from "obsidian";
-import { pathBasename, pathJoin } from "terminus-node-bridge";
+import { pathBasename, pathJoin, pathRelative } from "terminus-node-bridge";
 import { ReviewServer } from "./server/ReviewServer";
 import { provisionClaudeSettings, getVaultBasePath, getHookBridgePath } from "./hooks/provisionSettings";
 import { provisionResources } from "./hooks/provisionResources";
@@ -13,6 +13,8 @@ import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore
 import { ActionLog } from "./state/ActionLog";
 import { AgentSessionStore } from "./state/AgentSessionStore";
 import { TranscriptUsageReader, subagentTranscriptPath } from "./claude/transcriptUsage";
+import { FeedbackStore } from "./state/FeedbackStore";
+import { composeFeedbackPrompt } from "./claude/feedbackPrompt";
 import { ClosedTerminalBuffer, ClosedTerminalEntry } from "./state/ClosedTerminalBuffer";
 import { ActionLogModal } from "./modals/ActionLogModal";
 import { ConfirmModal } from "./modals/ConfirmModal";
@@ -43,6 +45,8 @@ export default class TerminusPlugin extends Plugin {
   readonly pendingChangesStore = new PendingChangesStore();
   /** Each terminal's Claude session status, for the Agent inbox. */
   readonly agentSessionStore = new AgentSessionStore();
+  /** Review comments queued per session (Multi-agent only). */
+  readonly feedbackStore = new FeedbackStore();
   private readonly transcriptUsage = new TranscriptUsageReader();
   /** Subagents whose usage was read after they ended: final, never re-read. */
   private finalSubagentUsage = new Set<string>();
@@ -515,6 +519,39 @@ export default class TerminusPlugin extends Plugin {
       // last numbers showing.
       console.error("Terminus: could not read Claude's transcript usage", err);
     }
+  }
+
+  /**
+   * Whether a session's queued feedback can be typed into its terminal now,
+   * and if not, why. Only between turns: mid-turn the text would land in
+   * Claude's input while it works, and with a prompt open it would answer
+   * the prompt.
+   */
+  feedbackReadiness(token: string): { ready: true } | { ready: false; reason: string } {
+    const session = this.agentSessionStore.get(token);
+    if (!session?.running || !this.findTerminalView(token)) return { ready: false, reason: "Session ended" };
+    if (session.status === "working") return { ready: false, reason: "Available once this turn ends" };
+    if (session.status === "needs-attention" && session.needs !== "unread-turn") {
+      return { ready: false, reason: "Answer Claude's prompt first" };
+    }
+    return { ready: true };
+  }
+
+  /** Types a session's queued feedback into its terminal, unsubmitted, and
+   *  clears the queue: the text is the user's to edit or send from here. */
+  async sendFeedback(token: string): Promise<void> {
+    const items = this.feedbackStore.listFor(token);
+    const terminal = this.findTerminalView(token);
+    if (items.length === 0 || !terminal || !this.feedbackReadiness(token).ready) return;
+    const base = this.getVaultBasePath();
+    const prompt = composeFeedbackPrompt(items, (absolute) => {
+      const relative = pathRelative(base, absolute);
+      return relative.startsWith("..") ? absolute : relative;
+    });
+    if (!terminal.typeIntoInput(prompt)) return;
+    this.feedbackStore.clear(token);
+    await this.focusTerminal(token);
+    new Notice(`Terminus: feedback added to ${terminal.getDisplayText()} — press Enter to send it`);
   }
 
   /** Re-renders open Agent inboxes for changes the stores don't see, such

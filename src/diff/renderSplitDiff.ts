@@ -7,6 +7,20 @@ import { computeSplitParts, HunkPart } from "./hunks";
 import { PendingChange, PendingChangesStore } from "../state/PendingChangesStore";
 import { errorMessage } from "../util/errors";
 import { confirmCollisionReject } from "../modals/collisions";
+import type { FeedbackStore } from "../state/FeedbackStore";
+
+/**
+ * Per-hunk comments (Multi-agent only). `drafts` and `open` belong to the
+ * hosting view, so an open comment box and its text survive the re-render
+ * every store change causes (Claude may still be editing the file).
+ */
+export interface HunkCommentContext {
+  feedback: FeedbackStore;
+  /** The session that gets the comments: the terminal that made the change. */
+  token: string;
+  drafts: Map<string, string>;
+  open: Set<string>;
+}
 
 interface CellLine {
   text: string;
@@ -30,7 +44,13 @@ const MIN_HIDDEN_TO_TRUNCATE = 4;
  * viewport styling as the unified diff view sits along the edge as a scroll
  * marker.
  */
-export function renderSplitDiffBody(container: HTMLElement, app: App, store: PendingChangesStore, change: PendingChange): void {
+export function renderSplitDiffBody(
+  container: HTMLElement,
+  app: App,
+  store: PendingChangesStore,
+  change: PendingChange,
+  comments?: HunkCommentContext
+): void {
   const { diff } = change;
 
   const wrapper = container.createDiv({ cls: "terminus-split-diff-wrapper terminus-diff-body-wrapper" });
@@ -54,8 +74,12 @@ export function renderSplitDiffBody(container: HTMLElement, app: App, store: Pen
       continue;
     }
 
-    renderHunkControls(scrollBody, part, change, app, store);
     const { oldLines, newLines } = buildHunkSides(part.oldValue, part.newValue);
+    const lineSpan = (start: number, count: number) => (count > 0 ? { start, end: start + count - 1 } : null);
+    renderHunkControls(scrollBody, part, change, app, store, comments, {
+      oldLines: lineSpan(oldLineNo, oldLines.length),
+      newLines: lineSpan(newLineNo, newLines.length),
+    });
     const rowCount = Math.max(oldLines.length, newLines.length);
     for (let k = 0; k < rowCount; k++) {
       const oldCell = oldLines[k];
@@ -146,19 +170,118 @@ function renderContextBlock(container: HTMLElement, lines: string[], oldStart: n
  *  (see editor/inlineDiff.ts's DiffControlsWidget) -- reuses its exact CSS
  *  classes so per-hunk controls here read as the same control, just placed
  *  inline in a scrollable panel instead of floating over live editor text. */
-function renderHunkControls(container: HTMLElement, hunk: HunkPart, change: PendingChange, app: App, store: PendingChangesStore): void {
+function renderHunkControls(
+  container: HTMLElement,
+  hunk: HunkPart,
+  change: PendingChange,
+  app: App,
+  store: PendingChangesStore,
+  comments: HunkCommentContext | undefined,
+  lines: { oldLines: { start: number; end: number } | null; newLines: { start: number; end: number } | null }
+): void {
   const bar = container.createDiv({ cls: "terminus-inline-diff-controls terminus-split-diff-hunk-controls" });
   bar.createSpan({ cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
 
-  const resolve = async (accepted: boolean) => {
-    if (!accepted && !(await confirmCollisionReject(app, [store.get(change.id) ?? change], "hunk"))) return;
-    store.resolveHunk(change.id, hunk.index, accepted).catch((err: unknown) => {
+  /** Resolves true once the hunk is resolved, false if cancelled or failed. */
+  const resolve = async (accepted: boolean): Promise<boolean> => {
+    if (!accepted && !(await confirmCollisionReject(app, [store.get(change.id) ?? change], "hunk"))) return false;
+    try {
+      await store.resolveHunk(change.id, hunk.index, accepted);
+      return true;
+    } catch (err: unknown) {
       new Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${pathBasename(change.diff.filePath)}: ${errorMessage(err)}`);
-    });
+      return false;
+    }
   };
+
+  if (comments) {
+    const key = `${change.id}:${hunk.oldStart}:${hunk.newStart}`;
+    bar.createEl("button", { text: "Comment", cls: "terminus-inline-diff-comment" }).addEventListener("click", () => {
+      if (comments.open.has(key)) return;
+      comments.open.add(key);
+      renderCommentBox(bar, key, hunk, change, comments, lines, resolve);
+    });
+    if (comments.open.has(key)) {
+      // Re-opened after a re-render, once the hunk rows below are in place.
+      window.setTimeout(() => renderCommentBox(bar, key, hunk, change, comments, lines, resolve), 0);
+    }
+  }
 
   bar.createEl("button", { text: "Reject", cls: "terminus-inline-diff-reject" }).addEventListener("click", () => void resolve(false));
   bar.createEl("button", { text: "Accept", cls: "terminus-inline-diff-accept mod-cta" }).addEventListener("click", () => void resolve(true));
+}
+
+/** The comment box under a hunk's bar: queue a comment for the session, or
+ *  reject the hunk and say why in one step. */
+function renderCommentBox(
+  bar: HTMLElement,
+  key: string,
+  hunk: HunkPart,
+  change: PendingChange,
+  comments: HunkCommentContext,
+  lines: { oldLines: { start: number; end: number } | null; newLines: { start: number; end: number } | null },
+  resolve: (accepted: boolean) => Promise<boolean>
+): void {
+  if (!bar.isConnected || bar.nextElementSibling?.hasClass("terminus-split-diff-comment-box")) return;
+  const box = createDiv({ cls: "terminus-split-diff-comment-box" });
+  bar.after(box);
+  const input = box.createEl("textarea", {
+    cls: "terminus-split-diff-comment-input",
+    attr: { placeholder: "What should Claude change here?", rows: "3" },
+  });
+  input.value = comments.drafts.get(key) ?? "";
+  input.addEventListener("input", () => comments.drafts.set(key, input.value));
+
+  const close = () => {
+    comments.open.delete(key);
+    comments.drafts.delete(key);
+    box.remove();
+  };
+  const queue = (rejected: boolean) =>
+    comments.feedback.add({
+      token: comments.token,
+      filePath: change.diff.filePath,
+      oldLines: lines.oldLines,
+      newLines: lines.newLines,
+      excerpt: hunk.newValue || hunk.oldValue,
+      comment: input.value.trim(),
+      rejected,
+    });
+
+  const actions = box.createDiv({ cls: "terminus-split-diff-comment-actions" });
+  actions.createEl("button", { text: "Cancel" }).addEventListener("click", close);
+  const rejectButton = actions.createEl("button", { text: "Reject with comment", cls: "terminus-inline-diff-reject" });
+  const addButton = actions.createEl("button", { text: "Add comment", cls: "mod-cta" });
+  const refresh = () => {
+    const empty = input.value.trim() === "";
+    rejectButton.disabled = empty;
+    addButton.disabled = empty;
+  };
+  input.addEventListener("input", refresh);
+  refresh();
+
+  addButton.addEventListener("click", () => {
+    if (input.value.trim() === "") return;
+    queue(false);
+    close();
+  });
+  rejectButton.addEventListener("click", () => {
+    if (input.value.trim() === "") return;
+    void (async () => {
+      // The comment is queued only once the reject went through, so it
+      // never says "rejected" about a hunk that's still there.
+      // Not open while the reject re-renders the view, so the box isn't
+      // rebuilt for a hunk that's about to be gone.
+      comments.open.delete(key);
+      if (!(await resolve(false))) {
+        comments.open.add(key);
+        return;
+      }
+      queue(true);
+      close();
+    })();
+  });
+  input.focus();
 }
 
 interface SplitRowSpec {

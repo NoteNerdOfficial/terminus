@@ -1,6 +1,6 @@
 import { ItemView, ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { pathBasename } from "terminus-node-bridge";
-import { renderSplitDiffBody } from "../diff/renderSplitDiff";
+import { HunkCommentContext, renderSplitDiffBody } from "../diff/renderSplitDiff";
 import { collisionLabel } from "../modals/collisions";
 import type TerminusPlugin from "../main";
 
@@ -18,6 +18,9 @@ interface DiffSplitViewState {
  *  the store's own "change" event, the same way PendingChangesView does. */
 export class DiffSplitView extends ItemView {
   private changeId: string | null = null;
+  /** Open comment boxes and their text, kept across re-renders. */
+  private commentDrafts = new Map<string, string>();
+  private openComments = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -48,11 +51,13 @@ export class DiffSplitView extends ItemView {
   async onOpen(): Promise<void> {
     this.contentEl.addClass("terminus-view", "terminus-diff-split-view");
     this.plugin.pendingChangesStore.on("change", this.render);
+    this.plugin.feedbackStore.on("change", this.render);
     this.render();
   }
 
   async onClose(): Promise<void> {
     this.plugin.pendingChangesStore.off("change", this.render);
+    this.plugin.feedbackStore.off("change", this.render);
   }
 
   private render = (): void => {
@@ -87,7 +92,23 @@ export class DiffSplitView extends ItemView {
       });
     }
 
-    renderSplitDiffBody(container, this.app, this.plugin.pendingChangesStore, change);
+    // Comments go to the session that made the change (Multi-agent only).
+    const owner = change.contributors[0]?.token;
+    let comments: HunkCommentContext | undefined;
+    if (this.plugin.experience === "multi-agent" && owner) {
+      comments = { feedback: this.plugin.feedbackStore, token: owner, drafts: this.commentDrafts, open: this.openComments };
+      const queued = this.plugin.feedbackStore.listForFile(change.diff.filePath).length;
+      if (queued > 0) {
+        const recipient = this.plugin.findTerminalView(owner)?.getDisplayText() ?? change.panelLabel;
+        header.createSpan({
+          cls: "terminus-split-diff-queued",
+          text: `💬 ${queued} ${queued === 1 ? "comment" : "comments"} queued for ${recipient}`,
+          attr: { title: "Send them from this session's card in the Agent inbox" },
+        });
+      }
+    }
+
+    renderSplitDiffBody(container, this.app, this.plugin.pendingChangesStore, change, comments);
   };
 }
 

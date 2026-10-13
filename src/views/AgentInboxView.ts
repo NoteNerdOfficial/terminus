@@ -46,12 +46,14 @@ export class AgentInboxView extends ItemView {
   async onOpen(): Promise<void> {
     this.plugin.pendingChangesStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
+    this.plugin.feedbackStore.on("change", this.render);
     this.render();
   }
 
   async onClose(): Promise<void> {
     this.plugin.pendingChangesStore.off("change", this.render);
     this.plugin.agentSessionStore.off("change", this.render);
+    this.plugin.feedbackStore.off("change", this.render);
   }
 
   render = (): void => {
@@ -242,6 +244,8 @@ export class AgentInboxView extends ItemView {
       }
     }
 
+    this.renderFeedback(el, card.token, name);
+
     const foot = el.createDiv({ cls: "terminus-inbox-card-foot" });
     if (card.changes.length > 0) {
       const ids = new Set(card.changes.map((c) => c.id));
@@ -260,6 +264,43 @@ export class AgentInboxView extends ItemView {
       foot.createEl("button", { cls: "terminus-btn-ghost", text: "Open terminal" }).addEventListener("click", () =>
         void this.plugin.focusTerminal(card.token)
       );
+    }
+  }
+
+  /** Queued review comments for this session, and the button that types
+   *  them into its terminal -- only between turns (see feedbackReadiness). */
+  private renderFeedback(el: HTMLElement, token: string, terminalName: string): void {
+    const items = this.plugin.feedbackStore.listFor(token);
+    if (items.length === 0) return;
+    const section = el.createDiv({ cls: "terminus-inbox-feedback" });
+    const row = section.createDiv({ cls: "terminus-inbox-feedback-row" });
+    row.createSpan({ text: `💬 ${items.length} feedback ${items.length === 1 ? "item" : "items"} queued` });
+    row.createDiv({ cls: "terminus-inbox-spacer" });
+    const readiness = this.plugin.feedbackReadiness(token);
+    if (readiness.ready) {
+      row
+        .createEl("button", {
+          cls: "terminus-btn-solid",
+          text: `Send to ${terminalName}`,
+          attr: { title: "Types the feedback into the terminal's input line without sending it." },
+        })
+        .addEventListener("click", () => void this.plugin.sendFeedback(token));
+    } else {
+      row.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
+    }
+
+    const list = section.createDiv({ cls: "terminus-inbox-feedback-list" });
+    const base = this.plugin.getVaultBasePath();
+    for (const item of items) {
+      const line = list.createDiv({ cls: "terminus-inbox-feedback-item" });
+      const where = item.newLines ?? item.oldLines;
+      const place = `${pathRelative(base, item.filePath)}${where ? `:${where.start}` : ""}`;
+      line.createSpan({ cls: "terminus-inbox-feedback-place", text: place });
+      if (item.rejected) line.createSpan({ cls: "terminus-diff-stat-remove", text: "rejected" });
+      line.createSpan({ cls: "terminus-inbox-feedback-text", text: item.comment, attr: { title: item.comment } });
+      line
+        .createEl("button", { cls: "terminus-btn-ghost", text: "✕", attr: { "aria-label": "Remove this comment" } })
+        .addEventListener("click", () => this.plugin.feedbackStore.remove(item.id));
     }
   }
 

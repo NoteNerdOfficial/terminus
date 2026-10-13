@@ -87,7 +87,7 @@ var require_fs = __commonJS({
     exports.pathJoin = pathJoin10;
     exports.pathBasename = pathBasename12;
     exports.pathDirname = pathDirname4;
-    exports.pathRelative = pathRelative7;
+    exports.pathRelative = pathRelative8;
     exports.fileExistsSync = fileExistsSync6;
     exports.readTextFileIfExists = readTextFileIfExists5;
     exports.writeTextFile = writeTextFile5;
@@ -109,7 +109,7 @@ var require_fs = __commonJS({
     function pathDirname4(filePath) {
       return nodePath.dirname(filePath);
     }
-    function pathRelative7(from, to) {
+    function pathRelative8(from, to) {
       return nodePath.relative(from, to);
     }
     function fileExistsSync6(filePath) {
@@ -16983,6 +16983,20 @@ var TerminalView = class extends import_obsidian7.ItemView {
     refreshPaneTitle(this, this.getDisplayText());
     this.plugin.refreshAgentInbox();
   }
+  /**
+   * Puts text on the terminal's input line without submitting it -- the
+   * user reads, edits and presses Enter, as with "Suggest a fix". Written
+   * raw: Claude Code's input takes \n as a new line and only \r as Enter
+   * (so every \r is dropped), and shows raw text in full, where a
+   * bracketed paste would collapse to "[Pasted text]" (both checked against
+   * 2.1.296, up to 60 lines).
+   */
+  typeIntoInput(text) {
+    if (!this.pty)
+      return false;
+    this.pty.write(text.replace(/\r/g, ""));
+    return true;
+  }
   /** The hook/review token: how the Agent inbox matches sessions and
    *  pending changes to this terminal. */
   get hookToken() {
@@ -18341,7 +18355,7 @@ var import_obsidian10 = require("obsidian");
 var import_terminus_node_bridge16 = __toESM(require_dist());
 var EDGE = 4;
 var MIN_HIDDEN_TO_TRUNCATE = 4;
-function renderSplitDiffBody(container, app, store, change) {
+function renderSplitDiffBody(container, app, store, change, comments) {
   const { diff } = change;
   const wrapper = container.createDiv({ cls: "terminus-split-diff-wrapper terminus-diff-body-wrapper" });
   const colHeader = wrapper.createDiv({ cls: "terminus-split-diff-colheader" });
@@ -18359,8 +18373,12 @@ function renderSplitDiffBody(container, app, store, change) {
       newLineNo += lines.length;
       continue;
     }
-    renderHunkControls(scrollBody, part, change, app, store);
     const { oldLines, newLines } = buildHunkSides(part.oldValue, part.newValue);
+    const lineSpan = (start, count) => count > 0 ? { start, end: start + count - 1 } : null;
+    renderHunkControls(scrollBody, part, change, app, store, comments, {
+      oldLines: lineSpan(oldLineNo, oldLines.length),
+      newLines: lineSpan(newLineNo, newLines.length)
+    });
     const rowCount = Math.max(oldLines.length, newLines.length);
     for (let k3 = 0; k3 < rowCount; k3++) {
       const oldCell = oldLines[k3];
@@ -18432,19 +18450,93 @@ function renderContextBlock(container, lines, oldStart, newStart) {
   });
   lines.slice(lines.length - EDGE).forEach((text, i8) => renderContextRow(container, text, oldStart + lines.length - EDGE + i8, newStart + lines.length - EDGE + i8));
 }
-function renderHunkControls(container, hunk, change, app, store) {
+function renderHunkControls(container, hunk, change, app, store, comments, lines) {
   const bar = container.createDiv({ cls: "terminus-inline-diff-controls terminus-split-diff-hunk-controls" });
   bar.createSpan({ cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
   const resolve = async (accepted) => {
     var _a8;
     if (!accepted && !await confirmCollisionReject(app, [(_a8 = store.get(change.id)) != null ? _a8 : change], "hunk"))
-      return;
-    store.resolveHunk(change.id, hunk.index, accepted).catch((err) => {
+      return false;
+    try {
+      await store.resolveHunk(change.id, hunk.index, accepted);
+      return true;
+    } catch (err) {
       new import_obsidian10.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge16.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
-    });
+      return false;
+    }
   };
+  if (comments) {
+    const key = `${change.id}:${hunk.oldStart}:${hunk.newStart}`;
+    bar.createEl("button", { text: "Comment", cls: "terminus-inline-diff-comment" }).addEventListener("click", () => {
+      if (comments.open.has(key))
+        return;
+      comments.open.add(key);
+      renderCommentBox(bar, key, hunk, change, comments, lines, resolve);
+    });
+    if (comments.open.has(key)) {
+      window.setTimeout(() => renderCommentBox(bar, key, hunk, change, comments, lines, resolve), 0);
+    }
+  }
   bar.createEl("button", { text: "Reject", cls: "terminus-inline-diff-reject" }).addEventListener("click", () => void resolve(false));
   bar.createEl("button", { text: "Accept", cls: "terminus-inline-diff-accept mod-cta" }).addEventListener("click", () => void resolve(true));
+}
+function renderCommentBox(bar, key, hunk, change, comments, lines, resolve) {
+  var _a8, _b;
+  if (!bar.isConnected || ((_a8 = bar.nextElementSibling) == null ? void 0 : _a8.hasClass("terminus-split-diff-comment-box")))
+    return;
+  const box = createDiv({ cls: "terminus-split-diff-comment-box" });
+  bar.after(box);
+  const input = box.createEl("textarea", {
+    cls: "terminus-split-diff-comment-input",
+    attr: { placeholder: "What should Claude change here?", rows: "3" }
+  });
+  input.value = (_b = comments.drafts.get(key)) != null ? _b : "";
+  input.addEventListener("input", () => comments.drafts.set(key, input.value));
+  const close = () => {
+    comments.open.delete(key);
+    comments.drafts.delete(key);
+    box.remove();
+  };
+  const queue = (rejected) => comments.feedback.add({
+    token: comments.token,
+    filePath: change.diff.filePath,
+    oldLines: lines.oldLines,
+    newLines: lines.newLines,
+    excerpt: hunk.newValue || hunk.oldValue,
+    comment: input.value.trim(),
+    rejected
+  });
+  const actions = box.createDiv({ cls: "terminus-split-diff-comment-actions" });
+  actions.createEl("button", { text: "Cancel" }).addEventListener("click", close);
+  const rejectButton = actions.createEl("button", { text: "Reject with comment", cls: "terminus-inline-diff-reject" });
+  const addButton = actions.createEl("button", { text: "Add comment", cls: "mod-cta" });
+  const refresh = () => {
+    const empty = input.value.trim() === "";
+    rejectButton.disabled = empty;
+    addButton.disabled = empty;
+  };
+  input.addEventListener("input", refresh);
+  refresh();
+  addButton.addEventListener("click", () => {
+    if (input.value.trim() === "")
+      return;
+    queue(false);
+    close();
+  });
+  rejectButton.addEventListener("click", () => {
+    if (input.value.trim() === "")
+      return;
+    void (async () => {
+      comments.open.delete(key);
+      if (!await resolve(false)) {
+        comments.open.add(key);
+        return;
+      }
+      queue(true);
+      close();
+    })();
+  });
+  input.focus();
 }
 function renderSplitRow(container, spec) {
   const row = container.createDiv({ cls: "terminus-split-diff-row" });
@@ -18479,8 +18571,11 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
     super(leaf);
     this.plugin = plugin;
     this.changeId = null;
+    /** Open comment boxes and their text, kept across re-renders. */
+    this.commentDrafts = /* @__PURE__ */ new Map();
+    this.openComments = /* @__PURE__ */ new Set();
     this.render = () => {
-      var _a8, _b;
+      var _a8, _b, _c2, _d, _e4;
       const container = this.contentEl;
       container.empty();
       if (!this.changeId) {
@@ -18508,7 +18603,21 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
           text: `\u26A0 ${collision} after ${first}. Rejecting goes back to how the file was before ${first}'s first edit, so it can undo their work too.`
         });
       }
-      renderSplitDiffBody(container, this.app, this.plugin.pendingChangesStore, change);
+      const owner = (_c2 = change.contributors[0]) == null ? void 0 : _c2.token;
+      let comments;
+      if (this.plugin.experience === "multi-agent" && owner) {
+        comments = { feedback: this.plugin.feedbackStore, token: owner, drafts: this.commentDrafts, open: this.openComments };
+        const queued = this.plugin.feedbackStore.listForFile(change.diff.filePath).length;
+        if (queued > 0) {
+          const recipient = (_e4 = (_d = this.plugin.findTerminalView(owner)) == null ? void 0 : _d.getDisplayText()) != null ? _e4 : change.panelLabel;
+          header.createSpan({
+            cls: "terminus-split-diff-queued",
+            text: `\u{1F4AC} ${queued} ${queued === 1 ? "comment" : "comments"} queued for ${recipient}`,
+            attr: { title: "Send them from this session's card in the Agent inbox" }
+          });
+        }
+      }
+      renderSplitDiffBody(container, this.app, this.plugin.pendingChangesStore, change, comments);
     };
   }
   getViewType() {
@@ -18533,10 +18642,12 @@ var DiffSplitView = class extends import_obsidian11.ItemView {
   async onOpen() {
     this.contentEl.addClass("terminus-view", "terminus-diff-split-view");
     this.plugin.pendingChangesStore.on("change", this.render);
+    this.plugin.feedbackStore.on("change", this.render);
     this.render();
   }
   async onClose() {
     this.plugin.pendingChangesStore.off("change", this.render);
+    this.plugin.feedbackStore.off("change", this.render);
   }
 };
 async function openDiffSplitView(plugin, changeId) {
@@ -19266,11 +19377,13 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
   async onOpen() {
     this.plugin.pendingChangesStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
+    this.plugin.feedbackStore.on("change", this.render);
     this.render();
   }
   async onClose() {
     this.plugin.pendingChangesStore.off("change", this.render);
     this.plugin.agentSessionStore.off("change", this.render);
+    this.plugin.feedbackStore.off("change", this.render);
   }
   renderHeader(container, needsCount, allChanges) {
     const header = container.createDiv({ cls: "terminus-inbox-header" });
@@ -19417,6 +19530,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
         });
       }
     }
+    this.renderFeedback(el2, card.token, name);
     const foot = el2.createDiv({ cls: "terminus-inbox-card-foot" });
     if (card.changes.length > 0) {
       const ids = new Set(card.changes.map((c) => c.id));
@@ -19438,6 +19552,40 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
         "click",
         () => void this.plugin.focusTerminal(card.token)
       );
+    }
+  }
+  /** Queued review comments for this session, and the button that types
+   *  them into its terminal -- only between turns (see feedbackReadiness). */
+  renderFeedback(el2, token, terminalName) {
+    var _a8;
+    const items = this.plugin.feedbackStore.listFor(token);
+    if (items.length === 0)
+      return;
+    const section = el2.createDiv({ cls: "terminus-inbox-feedback" });
+    const row = section.createDiv({ cls: "terminus-inbox-feedback-row" });
+    row.createSpan({ text: `\u{1F4AC} ${items.length} feedback ${items.length === 1 ? "item" : "items"} queued` });
+    row.createDiv({ cls: "terminus-inbox-spacer" });
+    const readiness = this.plugin.feedbackReadiness(token);
+    if (readiness.ready) {
+      row.createEl("button", {
+        cls: "terminus-btn-solid",
+        text: `Send to ${terminalName}`,
+        attr: { title: "Types the feedback into the terminal's input line without sending it." }
+      }).addEventListener("click", () => void this.plugin.sendFeedback(token));
+    } else {
+      row.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
+    }
+    const list = section.createDiv({ cls: "terminus-inbox-feedback-list" });
+    const base = this.plugin.getVaultBasePath();
+    for (const item of items) {
+      const line = list.createDiv({ cls: "terminus-inbox-feedback-item" });
+      const where = (_a8 = item.newLines) != null ? _a8 : item.oldLines;
+      const place = `${(0, import_terminus_node_bridge22.pathRelative)(base, item.filePath)}${where ? `:${where.start}` : ""}`;
+      line.createSpan({ cls: "terminus-inbox-feedback-place", text: place });
+      if (item.rejected)
+        line.createSpan({ cls: "terminus-diff-stat-remove", text: "rejected" });
+      line.createSpan({ cls: "terminus-inbox-feedback-text", text: item.comment, attr: { title: item.comment } });
+      line.createEl("button", { cls: "terminus-btn-ghost", text: "\u2715", attr: { "aria-label": "Remove this comment" } }).addEventListener("click", () => this.plugin.feedbackStore.remove(item.id));
     }
   }
   /** Tokens, context % and ≈ cost. `usage` is what's counted (a card's lead
@@ -20181,6 +20329,75 @@ function truncate(text) {
   return trimmed.length > MAX_MESSAGE_LENGTH ? `${trimmed.slice(0, MAX_MESSAGE_LENGTH - 1)}\u2026` : trimmed;
 }
 
+// src/state/FeedbackStore.ts
+var FeedbackStore = class extends TypedEmitter {
+  constructor() {
+    super(...arguments);
+    this.items = [];
+    this.nextId = 1;
+  }
+  add(item, at3 = Date.now()) {
+    const added = { ...item, id: this.nextId++, createdAt: at3 };
+    this.items.push(added);
+    this.emit("change");
+    return added;
+  }
+  remove(id) {
+    const before = this.items.length;
+    this.items = this.items.filter((item) => item.id !== id);
+    if (this.items.length !== before)
+      this.emit("change");
+  }
+  /** A session's queued items, oldest first. */
+  listFor(token) {
+    return this.items.filter((item) => item.token === token);
+  }
+  /** Items on one file, for Split Diff's "N comments queued" note. */
+  listForFile(filePath) {
+    return this.items.filter((item) => item.filePath === filePath);
+  }
+  clear(token) {
+    const before = this.items.length;
+    this.items = this.items.filter((item) => item.token !== token);
+    if (this.items.length !== before)
+      this.emit("change");
+  }
+};
+
+// src/claude/feedbackPrompt.ts
+var MAX_EXCERPT_LINES = 6;
+function composeFeedbackPrompt(items, relativePath) {
+  const lines = [items.length === 1 ? "Feedback on one of your edits:" : "Feedback on your edits:", ""];
+  items.forEach((item, i8) => {
+    var _a8;
+    lines.push(`${i8 + 1}. ${relativePath(item.filePath)}, ${describeLocation(item)}${item.rejected ? " (rejected: I reverted this part to the original)" : ""}`);
+    for (const line of excerptLines(item.excerpt))
+      lines.push(`   > ${line}`);
+    const comment = item.comment.trim().split("\n");
+    lines.push(`   ${(_a8 = comment[0]) != null ? _a8 : ""}`);
+    for (const more of comment.slice(1))
+      lines.push(`   ${more}`);
+    lines.push("");
+  });
+  lines.push(items.length === 1 ? "Please address it." : "Please address each item.");
+  return lines.join("\n").replace(/\r/g, "");
+}
+function describeLocation(item) {
+  var _a8, _b;
+  const range = item.rejected ? (_a8 = item.oldLines) != null ? _a8 : item.newLines : (_b = item.newLines) != null ? _b : item.oldLines;
+  if (!range)
+    return "an edit";
+  const side = item.rejected || !item.newLines ? "original" : "your version";
+  const span = range.start === range.end ? `line ${range.start}` : `lines ${range.start}\u2013${range.end}`;
+  return `${span} (${side})`;
+}
+function excerptLines(excerpt) {
+  const all = excerpt.replace(/\r/g, "").replace(/\n$/, "").split("\n");
+  if (all.length <= MAX_EXCERPT_LINES)
+    return all;
+  return [...all.slice(0, MAX_EXCERPT_LINES), `\u2026 (${all.length - MAX_EXCERPT_LINES} more lines)`];
+}
+
 // src/state/ClosedTerminalBuffer.ts
 var MAX_CLOSED_TERMINALS = 10;
 var ClosedTerminalBuffer = class {
@@ -20895,6 +21112,8 @@ var TerminusPlugin = class extends import_obsidian21.Plugin {
     this.pendingChangesStore = new PendingChangesStore();
     /** Each terminal's Claude session status, for the Agent inbox. */
     this.agentSessionStore = new AgentSessionStore();
+    /** Review comments queued per session (Multi-agent only). */
+    this.feedbackStore = new FeedbackStore();
     this.transcriptUsage = new TranscriptUsageReader();
     /** Subagents whose usage was read after they ended: final, never re-read. */
     this.finalSubagentUsage = /* @__PURE__ */ new Set();
@@ -21324,6 +21543,41 @@ var TerminusPlugin = class extends import_obsidian21.Plugin {
     } catch (err) {
       console.error("Terminus: could not read Claude's transcript usage", err);
     }
+  }
+  /**
+   * Whether a session's queued feedback can be typed into its terminal now,
+   * and if not, why. Only between turns: mid-turn the text would land in
+   * Claude's input while it works, and with a prompt open it would answer
+   * the prompt.
+   */
+  feedbackReadiness(token) {
+    const session = this.agentSessionStore.get(token);
+    if (!(session == null ? void 0 : session.running) || !this.findTerminalView(token))
+      return { ready: false, reason: "Session ended" };
+    if (session.status === "working")
+      return { ready: false, reason: "Available once this turn ends" };
+    if (session.status === "needs-attention" && session.needs !== "unread-turn") {
+      return { ready: false, reason: "Answer Claude's prompt first" };
+    }
+    return { ready: true };
+  }
+  /** Types a session's queued feedback into its terminal, unsubmitted, and
+   *  clears the queue: the text is the user's to edit or send from here. */
+  async sendFeedback(token) {
+    const items = this.feedbackStore.listFor(token);
+    const terminal = this.findTerminalView(token);
+    if (items.length === 0 || !terminal || !this.feedbackReadiness(token).ready)
+      return;
+    const base = this.getVaultBasePath();
+    const prompt = composeFeedbackPrompt(items, (absolute) => {
+      const relative = (0, import_terminus_node_bridge26.pathRelative)(base, absolute);
+      return relative.startsWith("..") ? absolute : relative;
+    });
+    if (!terminal.typeIntoInput(prompt))
+      return;
+    this.feedbackStore.clear(token);
+    await this.focusTerminal(token);
+    new import_obsidian21.Notice(`Terminus: feedback added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
   }
   /** Re-renders open Agent inboxes for changes the stores don't see, such
    *  as a terminal being renamed or recoloured. */

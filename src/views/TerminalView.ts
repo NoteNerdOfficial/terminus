@@ -652,6 +652,20 @@ export class TerminalView extends ItemView {
     this.plugin.refreshAgentInbox();
   }
 
+  /**
+   * Puts text on the terminal's input line without submitting it -- the
+   * user reads, edits and presses Enter, as with "Suggest a fix". Written
+   * raw: Claude Code's input takes \n as a new line and only \r as Enter
+   * (so every \r is dropped), and shows raw text in full, where a
+   * bracketed paste would collapse to "[Pasted text]" (both checked against
+   * 2.1.296, up to 60 lines).
+   */
+  typeIntoInput(text: string): boolean {
+    if (!this.pty) return false;
+    this.pty.write(text.replace(/\r/g, ""));
+    return true;
+  }
+
   /** The hook/review token: how the Agent inbox matches sessions and
    *  pending changes to this terminal. */
   get hookToken(): string {
