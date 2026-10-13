@@ -2157,6 +2157,87 @@
   margin: 0 7px;
 }
 
+/* What the inbox is showing (the sidebar's selected group), and the way to
+   see everything. */
+.terminus-inbox-scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.terminus-inbox-scope-what {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.terminus-inbox-scope-alert {
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  height: auto;
+  font-size: inherit;
+  font-weight: 600;
+  color: var(--tm-attention);
+  cursor: pointer;
+}
+
+.terminus-inbox-scope-alert:hover {
+  text-decoration: underline;
+}
+
+/* The card of the terminal in front. */
+.terminus-inbox-card.is-focused:not(.is-needs-attention) {
+  border-color: var(--interactive-accent);
+}
+
+/* A session in another group: one line, who it is and what it wants. */
+.terminus-inbox-elsewhere {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 2px;
+  padding: 5px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+}
+
+.terminus-inbox-elsewhere:hover,
+.terminus-inbox-elsewhere:focus-visible {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-inbox-elsewhere.is-needs-attention {
+  box-shadow: inset 2px 0 0 var(--tm-attention);
+}
+
+.terminus-inbox-elsewhere-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-inbox-elsewhere-group,
+.terminus-inbox-elsewhere-review {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
 .terminus-inbox-body {
   padding: 4px 8px 16px;
 }

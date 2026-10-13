@@ -19,6 +19,7 @@ import { ActionLog } from "./state/ActionLog";
 import { AgentSessionStore } from "./state/AgentSessionStore";
 import { TranscriptUsageReader, subagentTranscriptPath } from "./claude/transcriptUsage";
 import { FeedbackStore } from "./state/FeedbackStore";
+import { InboxUiState } from "./state/InboxUiState";
 import { composeFeedbackPrompt } from "./claude/feedbackPrompt";
 import { ClosedTerminalBuffer, ClosedTerminalEntry } from "./state/ClosedTerminalBuffer";
 import { ActionLogModal } from "./modals/ActionLogModal";
@@ -45,6 +46,10 @@ import {
   CursorStyle,
 } from "./settings";
 
+/** A burst smaller than both of these doesn't pull an open inbox to front. */
+const AUTO_REVEAL_MIN_FILES = 3;
+const AUTO_REVEAL_MIN_LINES = 50;
+
 export default class TerminusPlugin extends Plugin {
   readonly reviewServer = new ReviewServer();
   readonly pendingChangesStore = new PendingChangesStore();
@@ -52,6 +57,12 @@ export default class TerminusPlugin extends Plugin {
   readonly agentSessionStore = new AgentSessionStore();
   /** Review comments queued per session (Multi-agent only). */
   readonly feedbackStore = new FeedbackStore();
+  /** How the user has arranged the Agent inbox; outlives the view. */
+  readonly inboxUi = new InboxUiState();
+  /** Files of the current burst of edits, for the auto-reveal's threshold. */
+  private revealBurst = new Set<string>();
+  /** The inbox's user-action revision when the current burst began. */
+  private revealBurstRevision = 0;
   /** Multi-agent's terminal groups; created once settings are loaded. */
   groupStore!: GroupStore;
   readonly groups = new GroupController(this);
@@ -116,13 +127,21 @@ export default class TerminusPlugin extends Plugin {
     // stealing focus mid-turn.
     // The invite to try Multi-agent rides the same debounce, so it never
     // interrupts a turn mid-burst either.
-    this.pendingChangesStore.on("recorded", () => {
+    this.pendingChangesStore.on("recorded", (change) => {
       const reveal = this.autoRevealSettings();
       if (!reveal.enabled && !this.shouldInviteToMultiAgent()) return;
-      if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
+      // A burst starts with its first edit: note the inbox's revision then,
+      // so a choice the user makes while the burst settles can veto the reveal.
+      if (this.revealPendingChangesTimer === null) {
+        this.revealBurst.clear();
+        this.revealBurstRevision = this.inboxUi.userActionRevision;
+      } else {
+        window.clearTimeout(this.revealPendingChangesTimer);
+      }
+      this.revealBurst.add(change.id);
       this.revealPendingChangesTimer = window.setTimeout(() => {
         this.revealPendingChangesTimer = null;
-        if (reveal.enabled) void this.revealReviewView();
+        if (reveal.enabled && this.shouldAutoReveal()) void this.revealReviewView();
         if (this.shouldInviteToMultiAgent()) void this.showMultiAgentInvite();
       }, reveal.delayMs);
     });
@@ -403,6 +422,28 @@ export default class TerminusPlugin extends Plugin {
         "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
       );
     }
+  }
+
+  /**
+   * Whether the burst that just settled should bring the review view to
+   * front. Classic always does. In Multi-agent the user's own choices win:
+   * not if they closed or rearranged the inbox since the burst began, and,
+   * when the inbox is already open, not for a trivial burst (under
+   * AUTO_REVEAL_MIN_FILES files and AUTO_REVEAL_MIN_LINES changed lines).
+   * An inbox that isn't open yet is opened regardless, so it can be found.
+   */
+  private shouldAutoReveal(): boolean {
+    if (this.experience !== "multi-agent") return true;
+    if (this.inboxUi.userActionRevision !== this.revealBurstRevision) return false;
+    if (!this.singleLeafOfType(AGENT_INBOX_VIEW_TYPE)) return true;
+    if (this.revealBurst.size >= AUTO_REVEAL_MIN_FILES) return true;
+    let lines = 0;
+    for (const change of this.pendingChangesStore.list()) {
+      if (!this.revealBurst.has(change.id)) continue;
+      const stats = computeDiffStats(change.diff);
+      lines += stats.added + stats.removed;
+    }
+    return lines >= AUTO_REVEAL_MIN_LINES;
   }
 
   /** The active mode's auto-reveal settings: Classic reveals Pending

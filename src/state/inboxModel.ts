@@ -83,6 +83,25 @@ export function buildInbox(sessions: AgentSession[], changes: PendingChange[], f
   return inbox;
 }
 
+/**
+ * Splits an inbox by the sidebar's selection. `inScope` is true for a card
+ * the selected group (or Ungrouped, which shows in every group) owns, and for
+ * a card with no terminal left, whose changes still need review. Everything
+ * else goes to `elsewhere`, urgent first, so it can be listed compactly
+ * instead of hidden.
+ */
+export function scopeInbox(inbox: Inbox, inScope: (card: InboxCard) => boolean): { scoped: Inbox; elsewhere: InboxCard[] } {
+  const scoped: Inbox = { needsAttention: [], working: [], finished: [] };
+  const elsewhere: InboxCard[] = [];
+  const split = (cards: InboxCard[], into: InboxCard[]) => {
+    for (const card of cards) (inScope(card) ? into : elsewhere).push(card);
+  };
+  split(inbox.needsAttention, scoped.needsAttention);
+  split(inbox.working, scoped.working);
+  split(inbox.finished, scoped.finished);
+  return { scoped, elsewhere };
+}
+
 function finishedRank(card: InboxCard): number {
   if (card.ended) return 2;
   return card.session?.status === "finished-unread" ? 0 : 1;

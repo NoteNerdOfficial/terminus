@@ -19868,6 +19868,18 @@ function buildInbox(sessions, changes, feedbackTokens = /* @__PURE__ */ new Set(
   inbox.finished.sort((a, b3) => finishedRank(a) - finishedRank(b3));
   return inbox;
 }
+function scopeInbox(inbox, inScope) {
+  const scoped = { needsAttention: [], working: [], finished: [] };
+  const elsewhere = [];
+  const split = (cards, into) => {
+    for (const card of cards)
+      (inScope(card) ? into : elsewhere).push(card);
+  };
+  split(inbox.needsAttention, scoped.needsAttention);
+  split(inbox.working, scoped.working);
+  split(inbox.finished, scoped.finished);
+  return { scoped, elsewhere };
+}
 function finishedRank(card) {
   var _a8;
   if (card.ended)
@@ -19986,19 +19998,17 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
-    /** Per-view UI state, kept across re-renders. */
-    this.collapsedCards = /* @__PURE__ */ new Set();
-    /** Finished cards dismissed (by token) until their session's next turn. */
-    this.dismissed = /* @__PURE__ */ new Set();
-    /** Cards whose "nothing to review" agents are unfolded. */
-    this.expandedQuiet = /* @__PURE__ */ new Set();
-    this.finishedCollapsed = false;
+    /** The terminal in front, whose card is marked; only that changes on a focus event. */
+    this.focusedToken = null;
     /** Set in onOpen: holds renders while a mouse button is down here. */
     this.guardedRender = () => this.renderNow();
     /** Every re-render goes through here: the stores change often while
      *  Claude works, and a rebuild mid-click would lose the click (see
      *  renderGuard.ts). */
     this.render = () => this.guardedRender();
+  }
+  get ui() {
+    return this.plugin.inboxUi;
   }
   get rows() {
     return { plugin: this.plugin, component: this, variant: "inbox" };
@@ -20013,33 +20023,59 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     return "inbox";
   }
   async onOpen() {
+    var _a8;
     this.plugin.dedupeView(AGENT_INBOX_VIEW_TYPE);
     this.guardedRender = guardRenderDuringPress(this, this.contentEl, () => this.renderNow());
     this.plugin.pendingChangesStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.feedbackStore.on("change", this.render);
+    this.plugin.groupStore.on("change", this.render);
+    const front = (_a8 = this.app.workspace.getMostRecentLeaf()) == null ? void 0 : _a8.view;
+    this.focusedToken = front instanceof TerminalView ? front.hookToken : null;
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.onFocusChange()));
+    this.render();
+  }
+  /** Only the terminal in front matters here (clicking into this pane makes
+   *  no terminal active), and only a different one needs a render. */
+  onFocusChange() {
+    var _a8;
+    const front = (_a8 = this.app.workspace.getMostRecentLeaf()) == null ? void 0 : _a8.view;
+    const token = front instanceof TerminalView ? front.hookToken : null;
+    if (token === this.focusedToken)
+      return;
+    this.focusedToken = token;
     this.render();
   }
   async onClose() {
     this.plugin.pendingChangesStore.off("change", this.render);
     this.plugin.agentSessionStore.off("change", this.render);
     this.plugin.feedbackStore.off("change", this.render);
+    this.plugin.groupStore.off("change", this.render);
+    if (!this.plugin.isUnloading)
+      this.ui.userAction();
   }
   renderNow() {
     const container = this.contentEl;
     container.empty();
     container.addClass("terminus-pending-view", "terminus-inbox-view");
-    const inbox = buildInbox(
+    const full = buildInbox(
       this.plugin.agentSessionStore.list(),
       this.plugin.pendingChangesStore.list(),
       this.plugin.feedbackStore.tokens()
     );
     const allChanges = this.plugin.pendingChangesStore.list();
-    this.renderHeader(container, inbox.needsAttention.length, allChanges);
+    for (const card of [...full.needsAttention, ...full.working])
+      this.ui.dismissed.delete(card.token);
+    const scope = this.selection();
+    const split = this.ui.showAll ? { scoped: full, elsewhere: [] } : scopeInbox(full, scope.inScope);
+    const inbox = split.scoped;
+    const elsewhere = split.elsewhere.filter((card) => !(this.ui.dismissed.has(card.token) && this.dismissible(card)));
+    this.renderHeader(container, full.needsAttention.length, allChanges);
+    this.renderScope(container, scope, elsewhere);
     this.renderTotals(container, [...inbox.needsAttention, ...inbox.working, ...inbox.finished]);
     const body = container.createDiv({ cls: "terminus-inbox-body" });
     const cardCount = inbox.needsAttention.length + inbox.working.length + inbox.finished.length;
-    if (cardCount === 0) {
+    if (cardCount === 0 && elsewhere.length === 0) {
       const empty = body.createDiv({ cls: "terminus-inbox-empty" });
       (0, import_obsidian19.setIcon)(empty.createDiv({ cls: "terminus-inbox-empty-icon" }), "inbox");
       empty.createDiv({ cls: "terminus-inbox-empty-title", text: "No Claude sessions" });
@@ -20048,21 +20084,25 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       const command = "claude";
       text.createEl("code", { text: command });
       text.appendText(" in a terminal. Each session gets a card here with what it's doing, what it changed, and when it needs you.");
+    } else if (cardCount === 0) {
+      const empty = body.createDiv({ cls: "terminus-inbox-empty" });
+      (0, import_obsidian19.setIcon)(empty.createDiv({ cls: "terminus-inbox-empty-icon" }), "inbox");
+      empty.createDiv({ cls: "terminus-inbox-empty-title", text: `Nothing in ${scope.label}` });
+      empty.createDiv({ cls: "terminus-inbox-empty-text", text: "Sessions in your other groups are listed below." });
     }
     this.renderSection(body, "Needs attention", inbox.needsAttention);
     this.renderSection(body, "Working", inbox.working);
-    for (const card of [...inbox.needsAttention, ...inbox.working])
-      this.dismissed.delete(card.token);
-    const finished = inbox.finished.filter((card) => !(this.dismissed.has(card.token) && this.dismissible(card)));
+    const finished = inbox.finished.filter((card) => !(this.ui.dismissed.has(card.token) && this.dismissible(card)));
     if (finished.length > 0) {
-      const heading = this.renderSectionHeading(body, "Finished", finished.length, this.finishedCollapsed);
+      const heading = this.renderSectionHeading(body, "Finished", finished.length, this.ui.finishedCollapsed);
       const toggle = () => {
-        this.finishedCollapsed = !this.finishedCollapsed;
+        this.ui.userAction();
+        this.ui.finishedCollapsed = !this.ui.finishedCollapsed;
         this.render();
       };
       heading.addEventListener("click", toggle);
       makeActivatable(heading, toggle, () => void 0);
-      heading.setAttr("aria-expanded", String(!this.finishedCollapsed));
+      heading.setAttr("aria-expanded", String(!this.ui.finishedCollapsed));
       const clearable = finished.filter((card) => this.dismissible(card));
       if (clearable.length > 0) {
         const clear = heading.createEl("button", { cls: "terminus-inbox-clear", text: "Clear" });
@@ -20073,7 +20113,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
         });
         clear.addEventListener("keydown", (evt) => evt.stopPropagation());
       }
-      if (!this.finishedCollapsed)
+      if (!this.ui.finishedCollapsed)
         for (const card of finished)
           this.renderCard(body, card, true);
     } else if (cardCount > 0 && inbox.needsAttention.length === 0 && inbox.working.length === 0) {
@@ -20082,9 +20122,122 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       empty.createDiv({ cls: "terminus-inbox-empty-title", text: "All caught up" });
       empty.createDiv({ cls: "terminus-inbox-empty-text", text: "A dismissed session comes back here on its next turn." });
     }
+    this.renderElsewhere(body, elsewhere);
     const history = this.plugin.pendingChangesStore.listHistory();
     if (history.length > 0)
       renderHistorySection(this.rows, body, history);
+  }
+  /** What the sidebar has selected, as the inbox sees it: the selected
+   *  group's name, and which cards belong to it. Ungrouped terminals show in
+   *  every group, as in the sidebar; a card whose terminal is gone belongs to
+   *  no group and always counts, since its changes still need review. */
+  selection() {
+    var _a8, _b;
+    const groups = this.plugin.groupStore;
+    const active = groups.get(groups.activeGroupId);
+    const owner = new Map(this.plugin.groups.terminals().map((t) => {
+      var _a9, _b2;
+      return [t.hookToken, (_b2 = (_a9 = groups.get(t.groupId)) == null ? void 0 : _a9.id) != null ? _b2 : null];
+    }));
+    return {
+      label: (_a8 = active == null ? void 0 : active.name) != null ? _a8 : "Ungrouped",
+      color: (_b = active == null ? void 0 : active.color) != null ? _b : null,
+      inScope: (card) => {
+        if (!owner.has(card.token))
+          return true;
+        const group = owner.get(card.token);
+        return group === null || group === (active == null ? void 0 : active.id);
+      }
+    };
+  }
+  /** One line under the header saying what the inbox is showing, with the
+   *  way out of it. Hidden when there is nothing to scope: no group's
+   *  sessions are held back. */
+  renderScope(container, scope, elsewhere) {
+    const showAll = this.ui.showAll;
+    if (!showAll && elsewhere.length === 0)
+      return;
+    const line = container.createDiv({ cls: "terminus-inbox-scope" });
+    const what = line.createSpan({ cls: "terminus-inbox-scope-what" });
+    if (showAll) {
+      what.setText("Showing all sessions");
+    } else {
+      if (scope.color)
+        what.createSpan({ cls: "terminus-group-dot" }).style.setProperty("--terminus-group-color", scope.color);
+      what.createSpan({ text: `Showing ${scope.label}` });
+    }
+    const waiting = elsewhere.filter((card) => {
+      var _a8;
+      return !card.ended && ((_a8 = card.session) == null ? void 0 : _a8.status) === "needs-attention";
+    }).length;
+    if (waiting > 0) {
+      const alert = line.createEl("button", {
+        cls: "terminus-inbox-scope-alert",
+        text: `${waiting} elsewhere ${waiting === 1 ? "needs" : "need"} you`
+      });
+      (0, import_obsidian19.setTooltip)(alert, "Jump to the next session that needs attention");
+      alert.addEventListener("click", () => void this.plugin.jumpToNextSessionNeedingAttention());
+    }
+    line.createDiv({ cls: "terminus-inbox-spacer" });
+    const toggle = line.createEl("button", { cls: "terminus-btn-ghost", text: showAll ? "Follow group" : "Show all" });
+    (0, import_obsidian19.setTooltip)(toggle, showAll ? "Show only the group selected in the Terminus sidebar" : "Show every session, whatever its group");
+    toggle.addEventListener("click", () => {
+      this.ui.userAction();
+      this.ui.showAll = !showAll;
+      this.render();
+    });
+  }
+  /** The sessions outside the selected group, one line each: enough to see
+   *  who needs you and to go there, without a card's weight. */
+  renderElsewhere(body, cards) {
+    var _a8;
+    if (cards.length === 0)
+      return;
+    const collapsed = this.ui.elsewhereCollapsed;
+    const heading = this.renderSectionHeading(body, "Elsewhere", cards.length, collapsed);
+    const toggle = () => {
+      this.ui.userAction();
+      this.ui.elsewhereCollapsed = !collapsed;
+      this.render();
+    };
+    heading.addEventListener("click", toggle);
+    makeActivatable(heading, toggle, () => void 0);
+    heading.setAttr("aria-expanded", String(!collapsed));
+    if (collapsed)
+      return;
+    for (const card of cards) {
+      const { terminal, name, color } = this.identify(card);
+      const row = body.createDiv({ cls: "terminus-inbox-elsewhere" });
+      row.toggleClass("is-needs-attention", !card.ended && ((_a8 = card.session) == null ? void 0 : _a8.status) === "needs-attention");
+      const swatch = row.createSpan({ cls: "terminus-inbox-card-stroke" });
+      if (color)
+        swatch.style.setProperty("--terminus-terminal-color", color);
+      row.createSpan({ cls: "terminus-inbox-elsewhere-name", text: name, attr: { title: name } });
+      const group = this.plugin.groupStore.get(terminal == null ? void 0 : terminal.groupId);
+      if (group && group.name !== name)
+        row.createSpan({ cls: "terminus-inbox-elsewhere-group", text: group.name });
+      const pill = statusPill(card);
+      (0, import_obsidian19.setTooltip)(row.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label }), pill.hint);
+      if (card.changes.length > 0)
+        row.createSpan({ cls: "terminus-inbox-elsewhere-review", text: `${card.changes.length} to review` });
+      if (terminal) {
+        const open = () => void this.plugin.focusTerminal(card.token);
+        row.addEventListener("click", open);
+        makeActivatable(row, open, () => void 0);
+      }
+    }
+  }
+  /** A card's terminal, name and colour. The name falls back to what a
+   *  closed terminal left behind. */
+  identify(card) {
+    var _a8, _b, _c2, _d, _e4;
+    const terminal = this.plugin.findTerminalView(card.token);
+    const firstChange = card.changes[0];
+    return {
+      terminal,
+      name: (_d = (_c2 = (_a8 = terminal == null ? void 0 : terminal.getDisplayText()) != null ? _a8 : firstChange == null ? void 0 : firstChange.panelLabel) != null ? _c2 : (_b = this.plugin.feedbackStore.listFor(card.token)[0]) == null ? void 0 : _b.terminalLabel) != null ? _d : "Closed terminal",
+      color: terminal ? terminal.effectiveColor : (_e4 = firstChange == null ? void 0 : firstChange.panelColor) != null ? _e4 : null
+    };
   }
   renderHeader(container, needsCount, allChanges) {
     const header = container.createDiv({ cls: "terminus-inbox-header" });
@@ -20157,24 +20310,23 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     return card.changes.length === 0 && this.plugin.feedbackStore.listFor(card.token).length === 0;
   }
   dismiss(cards) {
+    this.ui.userAction();
     for (const card of cards) {
-      this.dismissed.add(card.token);
+      this.ui.dismissed.add(card.token);
       this.plugin.agentSessionStore.seen(card.token);
     }
     this.render();
   }
   renderCard(body, card, inFinished = false) {
-    var _a8, _b, _c2, _d, _e4, _f, _g;
-    const terminal = this.plugin.findTerminalView(card.token);
-    const firstChange = card.changes[0];
-    const name = (_d = (_c2 = (_a8 = terminal == null ? void 0 : terminal.getDisplayText()) != null ? _a8 : firstChange == null ? void 0 : firstChange.panelLabel) != null ? _c2 : (_b = this.plugin.feedbackStore.listFor(card.token)[0]) == null ? void 0 : _b.terminalLabel) != null ? _d : "Closed terminal";
-    const color = terminal ? terminal.effectiveColor : (_e4 = firstChange == null ? void 0 : firstChange.panelColor) != null ? _e4 : null;
+    var _a8, _b;
+    const { terminal, name, color } = this.identify(card);
     const session = card.session;
     const needsAttention = !card.ended && (session == null ? void 0 : session.status) === "needs-attention";
-    const collapsed = this.collapsedCards.has(card.token);
+    const collapsed = this.ui.collapsedCards.has(card.token);
     const el2 = body.createDiv({ cls: "terminus-inbox-card" });
     el2.toggleClass("is-needs-attention", needsAttention);
     el2.toggleClass("is-ended", card.ended);
+    el2.toggleClass("is-focused", card.token === this.focusedToken);
     const head = el2.createDiv({ cls: "terminus-inbox-card-head" });
     const swatch = head.createSpan({ cls: "terminus-inbox-card-stroke" });
     if (color)
@@ -20184,10 +20336,11 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     (0, import_obsidian19.setTooltip)(head.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label }), pill.hint);
     (0, import_obsidian19.setIcon)(head.createSpan({ cls: "terminus-inbox-chevron" }), collapsed ? "chevron-right" : "chevron-down");
     const toggle = () => {
+      this.ui.userAction();
       if (collapsed)
-        this.collapsedCards.delete(card.token);
+        this.ui.collapsedCards.delete(card.token);
       else
-        this.collapsedCards.add(card.token);
+        this.ui.collapsedCards.add(card.token);
       this.render();
     };
     head.addEventListener("click", toggle);
@@ -20210,7 +20363,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     if ((session == null ? void 0 : session.lastTurnMs) != null && session.status !== "working") {
       meta.createSpan({ text: `turn ${formatDuration(session.lastTurnMs)}` });
     }
-    this.renderUsage(meta, sessionUsage(session), (_f = session == null ? void 0 : session.usage) != null ? _f : null);
+    this.renderUsage(meta, sessionUsage(session), (_a8 = session == null ? void 0 : session.usage) != null ? _a8 : null);
     if (card.changes.length > 0) {
       const { added, removed } = sumStats(card.changes);
       const pending = meta.createSpan({ cls: "terminus-inbox-pending" });
@@ -20222,7 +20375,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       return;
     if (needsAttention && session) {
       const banner = el2.createDiv({ cls: "terminus-inbox-banner", attr: { role: "status" } });
-      iconLabel(banner, "alert-triangle", (_g = session.needsMessage) != null ? _g : needsFallback(session), "terminus-inbox-banner-text");
+      iconLabel(banner, "alert-triangle", (_b = session.needsMessage) != null ? _b : needsFallback(session), "terminus-inbox-banner-text");
       if (terminal) {
         banner.createEl("button", { cls: "mod-cta", text: "Answer in terminal" }).addEventListener(
           "click",
@@ -20376,16 +20529,17 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     const quietCount = quiet.length + card.hiddenSubagents;
     if (quietCount === 0)
       return;
-    const expanded = this.expandedQuiet.has(card.token);
+    const expanded = this.ui.expandedQuiet.has(card.token);
     const fold = el2.createDiv({ cls: "terminus-inbox-quiet" });
     const toggle = fold.createDiv({ cls: "terminus-inbox-quiet-toggle" });
     (0, import_obsidian19.setIcon)(toggle.createSpan({ cls: "terminus-inbox-chevron" }), expanded ? "chevron-down" : "chevron-right");
     toggle.createSpan({ text: `${quietCount} ${quietCount === 1 ? "agent" : "agents"} with nothing to review` });
     const flip = () => {
+      this.ui.userAction();
       if (expanded)
-        this.expandedQuiet.delete(card.token);
+        this.ui.expandedQuiet.delete(card.token);
       else
-        this.expandedQuiet.add(card.token);
+        this.ui.expandedQuiet.add(card.token);
       this.render();
     };
     toggle.addEventListener("click", flip);
@@ -22564,6 +22718,30 @@ var FeedbackStore = class extends TypedEmitter {
   }
 };
 
+// src/state/InboxUiState.ts
+var InboxUiState = class {
+  constructor() {
+    /** Cards folded to their header, by terminal token. */
+    this.collapsedCards = /* @__PURE__ */ new Set();
+    /** Finished cards dismissed (by token) until their session's next turn. */
+    this.dismissed = /* @__PURE__ */ new Set();
+    /** Cards whose "nothing to review" agents are unfolded. */
+    this.expandedQuiet = /* @__PURE__ */ new Set();
+    this.finishedCollapsed = false;
+    this.elsewhereCollapsed = false;
+    /** False: the inbox follows the sidebar's selected group. True: every session. */
+    this.showAll = false;
+    this.revision = 0;
+  }
+  get userActionRevision() {
+    return this.revision;
+  }
+  /** Call from every handler that is the user rearranging the inbox. */
+  userAction() {
+    this.revision++;
+  }
+};
+
 // src/claude/feedbackPrompt.ts
 var MAX_EXCERPT_LINES = 6;
 function composeFeedbackPrompt(items, relativePath) {
@@ -23315,6 +23493,8 @@ var MultiAgentInviteModal = class extends import_obsidian27.Modal {
 };
 
 // src/main.ts
+var AUTO_REVEAL_MIN_FILES = 3;
+var AUTO_REVEAL_MIN_LINES = 50;
 var TerminusPlugin = class extends import_obsidian28.Plugin {
   constructor() {
     super(...arguments);
@@ -23324,6 +23504,12 @@ var TerminusPlugin = class extends import_obsidian28.Plugin {
     this.agentSessionStore = new AgentSessionStore();
     /** Review comments queued per session (Multi-agent only). */
     this.feedbackStore = new FeedbackStore();
+    /** How the user has arranged the Agent inbox; outlives the view. */
+    this.inboxUi = new InboxUiState();
+    /** Files of the current burst of edits, for the auto-reveal's threshold. */
+    this.revealBurst = /* @__PURE__ */ new Set();
+    /** The inbox's user-action revision when the current burst began. */
+    this.revealBurstRevision = 0;
     this.groups = new GroupController(this);
     /** Latest release on GitHub, once checked (Multi-agent only). */
     this.latestPluginVersion = null;
@@ -23367,15 +23553,20 @@ var TerminusPlugin = class extends import_obsidian28.Plugin {
         toolName: item.payload.tool_name
       });
     });
-    this.pendingChangesStore.on("recorded", () => {
+    this.pendingChangesStore.on("recorded", (change) => {
       const reveal = this.autoRevealSettings();
       if (!reveal.enabled && !this.shouldInviteToMultiAgent())
         return;
-      if (this.revealPendingChangesTimer)
+      if (this.revealPendingChangesTimer === null) {
+        this.revealBurst.clear();
+        this.revealBurstRevision = this.inboxUi.userActionRevision;
+      } else {
         window.clearTimeout(this.revealPendingChangesTimer);
+      }
+      this.revealBurst.add(change.id);
       this.revealPendingChangesTimer = window.setTimeout(() => {
         this.revealPendingChangesTimer = null;
-        if (reveal.enabled)
+        if (reveal.enabled && this.shouldAutoReveal())
           void this.revealReviewView();
         if (this.shouldInviteToMultiAgent())
           void this.showMultiAgentInvite();
@@ -23640,6 +23831,32 @@ var TerminusPlugin = class extends import_obsidian28.Plugin {
         "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
       );
     }
+  }
+  /**
+   * Whether the burst that just settled should bring the review view to
+   * front. Classic always does. In Multi-agent the user's own choices win:
+   * not if they closed or rearranged the inbox since the burst began, and,
+   * when the inbox is already open, not for a trivial burst (under
+   * AUTO_REVEAL_MIN_FILES files and AUTO_REVEAL_MIN_LINES changed lines).
+   * An inbox that isn't open yet is opened regardless, so it can be found.
+   */
+  shouldAutoReveal() {
+    if (this.experience !== "multi-agent")
+      return true;
+    if (this.inboxUi.userActionRevision !== this.revealBurstRevision)
+      return false;
+    if (!this.singleLeafOfType(AGENT_INBOX_VIEW_TYPE))
+      return true;
+    if (this.revealBurst.size >= AUTO_REVEAL_MIN_FILES)
+      return true;
+    let lines = 0;
+    for (const change of this.pendingChangesStore.list()) {
+      if (!this.revealBurst.has(change.id))
+        continue;
+      const stats = computeDiffStats(change.diff);
+      lines += stats.added + stats.removed;
+    }
+    return lines >= AUTO_REVEAL_MIN_LINES;
   }
   /** The active mode's auto-reveal settings: Classic reveals Pending
    *  Changes, Multi-agent the Agent inbox. */
