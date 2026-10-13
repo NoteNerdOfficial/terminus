@@ -5,6 +5,7 @@ import type { TerminalGroup } from "../state/GroupStore";
 import { ConfirmModal } from "../modals/ConfirmModal";
 import { TabVisibility } from "./TabVisibility";
 import { GroupSuggestModal } from "./GroupSuggestModal";
+import { TerminalSwitcherModal } from "./TerminalSwitcherModal";
 import { addNoteMenuItems, moveTabCommand } from "./groupMenus";
 import { noteFile, noteStatus, startClaudeOnNote } from "./groupNotes";
 import { leafForPlacement, type OpenPlacement } from "../util/leafPlacement";
@@ -105,6 +106,14 @@ export class GroupController {
       id: "switch-group",
       name: "Switch group…",
       checkCallback: multiAgent(() => this.store.list().length > 0, () => this.switchGroupPicker()),
+    });
+    plugin.addCommand({
+      id: "go-to-terminal",
+      name: "Go to terminal or group…",
+      checkCallback: multiAgent(
+        () => this.terminals().length > 0 || this.store.list().length > 0,
+        () => new TerminalSwitcherModal(plugin).open()
+      ),
     });
     plugin.addCommand({
       id: "move-tab-to-group",

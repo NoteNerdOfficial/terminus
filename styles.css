@@ -1821,75 +1821,7 @@
 
 /* A group's summary stays: it's what says the group needs you. */
 .terminus-sidebar-terminal:hover .terminus-sidebar-shell-tag,
-.terminus-sidebar-terminal:focus-within /* The Done shelf: groups put away, one quiet line each. */
-.terminus-sidebar-done {
-  margin-top: 10px;
-}
-
-.terminus-sidebar-done-heading {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-radius: var(--radius-s);
-  font-size: var(--font-ui-smaller);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.terminus-sidebar-done-heading:hover,
-.terminus-sidebar-done-heading:focus-visible {
-  background-color: var(--background-modifier-hover);
-}
-
-.terminus-sidebar-done-count {
-  font-variant-numeric: tabular-nums;
-  font-weight: 400;
-  color: var(--text-faint);
-}
-
-.terminus-sidebar-done-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border-radius: var(--radius-s);
-  font-size: var(--font-ui-small);
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.terminus-sidebar-done-row:hover,
-.terminus-sidebar-done-row:focus-within {
-  background-color: var(--background-modifier-hover);
-}
-
-.terminus-sidebar-done-row.is-active {
-  color: var(--text-normal);
-}
-
-.terminus-sidebar-done-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.terminus-sidebar-done-row:hover .terminus-sidebar-group-state,
-.terminus-sidebar-done-row:focus-within .terminus-sidebar-group-state {
-  display: none;
-}
-
-.terminus-sidebar-done-row:hover .terminus-sidebar-row-actions,
-.terminus-sidebar-done-row:focus-within .terminus-sidebar-row-actions {
-  display: flex;
-}
-
-.terminus-sidebar-shell-tag {
+.terminus-sidebar-terminal:focus-within .terminus-sidebar-shell-tag {
   display: none;
 }
 
@@ -2040,6 +1972,105 @@
 
 .terminus-sidebar-status.is-idle {
   box-shadow: inset 0 0 0 1.5px var(--text-faint);
+}
+
+/* "Go to terminal or group…": name, where it is, what it's doing. */
+.suggestion-item.terminus-switcher-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.terminus-switcher-item .terminus-switcher-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-switcher-item .terminus-switcher-meta,
+.terminus-switcher-item .terminus-switcher-status {
+  flex: none;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+}
+
+.terminus-switcher-item .terminus-switcher-status.is-needs-attention {
+  color: var(--color-orange, #e8871e);
+  font-weight: 600;
+}
+
+.terminus-switcher-item .terminus-switcher-status.is-working {
+  color: var(--interactive-accent);
+}
+
+/* The Done shelf: groups put away, one quiet line each. */
+.terminus-sidebar-done {
+  margin-top: 10px;
+}
+
+.terminus-sidebar-done-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.terminus-sidebar-done-heading:hover,
+.terminus-sidebar-done-heading:focus-visible {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-sidebar-done-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  color: var(--text-faint);
+}
+
+.terminus-sidebar-done-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.terminus-sidebar-done-row:hover,
+.terminus-sidebar-done-row:focus-within {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-sidebar-done-row.is-active {
+  color: var(--text-normal);
+}
+
+.terminus-sidebar-done-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-sidebar-done-row:hover .terminus-sidebar-group-state,
+.terminus-sidebar-done-row:focus-within .terminus-sidebar-group-state {
+  display: none;
+}
+
+.terminus-sidebar-done-row:hover .terminus-sidebar-row-actions,
+.terminus-sidebar-done-row:focus-within .terminus-sidebar-row-actions {
+  display: flex;
 }
 
 .terminus-sidebar-shell-tag {
@@ -2243,6 +2274,11 @@
   border-bottom: 1px solid var(--background-modifier-border);
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
+}
+
+/* Show all / Follow group stays at the right edge, wrapped or not. */
+.terminus-inbox-scope .terminus-btn-ghost {
+  margin-left: auto;
 }
 
 .terminus-inbox-scope-what {
