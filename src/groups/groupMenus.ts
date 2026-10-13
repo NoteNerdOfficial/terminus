@@ -1,5 +1,6 @@
 import { FuzzySuggestModal, Menu, SuggestModal, TFolder, WorkspaceLeaf } from "obsidian";
-import { pathJoin } from "terminus-node-bridge";
+import { pathJoin, pathRelative } from "terminus-node-bridge";
+import { titleFromFolder } from "./groupNaming";
 import { TerminalView } from "../views/TerminalView";
 import type { TerminalGroup } from "../state/GroupStore";
 import { openTerminalColorPicker } from "../terminal/TerminalColorPicker";
@@ -104,7 +105,7 @@ export function showGroupMenu(evt: MouseEvent, plugin: TerminusPlugin, group: Te
     item
       .setTitle("Set folder…")
       .setIcon("folder")
-      .onClick(() => new FolderSuggestModal(plugin, (folder) => plugin.groupStore.setFolder(group.id, folder)).open())
+      .onClick(() => new FolderSuggestModal(plugin, (folder) => setGroupFolder(plugin, group.id, folder)).open())
   );
   if (anchor) {
     menu.addItem((item) =>
@@ -138,6 +139,14 @@ export function showGroupMenu(evt: MouseEvent, plugin: TerminusPlugin, group: Te
   menu.addSeparator();
   menu.addItem((item) => item.setTitle("Close group").setIcon("x").onClick(actions.close));
   menu.showAtMouseEvent(evt);
+}
+
+/** Sets where a group's new terminals start; a folder other than the vault
+ *  root can also name an unnamed group (see groupNaming.ts). */
+function setGroupFolder(plugin: TerminusPlugin, groupId: string, folder: string | null): void {
+  plugin.groupStore.setFolder(groupId, folder);
+  const relative = folder ? pathRelative(plugin.getVaultBasePath(), folder) : null;
+  plugin.groupStore.autoName(groupId, titleFromFolder(relative), "folder");
 }
 
 /** The "Move tab to group…" command: whatever tab was last active. */

@@ -87,7 +87,7 @@ var require_fs = __commonJS({
     exports.pathJoin = pathJoin11;
     exports.pathBasename = pathBasename13;
     exports.pathDirname = pathDirname4;
-    exports.pathRelative = pathRelative9;
+    exports.pathRelative = pathRelative10;
     exports.fileExistsSync = fileExistsSync6;
     exports.readTextFileIfExists = readTextFileIfExists5;
     exports.writeTextFile = writeTextFile5;
@@ -109,7 +109,7 @@ var require_fs = __commonJS({
     function pathDirname4(filePath) {
       return nodePath.dirname(filePath);
     }
-    function pathRelative9(from, to) {
+    function pathRelative10(from, to) {
       return nodePath.relative(from, to);
     }
     function fileExistsSync6(filePath) {
@@ -16518,6 +16518,88 @@ async function getGitBranch(cwd) {
 var import_obsidian9 = require("obsidian");
 var import_terminus_node_bridge13 = __toESM(require_dist());
 
+// src/groups/groupNaming.ts
+var STRENGTH = { placeholder: 0, folder: 1, branch: 2, prompt: 3, note: 4, user: 5 };
+function outranks(next, current) {
+  return current !== "user" && STRENGTH[next] > STRENGTH[current];
+}
+var PLACEHOLDER_NAME = "New group";
+var MAX_WORDS = 5;
+var MAX_LENGTH = 40;
+var FILLER = [
+  "i would like you to",
+  "i'd like you to",
+  "i want you to",
+  "i need you to",
+  "can you please",
+  "could you please",
+  "would you please",
+  "please can you",
+  "hey claude",
+  "hi claude",
+  "can you",
+  "could you",
+  "would you",
+  "help me",
+  "let's",
+  "lets",
+  "please",
+  "claude",
+  "ok",
+  "okay",
+  "so"
+];
+function titleFromPrompt(prompt) {
+  var _a8, _b, _c2;
+  const firstLine = (_b = (_a8 = prompt.trim().split("\n")[0]) == null ? void 0 : _a8.trim()) != null ? _b : "";
+  if (!firstLine || firstLine.startsWith("/"))
+    return null;
+  let text = ((_c2 = firstLine.split(/(?<=[.?!])\s/)[0]) != null ? _c2 : firstLine).replace(/[.?!:;,]+$/, "");
+  let lower = text.toLowerCase();
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const filler of FILLER) {
+      if (lower === filler || lower.startsWith(filler + " ") || lower.startsWith(filler + ",")) {
+        text = text.slice(filler.length).replace(/^[\s,]+/, "");
+        lower = text.toLowerCase();
+        changed = true;
+      }
+    }
+  }
+  const words = text.split(/\s+/).filter((w2) => w2 && !/[/\\]|^@|^https?:|\.\w{1,5}$/.test(w2)).filter((w2, i8) => !(i8 > 0 && /^(the|a|an)$/i.test(w2)));
+  const detail = /^(in|on|for|from|to|with|at|so|because|using|via)$/i;
+  const kept = [];
+  for (const word of words) {
+    if (kept.length >= 2 && detail.test(word))
+      break;
+    kept.push(word);
+    if (kept.length === MAX_WORDS)
+      break;
+  }
+  return finish(kept.join(" "));
+}
+function titleFromBranch(branch) {
+  var _a8;
+  const name = branch.trim();
+  if (!name || /^(main|master|trunk|develop|dev|HEAD)$/i.test(name))
+    return null;
+  const last = (_a8 = name.split("/").pop()) != null ? _a8 : name;
+  return finish(last.replace(/[-_.]+/g, " "));
+}
+function titleFromFolder(relativeFolder) {
+  if (!relativeFolder || relativeFolder === "." || relativeFolder.startsWith(".."))
+    return null;
+  return finish(relativeFolder.split("/").filter(Boolean).slice(-2).join("/"), false);
+}
+function finish(title, capitalise = true) {
+  let t = title.replace(/\s+/g, " ").trim();
+  if (t.length > MAX_LENGTH)
+    t = t.slice(0, MAX_LENGTH).replace(/\s+\S*$/, "") || t.slice(0, MAX_LENGTH);
+  if (t.length < 2)
+    return null;
+  return capitalise ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+}
+
 // src/groups/groupNotes.ts
 var import_obsidian7 = require("obsidian");
 var NOTE_STATUSES = ["active", "review", "parked", "done"];
@@ -16546,6 +16628,7 @@ async function setNoteStatus(plugin, file, status) {
 }
 async function linkNote(plugin, groupId, file) {
   plugin.groupStore.setNote(groupId, file.path);
+  plugin.groupStore.autoName(groupId, file.basename, "note");
   if (noteStatus(plugin, file) !== null)
     return;
   try {
@@ -16568,7 +16651,6 @@ async function openGroupNote(plugin, groupId) {
 }
 async function startClaudeOnNote(plugin, file) {
   const group = plugin.groupStore.create();
-  plugin.groupStore.rename(group.id, file.basename);
   await linkNote(plugin, group.id, file);
   await plugin.groups.newTerminal(group.id, true, { command: "claude", prompt: `Read ${file.path} and let's work on it.` });
   await plugin.groups.selectGroup(group.id);
@@ -16686,7 +16768,7 @@ function showGroupMenu(evt, plugin, group, actions) {
   const menu = new import_obsidian9.Menu();
   menu.addItem((item) => item.setTitle("Rename").setIcon("pencil").onClick(actions.rename));
   menu.addItem(
-    (item) => item.setTitle("Set folder\u2026").setIcon("folder").onClick(() => new FolderSuggestModal(plugin, (folder) => plugin.groupStore.setFolder(group.id, folder)).open())
+    (item) => item.setTitle("Set folder\u2026").setIcon("folder").onClick(() => new FolderSuggestModal(plugin, (folder) => setGroupFolder(plugin, group.id, folder)).open())
   );
   if (anchor) {
     menu.addItem(
@@ -16709,6 +16791,11 @@ function showGroupMenu(evt, plugin, group, actions) {
   menu.addSeparator();
   menu.addItem((item) => item.setTitle("Close group").setIcon("x").onClick(actions.close));
   menu.showAtMouseEvent(evt);
+}
+function setGroupFolder(plugin, groupId, folder) {
+  plugin.groupStore.setFolder(groupId, folder);
+  const relative = folder ? (0, import_terminus_node_bridge13.pathRelative)(plugin.getVaultBasePath(), folder) : null;
+  plugin.groupStore.autoName(groupId, titleFromFolder(relative), "folder");
 }
 function moveTabCommand(plugin, leaf) {
   const terminal = leaf.view instanceof TerminalView ? leaf.view : null;
@@ -17120,7 +17207,10 @@ var TerminalView = class extends import_obsidian10.ItemView {
     const cwd = (_a8 = this.plugin.agentSessionStore.get(this.token)) == null ? void 0 : _a8.cwd;
     if (!cwd)
       return;
-    this.plugin.agentSessionStore.branchRead(this.token, await getGitBranch(cwd));
+    const branch = await getGitBranch(cwd);
+    this.plugin.agentSessionStore.branchRead(this.token, branch);
+    if (branch && this.groupIdValue)
+      this.plugin.groupStore.autoName(this.groupIdValue, titleFromBranch(branch), "branch");
   }
   /** Fires from the Notification hook -- Claude needs this terminal's
    *  permission, or has been sitting idle waiting on input. Either way,
@@ -17148,6 +17238,8 @@ var TerminalView = class extends import_obsidian10.ItemView {
         break;
       case "UserPromptSubmit":
         store.promptSubmitted(this.token, identity);
+        if (this.groupIdValue)
+          this.plugin.groupStore.autoName(this.groupIdValue, titleFromPrompt(payload.prompt), "prompt");
         void this.plugin.refreshUsage(this.token);
         break;
       case "SessionEnd":
@@ -20413,7 +20505,7 @@ var TerminusSidebarView = class extends import_obsidian20.ItemView {
   renderRenameInput(row, group) {
     const input = row.createEl("input", { cls: "terminus-sidebar-rename", attr: { type: "text", value: group.name } });
     let done = false;
-    const finish = (save) => {
+    const finish2 = (save) => {
       if (done)
         return;
       done = true;
@@ -20425,13 +20517,13 @@ var TerminusSidebarView = class extends import_obsidian20.ItemView {
     input.addEventListener("click", (evt) => evt.stopPropagation());
     input.addEventListener("keydown", (evt) => {
       if (evt.key === "Enter")
-        finish(true);
+        finish2(true);
       else if (evt.key === "Escape")
-        finish(false);
+        finish2(false);
     });
     input.addEventListener("blur", () => {
       if (!this.rendering && input.isConnected)
-        finish(true);
+        finish2(true);
     });
     window.setTimeout(() => {
       input.focus();
@@ -20625,6 +20717,9 @@ function resolveGroupsData(saved) {
   return {
     groups: groups.map((g2) => ({
       ...g2,
+      // Groups from before automatic naming: "Group 3" was a placeholder,
+      // anything else was typed.
+      nameSource: isNameSource(g2.nameSource) ? g2.nameSource : /^Group \d+$/.test(g2.name) ? "placeholder" : "user",
       folder: typeof g2.folder === "string" ? g2.folder : null,
       note: typeof g2.note === "string" ? g2.note : null
     })),
@@ -20633,6 +20728,9 @@ function resolveGroupsData(saved) {
     tabGroups: isStringRecord(s15.tabGroups) ? s15.tabGroups : {},
     nextNumber: typeof s15.nextNumber === "number" && s15.nextNumber >= 1 ? s15.nextNumber : groups.length + 1
   };
+}
+function isNameSource(value) {
+  return typeof value === "string" && ["placeholder", "folder", "branch", "prompt", "note", "user"].includes(value);
 }
 function isStringRecord(value) {
   return typeof value === "object" && value !== null && Object.values(value).every((v3) => typeof v3 === "string");
@@ -20653,13 +20751,15 @@ var GroupStore = class extends TypedEmitter {
   get activeGroupId() {
     return this.data.activeGroupId;
   }
-  /** A new group named "Group N", in the next palette colour. */
+  /** A new group named "New group" until a clue names it (see autoName),
+   *  in the next palette colour. */
   create() {
     var _a8;
     const n = this.data.nextNumber;
     const group = {
       id: `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-      name: `Group ${n}`,
+      name: PLACEHOLDER_NAME,
+      nameSource: "placeholder",
       color: (_a8 = this.palette[(n - 1) % this.palette.length]) != null ? _a8 : "",
       folder: null,
       note: null
@@ -20669,13 +20769,27 @@ var GroupStore = class extends TypedEmitter {
     this.changed();
     return group;
   }
+  /** The user's own name: final, never replaced automatically. Leaving the
+   *  rename field unchanged isn't naming it. */
   rename(id, name) {
     const group = this.get(id);
     const trimmed = name.trim();
     if (!group || !trimmed || trimmed === group.name)
       return;
     group.name = trimmed;
+    group.nameSource = "user";
     this.changed();
+  }
+  /** An automatic name from a clue, applied only when that clue outranks
+   *  the one the current name came from. Returns whether it was applied. */
+  autoName(id, name, source) {
+    const group = this.get(id);
+    if (!group || !name || !outranks(source, group.nameSource))
+      return false;
+    group.name = name;
+    group.nameSource = source;
+    this.changed();
+    return true;
   }
   setColor(id, color) {
     const group = this.get(id);

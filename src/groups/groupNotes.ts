@@ -43,6 +43,8 @@ export async function setNoteStatus(plugin: TerminusPlugin, file: TFile, status:
 /** Links a note to a group, giving it `status: active` if it has no status. */
 export async function linkNote(plugin: TerminusPlugin, groupId: string, file: TFile): Promise<void> {
   plugin.groupStore.setNote(groupId, file.path);
+  // A linked note names the group, unless the user named it.
+  plugin.groupStore.autoName(groupId, file.basename, "note");
   if (noteStatus(plugin, file) !== null) return;
   try {
     await plugin.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
@@ -69,7 +71,7 @@ export async function openGroupNote(plugin: TerminusPlugin, groupId: string): Pr
  */
 export async function startClaudeOnNote(plugin: TerminusPlugin, file: TFile): Promise<void> {
   const group = plugin.groupStore.create();
-  plugin.groupStore.rename(group.id, file.basename);
+  // Linking names the group after the note.
   await linkNote(plugin, group.id, file);
   await plugin.groups.newTerminal(group.id, true, { command: "claude", prompt: `Read ${file.path} and let's work on it.` });
   await plugin.groups.selectGroup(group.id);

@@ -1,4 +1,5 @@
 import { TypedEmitter } from "../node/emitter";
+import { NameSource, outranks, PLACEHOLDER_NAME } from "../groups/groupNaming";
 
 /** A set of terminals for one piece of work (Multi-agent experience). Which
  *  terminals are in it lives on each terminal (TerminalView's `groupId`, in
@@ -7,6 +8,9 @@ import { TypedEmitter } from "../node/emitter";
 export interface TerminalGroup {
   id: string;
   name: string;
+  /** Where the name came from; see groupNaming.ts. Automatic names give
+   *  way to stronger clues, and "user" (typed) is never replaced. */
+  nameSource: NameSource;
   /** A colour tag value (see colorPalette.ts); terminals without their own
    *  colour show it. */
   color: string;
@@ -48,6 +52,9 @@ export function resolveGroupsData(saved: unknown): GroupsData {
   return {
     groups: groups.map((g) => ({
       ...g,
+      // Groups from before automatic naming: "Group 3" was a placeholder,
+      // anything else was typed.
+      nameSource: isNameSource(g.nameSource) ? g.nameSource : /^Group \d+$/.test(g.name) ? "placeholder" : "user",
       folder: typeof g.folder === "string" ? g.folder : null,
       note: typeof g.note === "string" ? g.note : null,
     })),
@@ -56,6 +63,10 @@ export function resolveGroupsData(saved: unknown): GroupsData {
     tabGroups: isStringRecord(s.tabGroups) ? s.tabGroups : {},
     nextNumber: typeof s.nextNumber === "number" && s.nextNumber >= 1 ? s.nextNumber : groups.length + 1,
   };
+}
+
+function isNameSource(value: unknown): value is NameSource {
+  return typeof value === "string" && ["placeholder", "folder", "branch", "prompt", "note", "user"].includes(value);
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {
@@ -92,12 +103,14 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
     return this.data.activeGroupId;
   }
 
-  /** A new group named "Group N", in the next palette colour. */
+  /** A new group named "New group" until a clue names it (see autoName),
+   *  in the next palette colour. */
   create(): TerminalGroup {
     const n = this.data.nextNumber;
     const group: TerminalGroup = {
       id: `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-      name: `Group ${n}`,
+      name: PLACEHOLDER_NAME,
+      nameSource: "placeholder",
       color: this.palette[(n - 1) % this.palette.length] ?? "",
       folder: null,
       note: null,
@@ -108,12 +121,26 @@ export class GroupStore extends TypedEmitter<GroupStoreEvents> {
     return group;
   }
 
+  /** The user's own name: final, never replaced automatically. Leaving the
+   *  rename field unchanged isn't naming it. */
   rename(id: string, name: string): void {
     const group = this.get(id);
     const trimmed = name.trim();
     if (!group || !trimmed || trimmed === group.name) return;
     group.name = trimmed;
+    group.nameSource = "user";
     this.changed();
+  }
+
+  /** An automatic name from a clue, applied only when that clue outranks
+   *  the one the current name came from. Returns whether it was applied. */
+  autoName(id: string, name: string | null, source: NameSource): boolean {
+    const group = this.get(id);
+    if (!group || !name || !outranks(source, group.nameSource)) return false;
+    group.name = name;
+    group.nameSource = source;
+    this.changed();
+    return true;
   }
 
   setColor(id: string, color: string): void {

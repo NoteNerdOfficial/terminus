@@ -29,6 +29,7 @@ import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload
 import { getGitBranch } from "../git/gitBranch";
 import { withoutInheritedClaudeSession } from "../pty/claudeSessionEnv";
 import { addMoveItems } from "../groups/groupMenus";
+import { titleFromBranch, titleFromPrompt } from "../groups/groupNaming";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
 
@@ -538,7 +539,9 @@ export class TerminalView extends ItemView {
     if (this.plugin.experience !== "multi-agent" || !this.plugin.settings.multiAgent.showGitBranch) return;
     const cwd = this.plugin.agentSessionStore.get(this.token)?.cwd;
     if (!cwd) return;
-    this.plugin.agentSessionStore.branchRead(this.token, await getGitBranch(cwd));
+    const branch = await getGitBranch(cwd);
+    this.plugin.agentSessionStore.branchRead(this.token, branch);
+    if (branch && this.groupIdValue) this.plugin.groupStore.autoName(this.groupIdValue, titleFromBranch(branch), "branch");
   }
 
   /** Fires from the Notification hook -- Claude needs this terminal's
@@ -568,6 +571,9 @@ export class TerminalView extends ItemView {
         break;
       case "UserPromptSubmit":
         store.promptSubmitted(this.token, identity);
+        // The first prompt sent in a group names it, unless something
+        // stronger (a linked note, the user) already has.
+        if (this.groupIdValue) this.plugin.groupStore.autoName(this.groupIdValue, titleFromPrompt(payload.prompt), "prompt");
         void this.plugin.refreshUsage(this.token);
         break;
       case "SessionEnd":
