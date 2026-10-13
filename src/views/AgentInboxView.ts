@@ -64,7 +64,16 @@ export class AgentInboxView extends ItemView {
     const front = this.app.workspace.getMostRecentLeaf()?.view;
     this.focusedToken = front instanceof TerminalView ? front.hookToken : null;
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.onFocusChange()));
+    // Running timers advance in place: a re-render every second would
+    // fight clicks (see renderGuard.ts) for the sake of a number.
+    this.registerInterval(window.setInterval(() => this.tickElapsed(), 1000));
     this.render();
+  }
+
+  private tickElapsed(): void {
+    this.contentEl.querySelectorAll<HTMLElement>(".terminus-inbox-live-elapsed").forEach((el) => {
+      el.setText(formatDuration(Date.now() - Number(el.dataset.since)));
+    });
   }
 
   /** Only the terminal in front matters here (clicking into this pane makes
@@ -411,7 +420,12 @@ export class AgentInboxView extends ItemView {
     }
     if (session?.lastTurnMs != null && session.status !== "working") {
       meta.createSpan({ text: `turn ${formatDuration(session.lastTurnMs)}` });
+    } else if (!card.ended && session?.status === "working" && session.turnStartedAt !== null) {
+      liveElapsed(meta, session.turnStartedAt, "turn so far");
     }
+    // A folded card has no agent rows, so its agents are counted in a line.
+    const agents = collapsed ? summarizeAgents(session?.subagents ?? []) : null;
+    if (agents) meta.createSpan({ cls: "terminus-inbox-agents-summary", text: agents });
     this.renderUsage(meta, sessionUsage(session), session?.usage ?? null);
     if (card.changes.length > 0) {
       const { added, removed } = sumStats(card.changes);
@@ -618,6 +632,7 @@ export class AgentInboxView extends ItemView {
       details: compact ? [] : details,
       usage: compact ? null : (sub.run?.usage ?? null),
       changes: sub.changes,
+      liveSince: running ? sub.run?.startedAt : null,
       error: failed,
       title: !failed && sub.run?.lastMessage && !running ? sub.run.lastMessage : null,
       compact,
@@ -641,6 +656,8 @@ export class AgentInboxView extends ItemView {
       error?: string | null;
       title?: string | null;
       compact?: boolean;
+      /** A running agent's start, for a timer that ticks in place. */
+      liveSince?: number | null;
     }
   ): void {
     const row = el.createDiv({ cls: "terminus-inbox-agent" });
@@ -662,9 +679,10 @@ export class AgentInboxView extends ItemView {
     }
 
     const detailText = [...(agent.secondary && !agent.compact ? [agent.secondary] : []), ...agent.details];
-    if (detailText.length > 0 || agent.usage) {
+    if (detailText.length > 0 || agent.usage || agent.liveSince) {
       const details = row.createDiv({ cls: "terminus-inbox-agent-details" });
       for (const detail of detailText) details.createSpan({ text: detail });
+      if (agent.liveSince && !agent.compact) liveElapsed(details, agent.liveSince, "running");
       if (agent.usage) this.renderUsage(details, agent.usage, agent.usage);
     }
     if (agent.error) {
@@ -799,6 +817,27 @@ function agentLabel(card: InboxCard, agentId: string | null, agentType: string |
   if (!agentId) return "Lead";
   const run = card.session?.subagents.find((r) => r.agentId === agentId);
   return run?.description ?? run?.agentType ?? agentType ?? "a subagent";
+}
+
+/** "running 2m 14s", counting up on its own (see tickElapsed). */
+function liveElapsed(parent: HTMLElement, since: number, label: string): void {
+  const el = parent.createSpan();
+  el.appendText(`${label} `);
+  el.createSpan({ cls: "terminus-inbox-live-elapsed", text: formatDuration(Date.now() - since), attr: { "data-since": String(since) } });
+}
+
+/** "3 agents · 2 working · 1 failed" for a folded card; null with none.
+ *  Agents that finished fine are only counted in the first part. */
+function summarizeAgents(runs: SubagentRun[]): string | null {
+  if (runs.length === 0) return null;
+  const working = runs.filter((r) => r.running).length;
+  const failed = runs.filter((r) => !r.running && r.outcome === "failed").length;
+  const stopped = runs.filter((r) => !r.running && r.outcome === "stopped").length;
+  const parts = [`${runs.length} ${runs.length === 1 ? "agent" : "agents"}`];
+  if (working > 0) parts.push(`${working} working`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (stopped > 0) parts.push(`${stopped} stopped`);
+  return parts.join(" · ");
 }
 
 function changeCount(n: number): string {

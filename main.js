@@ -20033,7 +20033,13 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     const front = (_a8 = this.app.workspace.getMostRecentLeaf()) == null ? void 0 : _a8.view;
     this.focusedToken = front instanceof TerminalView ? front.hookToken : null;
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.onFocusChange()));
+    this.registerInterval(window.setInterval(() => this.tickElapsed(), 1e3));
     this.render();
+  }
+  tickElapsed() {
+    this.contentEl.querySelectorAll(".terminus-inbox-live-elapsed").forEach((el2) => {
+      el2.setText(formatDuration(Date.now() - Number(el2.dataset.since)));
+    });
   }
   /** Only the terminal in front matters here (clicking into this pane makes
    *  no terminal active), and only a different one needs a render. */
@@ -20318,7 +20324,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.render();
   }
   renderCard(body, card, inFinished = false) {
-    var _a8, _b;
+    var _a8, _b, _c2;
     const { terminal, name, color } = this.identify(card);
     const session = card.session;
     const needsAttention = !card.ended && (session == null ? void 0 : session.status) === "needs-attention";
@@ -20362,8 +20368,13 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
     if ((session == null ? void 0 : session.lastTurnMs) != null && session.status !== "working") {
       meta.createSpan({ text: `turn ${formatDuration(session.lastTurnMs)}` });
+    } else if (!card.ended && (session == null ? void 0 : session.status) === "working" && session.turnStartedAt !== null) {
+      liveElapsed(meta, session.turnStartedAt, "turn so far");
     }
-    this.renderUsage(meta, sessionUsage(session), (_a8 = session == null ? void 0 : session.usage) != null ? _a8 : null);
+    const agents = collapsed ? summarizeAgents((_a8 = session == null ? void 0 : session.subagents) != null ? _a8 : []) : null;
+    if (agents)
+      meta.createSpan({ cls: "terminus-inbox-agents-summary", text: agents });
+    this.renderUsage(meta, sessionUsage(session), (_b = session == null ? void 0 : session.usage) != null ? _b : null);
     if (card.changes.length > 0) {
       const { added, removed } = sumStats(card.changes);
       const pending = meta.createSpan({ cls: "terminus-inbox-pending" });
@@ -20375,7 +20386,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       return;
     if (needsAttention && session) {
       const banner = el2.createDiv({ cls: "terminus-inbox-banner", attr: { role: "status" } });
-      iconLabel(banner, "alert-triangle", (_b = session.needsMessage) != null ? _b : needsFallback(session), "terminus-inbox-banner-text");
+      iconLabel(banner, "alert-triangle", (_c2 = session.needsMessage) != null ? _c2 : needsFallback(session), "terminus-inbox-banner-text");
       if (terminal) {
         banner.createEl("button", { cls: "mod-cta", text: "Answer in terminal" }).addEventListener(
           "click",
@@ -20554,7 +20565,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
   }
   renderSubagent(el2, card, sub, compact) {
-    var _a8, _b, _c2, _d, _e4, _f, _g, _h, _i3;
+    var _a8, _b, _c2, _d, _e4, _f, _g, _h, _i3, _j;
     const running = (_b = (_a8 = sub.run) == null ? void 0 : _a8.running) != null ? _b : false;
     const details = [];
     const time = subagentTime(sub.run);
@@ -20571,8 +20582,9 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       details: compact ? [] : details,
       usage: compact ? null : (_h = (_g = sub.run) == null ? void 0 : _g.usage) != null ? _h : null,
       changes: sub.changes,
+      liveSince: running ? (_i3 = sub.run) == null ? void 0 : _i3.startedAt : null,
       error: failed,
-      title: !failed && ((_i3 = sub.run) == null ? void 0 : _i3.lastMessage) && !running ? sub.run.lastMessage : null,
+      title: !failed && ((_j = sub.run) == null ? void 0 : _j.lastMessage) && !running ? sub.run.lastMessage : null,
       compact
     });
   }
@@ -20597,10 +20609,12 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       stats.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
     }
     const detailText = [...agent.secondary && !agent.compact ? [agent.secondary] : [], ...agent.details];
-    if (detailText.length > 0 || agent.usage) {
+    if (detailText.length > 0 || agent.usage || agent.liveSince) {
       const details = row.createDiv({ cls: "terminus-inbox-agent-details" });
       for (const detail of detailText)
         details.createSpan({ text: detail });
+      if (agent.liveSince && !agent.compact)
+        liveElapsed(details, agent.liveSince, "running");
       if (agent.usage)
         this.renderUsage(details, agent.usage, agent.usage);
     }
@@ -20723,6 +20737,26 @@ function agentLabel(card, agentId, agentType) {
     return "Lead";
   const run = (_a8 = card.session) == null ? void 0 : _a8.subagents.find((r) => r.agentId === agentId);
   return (_d = (_c2 = (_b = run == null ? void 0 : run.description) != null ? _b : run == null ? void 0 : run.agentType) != null ? _c2 : agentType) != null ? _d : "a subagent";
+}
+function liveElapsed(parent, since, label) {
+  const el2 = parent.createSpan();
+  el2.appendText(`${label} `);
+  el2.createSpan({ cls: "terminus-inbox-live-elapsed", text: formatDuration(Date.now() - since), attr: { "data-since": String(since) } });
+}
+function summarizeAgents(runs) {
+  if (runs.length === 0)
+    return null;
+  const working = runs.filter((r) => r.running).length;
+  const failed = runs.filter((r) => !r.running && r.outcome === "failed").length;
+  const stopped = runs.filter((r) => !r.running && r.outcome === "stopped").length;
+  const parts = [`${runs.length} ${runs.length === 1 ? "agent" : "agents"}`];
+  if (working > 0)
+    parts.push(`${working} working`);
+  if (failed > 0)
+    parts.push(`${failed} failed`);
+  if (stopped > 0)
+    parts.push(`${stopped} stopped`);
+  return parts.join(" \xB7 ");
 }
 function changeCount(n) {
   if (n === 0)
