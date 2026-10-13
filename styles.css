@@ -1996,6 +1996,14 @@
   gap: 6px;
 }
 
+/* The reason the buttons are off wraps onto its own line, not past the card. */
+.terminus-inbox-steer-actions .terminus-inbox-foot-note {
+  order: -1;
+  flex: 1 1 100%;
+  min-width: 0;
+  text-align: right;
+}
+
 /* Tasks sent from a session to new terminals, on its card. */
 .terminus-inbox-delegations {
   display: flex;
