@@ -6,6 +6,7 @@ import { isOpenGroup, type TerminalGroup } from "../state/GroupStore";
 import { openTerminalColorPicker } from "../terminal/TerminalColorPicker";
 import { linkNote, NOTE_STATUSES, NoteStatus, noteFile, noteStatus, NoteSuggestModal, openGroupNote, setNoteStatus, startClaudeOnNote } from "./groupNotes";
 import { GroupSuggestModal } from "./GroupSuggestModal";
+import { forkCommand } from "./forkSession";
 import { resolveSnoozePresets, wakeLabel, type SnoozePreset } from "./snoozePresets";
 import type TerminusPlugin from "../main";
 
@@ -75,6 +76,21 @@ export function addMoveItems(menu: Menu, plugin: TerminusPlugin, subject: MoveSu
         .onClick(done(() => moveSubject(plugin, subject, null)))
     );
   }
+}
+
+/** "Fork session": a new terminal in the same group continuing from this
+ *  terminal's Claude session. Only for a terminal with a running session
+ *  whose id is known; a plain shell has nothing to fork. */
+export function addForkItem(menu: Menu, plugin: TerminusPlugin, view: TerminalView): boolean {
+  const session = plugin.agentSessionStore.get(view.hookToken);
+  if (!session?.running || !forkCommand(session.sessionId)) return false;
+  menu.addItem((item) =>
+    item
+      .setTitle("Fork session")
+      .setIcon("git-fork")
+      .onClick(() => void plugin.groups.forkSession(view))
+  );
+  return true;
 }
 
 /** A note tab's (or file list's) Terminus items, together in one section:

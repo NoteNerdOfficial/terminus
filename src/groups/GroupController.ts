@@ -6,6 +6,7 @@ import { ConfirmModal } from "../modals/ConfirmModal";
 import { TabVisibility } from "./TabVisibility";
 import { GroupSuggestModal } from "./GroupSuggestModal";
 import { TerminalSwitcherModal } from "./TerminalSwitcherModal";
+import { forkCommand } from "./forkSession";
 import { addNoteMenuItems, moveTabCommand } from "./groupMenus";
 import { noteFile, noteStatus, startClaudeOnNote } from "./groupNotes";
 import { leafForPlacement, type OpenPlacement } from "../util/leafPlacement";
@@ -351,7 +352,7 @@ export class GroupController {
   async newTerminal(
     target: GroupTarget,
     focus = true,
-    launch?: { command: string; prompt?: string },
+    launch?: { command: string; prompt?: string; cwd?: string; name?: string },
     placement: OpenPlacement = "tab"
   ): Promise<TerminalView | null> {
     const { workspace } = this.plugin.app;
@@ -365,7 +366,7 @@ export class GroupController {
     await leaf.setViewState({
       type: TERMINUS_VIEW_TYPE,
       active: focus,
-      state: { groupId: group?.id, cwd: group?.folder ?? undefined, launch },
+      state: { groupId: group?.id, cwd: launch?.cwd ?? group?.folder ?? undefined, customName: launch?.name, launch },
     });
     await workspace.revealLeaf(leaf);
     this.applyVisibility();
@@ -424,6 +425,19 @@ export class GroupController {
   closeTerminals(terminals: TerminalView[]): void {
     for (const view of terminals) view.leaf.detach();
     this.removeEmptyGroups();
+  }
+
+  /** Forks a terminal's Claude session into a new terminal in the same
+   *  group: `claude --resume <id> --fork-session`, in the folder the
+   *  session ran in (Claude finds a session by its folder). The fork is
+   *  named after its source, so the sidebar says where it came from.
+   *  False when there's no session to fork. */
+  async forkSession(view: TerminalView): Promise<boolean> {
+    const session = this.plugin.agentSessionStore.get(view.hookToken);
+    const command = forkCommand(session?.sessionId ?? null);
+    if (!session || !command) return false;
+    await this.newTerminal(view.groupId, true, { command, cwd: session.cwd ?? undefined, name: `${view.getDisplayText()} (fork)` });
+    return true;
   }
 
   /** Settling is refused while a session in the group is mid-turn or

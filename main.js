@@ -17023,6 +17023,12 @@ var GroupSuggestModal = class extends import_obsidian8.SuggestModal {
   }
 };
 
+// src/groups/forkSession.ts
+var SESSION_ID = /^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/;
+function forkCommand(sessionId) {
+  return sessionId && SESSION_ID.test(sessionId) ? `claude --resume ${sessionId} --fork-session` : null;
+}
+
 // src/groups/snoozePresets.ts
 var HOUR_MS = 60 * 60 * 1e3;
 var MORNING_HOUR = 9;
@@ -17101,6 +17107,15 @@ function addMoveItems(menu, plugin, subject, onDone) {
       (item) => item.setTitle("Remove from group").setIcon("folder-output").onClick(done(() => moveSubject(plugin, subject, null)))
     );
   }
+}
+function addForkItem(menu, plugin, view) {
+  const session = plugin.agentSessionStore.get(view.hookToken);
+  if (!(session == null ? void 0 : session.running) || !forkCommand(session.sessionId))
+    return false;
+  menu.addItem(
+    (item) => item.setTitle("Fork session").setIcon("git-fork").onClick(() => void plugin.groups.forkSession(view))
+  );
+  return true;
 }
 function addNoteMenuItems(menu, plugin, file, leaf) {
   const note = noteFile(plugin, file.path);
@@ -17785,6 +17800,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
     if (this.plugin.experience !== "multi-agent")
       return;
     menu.addSeparator();
+    addForkItem(menu, this.plugin, this);
     addMoveItems(menu, this.plugin, { terminals: [this] });
   }
   /** Its own colour tag, else its group's (Multi-agent). */
@@ -21907,6 +21923,8 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
   }
   showMoveMenu(evt, views) {
     const menu = new import_obsidian21.Menu();
+    if (views.length === 1 && views[0] && addForkItem(menu, this.plugin, views[0]))
+      menu.addSeparator();
     addMoveItems(menu, this.plugin, { terminals: views }, () => this.selected.clear());
     menu.showAtMouseEvent(evt);
   }
@@ -22589,7 +22607,7 @@ var GroupController = class {
   /** A new terminal in a group (starting in its folder, next to the
    *  terminal last used there) or ungrouped. */
   async newTerminal(target, focus = true, launch, placement = "tab") {
-    var _a8, _b;
+    var _a8, _b, _c2;
     const { workspace } = this.plugin.app;
     const group = this.store.get(target);
     const anchorId = group ? this.store.lastLeaf(group.id) : void 0;
@@ -22600,7 +22618,7 @@ var GroupController = class {
     await leaf.setViewState({
       type: TERMINUS_VIEW_TYPE,
       active: focus,
-      state: { groupId: group == null ? void 0 : group.id, cwd: (_b = group == null ? void 0 : group.folder) != null ? _b : void 0, launch }
+      state: { groupId: group == null ? void 0 : group.id, cwd: (_c2 = (_b = launch == null ? void 0 : launch.cwd) != null ? _b : group == null ? void 0 : group.folder) != null ? _c2 : void 0, customName: launch == null ? void 0 : launch.name, launch }
     });
     await workspace.revealLeaf(leaf);
     this.applyVisibility();
@@ -22663,6 +22681,20 @@ var GroupController = class {
     for (const view of terminals)
       view.leaf.detach();
     this.removeEmptyGroups();
+  }
+  /** Forks a terminal's Claude session into a new terminal in the same
+   *  group: `claude --resume <id> --fork-session`, in the folder the
+   *  session ran in (Claude finds a session by its folder). The fork is
+   *  named after its source, so the sidebar says where it came from.
+   *  False when there's no session to fork. */
+  async forkSession(view) {
+    var _a8, _b;
+    const session = this.plugin.agentSessionStore.get(view.hookToken);
+    const command = forkCommand((_a8 = session == null ? void 0 : session.sessionId) != null ? _a8 : null);
+    if (!session || !command)
+      return false;
+    await this.newTerminal(view.groupId, true, { command, cwd: (_b = session.cwd) != null ? _b : void 0, name: `${view.getDisplayText()} (fork)` });
+    return true;
   }
   /** Settling is refused while a session in the group is mid-turn or
    *  waiting on you: putting that away would hide the very thing that
