@@ -1975,13 +1975,17 @@
 
 /* "Tell this session…": a box on a running session's card. */
 .terminus-inbox-steer {
+  box-sizing: border-box;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin-top: 8px;
+  padding: 0 10px 8px;
 }
 
 .terminus-inbox-steer-input {
+  box-sizing: border-box;
   width: 100%;
   resize: vertical;
   font-size: var(--font-ui-small);
@@ -2000,6 +2004,7 @@
   order: -1;
   flex: 1 1 100%;
   min-width: 0;
+  overflow-wrap: anywhere;
   text-align: right;
 }
 
