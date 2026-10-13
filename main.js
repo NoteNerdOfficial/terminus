@@ -21073,9 +21073,6 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     };
     const open = (placement) => void this.plugin.groups.newTerminal(null, true, void 0, placement);
     plusButton("Terminal", "New ungrouped terminal").addEventListener("click", (evt) => this.plugin.choosePlacement(evt, open));
-    iconButton(actions, "chevron-down", "Open a terminal in a new tab, split or window", (evt) => this.plugin.askPlacement(evt, open)).addClass(
-      "terminus-sidebar-plus-more"
-    );
     plusButton("Group", "New group, with a new terminal in it").addEventListener("click", () => {
       void this.plugin.groups.createGroup().then((group) => this.startRename(group.id));
     });

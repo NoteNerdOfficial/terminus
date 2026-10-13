@@ -805,7 +805,7 @@ export default class TerminusPlugin extends Plugin {
   /** The placement menu, anchored at `evt`. A callback rather than a
    *  promise: Obsidian hides the menu before it runs an item's click, so
    *  "dismissed" can't be told apart from "picked" by the hide event. */
-  askPlacement(evt: MouseEvent, onPick: (placement: OpenPlacement) => void, allowed: OpenPlacement[] = TERMINAL_OPEN_PLACEMENTS): void {
+  private askPlacement(evt: MouseEvent, onPick: (placement: OpenPlacement) => void, allowed: OpenPlacement[] = TERMINAL_OPEN_PLACEMENTS): void {
     const menu = new Menu();
     for (const placement of allowed) {
       menu.addItem((item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => onPick(placement)));

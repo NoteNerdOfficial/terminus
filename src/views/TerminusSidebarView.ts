@@ -198,11 +198,6 @@ export class TerminusSidebarView extends ItemView {
     // ribbon's menu when it's "Always ask".
     const open = (placement: OpenPlacement) => void this.plugin.groups.newTerminal(null, true, undefined, placement);
     plusButton("Terminal", "New ungrouped terminal").addEventListener("click", (evt) => this.plugin.choosePlacement(evt, open));
-    // The same, but always asking, for a one-off placement that leaves the
-    // setting alone.
-    iconButton(actions, "chevron-down", "Open a terminal in a new tab, split or window", (evt) => this.plugin.askPlacement(evt, open)).addClass(
-      "terminus-sidebar-plus-more"
-    );
     plusButton("Group", "New group, with a new terminal in it").addEventListener("click", () => {
       void this.plugin.groups.createGroup().then((group) => this.startRename(group.id));
     });

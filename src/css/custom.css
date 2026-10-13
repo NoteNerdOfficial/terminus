@@ -2999,8 +2999,3 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-tabs.terminus-hidden-pa
 body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-tabs):not(:has(.workspace-tabs:not(.terminus-hidden-pane):not(.working-tabs-hidden-pane))) {
   display: none;
 }
-
-/* Sits against + Terminal, like the arrow of a split button. */
-.terminus-sidebar-plus-more {
-  margin-left: -4px;
-}
