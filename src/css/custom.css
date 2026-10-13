@@ -1956,13 +1956,16 @@
   color: var(--text-accent);
 }
 
+/* Wraps rather than clipping: a narrow sidebar otherwise cut the linked
+   note's status pill down to "act…". */
 .terminus-sidebar-group-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
   padding: 0 12px 2px 28px;
   font-size: var(--font-ui-smaller);
   color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .terminus-sidebar-attention {
@@ -2129,7 +2132,6 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
 
 /* Group notes (Multi-agent). */
 .terminus-sidebar-note {
-  margin-left: 8px;
   color: var(--text-muted);
   text-decoration: none;
 }
@@ -2140,7 +2142,6 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
 }
 
 .terminus-sidebar-note-status {
-  margin-left: 6px;
   padding: 0 5px;
   border-radius: 8px;
   font-size: 10px;
