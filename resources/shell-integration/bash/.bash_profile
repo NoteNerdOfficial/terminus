@@ -35,6 +35,12 @@ __rt_preexec() {
   [[ "$BASH_COMMAND" == "$PROMPT_COMMAND" ]] && return
   [[ "$__rt_preexec_armed" != 1 ]] && return
   __rt_preexec_armed=0
+  # The command, for naming the terminal after a long-running one (OSC
+  # 633;E, VS Code's convention). The DEBUG trap only sees the first simple
+  # command of the line, which is the one that names it. Control characters
+  # are dropped so it can't end or break the sequence.
+  local __rt_cmd="${BASH_COMMAND//[$'\001'-$'\037'$'\177']/}"
+  printf '\033]633;E;%s\007' "${__rt_cmd:0:200}"
   printf '\033]133;C\007'
 }
 trap '__rt_preexec' DEBUG

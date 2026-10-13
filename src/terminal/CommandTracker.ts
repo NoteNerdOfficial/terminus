@@ -3,6 +3,8 @@ import { registerOscHandlerSafe } from "./oscHandler";
 
 export interface TrackedCommand {
   id: number;
+  /** The command line, when the shell integration sent it (OSC 633;E). */
+  commandLine: string | null;
   startMarker: IMarker;
   endMarker: IMarker | null;
   exitCode: number | null;
@@ -38,18 +40,33 @@ export class CommandTracker {
   private current: TrackedCommand | null = null;
   private nextId = 1;
   private oscHandler: { dispose(): void };
+  private commandLineHandler: { dispose(): void };
+  /** OSC 633;E arrives just before 133;C; held until C starts the command. */
+  private pendingCommandLine: string | null = null;
   // Anchor for the very first tracked command, in case IT is multi-line --
   // registered immediately at construction (before any command has run),
   // so it marks wherever the terminal's content began.
   private readonly sessionStartMarker: IMarker;
 
-  constructor(private term: Terminal, private onCommandFinished: (cmd: TrackedCommand) => void) {
+  constructor(
+    private term: Terminal,
+    private onCommandFinished: (cmd: TrackedCommand) => void,
+    private onCommandStarted: (cmd: TrackedCommand) => void = () => undefined
+  ) {
     this.sessionStartMarker = term.registerMarker(0);
     this.oscHandler = registerOscHandlerSafe(term, 133, (data) => this.handleOsc133(data));
+    // "E;<command line>" (VS Code's convention), from the shell integration's
+    // preexec; only E is used.
+    this.commandLineHandler = registerOscHandlerSafe(term, 633, (data) => {
+      if (!data.startsWith("E;")) return false;
+      this.pendingCommandLine = data.slice(2).trim() || null;
+      return true;
+    });
   }
 
   dispose(): void {
     this.oscHandler.dispose();
+    this.commandLineHandler.dispose();
     this.sessionStartMarker.dispose();
     for (const cmd of this.commands) {
       cmd.startMarker.dispose();
@@ -136,10 +153,13 @@ export class CommandTracker {
 
       this.current = {
         id: this.nextId++,
+        commandLine: this.pendingCommandLine,
         startMarker,
         endMarker: null,
         exitCode: null,
       };
+      this.pendingCommandLine = null;
+      this.onCommandStarted(this.current);
       return true;
     }
 

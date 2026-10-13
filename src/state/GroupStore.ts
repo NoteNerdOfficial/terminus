@@ -73,7 +73,7 @@ export function resolveGroupsData(saved: unknown): GroupsData {
 }
 
 function isNameSource(value: unknown): value is NameSource {
-  return typeof value === "string" && ["placeholder", "folder", "branch", "prompt", "note", "user"].includes(value);
+  return typeof value === "string" && ["placeholder", "folder", "branch", "prompt", "claude", "note", "user"].includes(value);
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

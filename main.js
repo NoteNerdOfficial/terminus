@@ -1049,6 +1049,12 @@ __rt_precmd() {
   printf '\\033]7;%s\\007' "$PWD"
 }
 __rt_preexec() {
+  # The command line, for naming the terminal after a long-running command
+  # (OSC 633;E, VS Code's convention). Newlines become spaces and every other
+  # control character is dropped, so it can't end or break the sequence.
+  local __rt_cmd="\${1//$'\\n'/ }"
+  __rt_cmd="\${__rt_cmd//[$'\\001'-$'\\037'$'\\177']/}"
+  printf '\\033]633;E;%s\\007' "\${__rt_cmd:0:200}"
   printf '\\033]133;C\\007'
 }
 
@@ -1094,6 +1100,12 @@ __rt_preexec() {
   [[ "$BASH_COMMAND" == "$PROMPT_COMMAND" ]] && return
   [[ "$__rt_preexec_armed" != 1 ]] && return
   __rt_preexec_armed=0
+  # The command, for naming the terminal after a long-running one (OSC
+  # 633;E, VS Code's convention). The DEBUG trap only sees the first simple
+  # command of the line, which is the one that names it. Control characters
+  # are dropped so it can't end or break the sequence.
+  local __rt_cmd="\${BASH_COMMAND//[$'\\001'-$'\\037'$'\\177']/}"
+  printf '\\033]633;E;%s\\007' "\${__rt_cmd:0:200}"
   printf '\\033]133;C\\007'
 }
 trap '__rt_preexec' DEBUG
@@ -15639,18 +15651,28 @@ function registerOscHandlerSafe(term, ident, callback) {
 var MAX_TRACKED_COMMANDS = 50;
 var MARKER_ROW_OFFSET = -1;
 var CommandTracker = class {
-  constructor(term, onCommandFinished) {
+  constructor(term, onCommandFinished, onCommandStarted = () => void 0) {
     this.term = term;
     this.onCommandFinished = onCommandFinished;
+    this.onCommandStarted = onCommandStarted;
     this.commands = [];
     this.current = null;
     this.nextId = 1;
+    /** OSC 633;E arrives just before 133;C; held until C starts the command. */
+    this.pendingCommandLine = null;
     this.sessionStartMarker = term.registerMarker(0);
     this.oscHandler = registerOscHandlerSafe(term, 133, (data) => this.handleOsc133(data));
+    this.commandLineHandler = registerOscHandlerSafe(term, 633, (data) => {
+      if (!data.startsWith("E;"))
+        return false;
+      this.pendingCommandLine = data.slice(2).trim() || null;
+      return true;
+    });
   }
   dispose() {
     var _a8;
     this.oscHandler.dispose();
+    this.commandLineHandler.dispose();
     this.sessionStartMarker.dispose();
     for (const cmd of this.commands) {
       cmd.startMarker.dispose();
@@ -15719,10 +15741,13 @@ var CommandTracker = class {
       }
       this.current = {
         id: this.nextId++,
+        commandLine: this.pendingCommandLine,
         startMarker,
         endMarker: null,
         exitCode: null
       };
+      this.pendingCommandLine = null;
+      this.onCommandStarted(this.current);
       return true;
     }
     if (kind === "D" && this.current) {
@@ -16519,7 +16544,7 @@ var import_obsidian9 = require("obsidian");
 var import_terminus_node_bridge13 = __toESM(require_dist());
 
 // src/groups/groupNaming.ts
-var STRENGTH = { placeholder: 0, folder: 1, branch: 2, prompt: 3, note: 4, user: 5 };
+var STRENGTH = { placeholder: 0, folder: 1, branch: 2, prompt: 3, claude: 4, note: 5, user: 6 };
 function outranks(next, current) {
   return current !== "user" && STRENGTH[next] > STRENGTH[current];
 }
@@ -16577,6 +16602,24 @@ function titleFromPrompt(prompt) {
       break;
   }
   return finish(kept.join(" "));
+}
+function titleFromClaude(title) {
+  var _a8;
+  const match = /^\s*([^\p{L}\p{N}\s\p{ASCII}])\s+(.+)$/u.exec(title);
+  const text = (_a8 = match == null ? void 0 : match[2]) == null ? void 0 : _a8.trim();
+  if (!text || /^claude code$/i.test(text))
+    return null;
+  return finish(text, false);
+}
+var UNNAMING_COMMANDS = /* @__PURE__ */ new Set(["claude", "cd", "ls", "ll", "clear", "cat", "less", "more", "man", "exit", "history", "pwd", "echo", "open"]);
+function titleFromCommand(commandLine) {
+  var _a8, _b, _c2;
+  const line = commandLine.replace(/\s+/g, " ").trim();
+  const first = (_b = (_a8 = line.split(" ")[0]) == null ? void 0 : _a8.replace(/^.*\//, "")) != null ? _b : "";
+  const wrapped = /^(sudo|env|time|nohup)$/.test(first) ? (_c2 = line.split(" ")[1]) != null ? _c2 : "" : first;
+  if (!first || UNNAMING_COMMANDS.has(first) || wrapped === "claude")
+    return null;
+  return finish(line, false);
 }
 function titleFromBranch(branch) {
   var _a8;
@@ -16846,6 +16889,7 @@ var FolderSuggestModal = class extends import_obsidian9.FuzzySuggestModal {
 };
 
 // src/views/TerminalView.ts
+var COMMAND_NAME_DELAY_MS = 3e3;
 var TERMINUS_VIEW_TYPE = "terminus-view";
 var SCROLLBACK_PERSIST_LINES = 1e3;
 var SCROLLBACK_CACHE_TTL_MS = 2e3;
@@ -16930,6 +16974,13 @@ var TerminalView = class extends import_obsidian10.ItemView {
     // plumbing (still keyed by `token` above). `color` is a literal CSS color
     // string (see terminal/colorPalette.ts), not an indirect id.
     this.customName = null;
+    /** A name Terminus gave the terminal (Multi-agent): Claude's own title for
+     *  its conversation, or a long-running command. Never shown over a name
+     *  the user typed (customName). Saved in view state. */
+    this.autoName = null;
+    this.autoNameSource = null;
+    /** A command earns the name only if it's still running after this. */
+    this.commandNameTimer = null;
     this.color = null;
     /** The group this terminal belongs to (Multi-agent); null when ungrouped.
      *  Saved in view state, so it survives restarts with the tab. */
@@ -16968,8 +17019,9 @@ var TerminalView = class extends import_obsidian10.ItemView {
     return TERMINUS_VIEW_TYPE;
   }
   getDisplayText() {
-    var _a8;
-    return (_a8 = this.customName) != null ? _a8 : `Terminus ${this.terminalNumber}`;
+    var _a8, _b;
+    const auto = this.plugin.experience === "multi-agent" ? this.autoName : null;
+    return (_b = (_a8 = this.customName) != null ? _a8 : auto) != null ? _b : `Terminus ${this.terminalNumber}`;
   }
   getIcon() {
     return this.plugin.settings.ribbonIcon;
@@ -17018,7 +17070,12 @@ var TerminalView = class extends import_obsidian10.ItemView {
         this.plugin.agentSessionStore.seen(this.token);
       })
     );
-    this.commandTracker = new CommandTracker(this.term, (cmd) => this.handleCommandFinished(cmd));
+    this.commandTracker = new CommandTracker(
+      this.term,
+      (cmd) => this.handleCommandFinished(cmd),
+      (cmd) => this.onCommandStarted(cmd)
+    );
+    this.term.onTitleChange((title) => this.onTitleChange(title));
     this.cwdTracker = new CwdTracker(this.term, () => this.app.workspace.requestSaveLayout());
     this.terminalLinks = registerTerminalLinks(this.term, {
       app: this.app,
@@ -17475,17 +17532,20 @@ var TerminalView = class extends import_obsidian10.ItemView {
     for (const decoration of this.failureBadges.values())
       decoration.dispose();
     this.failureBadges.clear();
+    this.clearCommandNameTimer();
     (_k = this.term) == null ? void 0 : _k.dispose();
   }
   getState() {
-    var _a8, _b, _c2, _d, _e4, _f;
+    var _a8, _b, _c2, _d, _e4, _f, _g, _h;
     return {
       ...super.getState(),
       scrollback: this.serializeScrollback(),
       cwd: (_c2 = (_b = (_a8 = this.cwdTracker) == null ? void 0 : _a8.getCwd()) != null ? _b : this.restoredCwd) != null ? _c2 : void 0,
       customName: (_d = this.customName) != null ? _d : void 0,
       color: (_e4 = this.color) != null ? _e4 : void 0,
-      groupId: (_f = this.groupIdValue) != null ? _f : void 0
+      groupId: (_f = this.groupIdValue) != null ? _f : void 0,
+      autoName: (_g = this.autoName) != null ? _g : void 0,
+      autoNameSource: (_h = this.autoNameSource) != null ? _h : void 0
     };
   }
   /**
@@ -17553,6 +17613,10 @@ var TerminalView = class extends import_obsidian10.ItemView {
     }
     if (typeof (typedState == null ? void 0 : typedState.customName) === "string" && typedState.customName.length > 0) {
       this.customName = typedState.customName;
+    }
+    if (typeof (typedState == null ? void 0 : typedState.autoName) === "string" && typedState.autoName.length > 0) {
+      this.autoName = typedState.autoName;
+      this.autoNameSource = typedState.autoNameSource === "command" ? "command" : "claude";
     }
     if (typeof (typedState == null ? void 0 : typedState.color) === "string" && typedState.color.length > 0) {
       this.color = typedState.color;
@@ -17655,6 +17719,49 @@ var TerminalView = class extends import_obsidian10.ItemView {
     });
     this.pty.start();
   }
+  /** Claude's topic for its conversation names the terminal, and its group
+   *  if nothing stronger has (see groupNaming.ts). A later topic renames the
+   *  terminal again; the group keeps its first. */
+  onTitleChange(title) {
+    const topic = titleFromClaude(title);
+    if (!topic)
+      return;
+    this.setAutoName(topic, "claude");
+    if (this.groupIdValue)
+      this.plugin.groupStore.autoName(this.groupIdValue, topic, "claude");
+  }
+  /** A command still running a few seconds in ("npm run dev") names a
+   *  terminal that Claude hasn't. */
+  onCommandStarted(cmd) {
+    this.clearCommandNameTimer();
+    const name = cmd.commandLine ? titleFromCommand(cmd.commandLine) : null;
+    if (!name)
+      return;
+    this.commandNameTimer = window.setTimeout(() => {
+      this.commandNameTimer = null;
+      this.setAutoName(name, "command");
+    }, COMMAND_NAME_DELAY_MS);
+  }
+  clearCommandNameTimer() {
+    if (this.commandNameTimer === null)
+      return;
+    window.clearTimeout(this.commandNameTimer);
+    this.commandNameTimer = null;
+  }
+  /** A name the user typed always wins, and a command never replaces
+   *  Claude's topic: when Claude exits, the terminal keeps that name. */
+  setAutoName(name, source) {
+    if (this.customName)
+      return;
+    if (source === "command" && this.autoNameSource === "claude")
+      return;
+    if (name === this.autoName && source === this.autoNameSource)
+      return;
+    this.autoName = name;
+    this.autoNameSource = source;
+    this.app.workspace.requestSaveLayout();
+    this.refreshIdentity();
+  }
   /** Renders a small clickable badge next to a command that exited
    *  non-zero, anchored to a marker (so it stays correctly positioned as
    *  the buffer scrolls) at that command's own row -- see CommandTracker's
@@ -17670,6 +17777,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
    *  placing the badge just past it keeps it in space that's guaranteed
    *  blank. */
   handleCommandFinished(cmd) {
+    this.clearCommandNameTimer();
     if (!this.term || !cmd.exitCode)
       return;
     const line = this.term.buffer.active.getLine(cmd.startMarker.line);
@@ -20903,7 +21011,7 @@ function resolveGroupsData(saved) {
   };
 }
 function isNameSource(value) {
-  return typeof value === "string" && ["placeholder", "folder", "branch", "prompt", "note", "user"].includes(value);
+  return typeof value === "string" && ["placeholder", "folder", "branch", "prompt", "claude", "note", "user"].includes(value);
 }
 function isStringRecord(value) {
   return typeof value === "object" && value !== null && Object.values(value).every((v3) => typeof v3 === "string");

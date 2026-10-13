@@ -29,9 +29,13 @@ import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload
 import { getGitBranch } from "../git/gitBranch";
 import { withoutInheritedClaudeSession } from "../pty/claudeSessionEnv";
 import { addMoveItems } from "../groups/groupMenus";
-import { titleFromBranch, titleFromPrompt } from "../groups/groupNaming";
+import { titleFromBranch, titleFromClaude, titleFromCommand, titleFromPrompt } from "../groups/groupNaming";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
+
+/** How long a command must run before it names its terminal: long enough
+ *  that "git status" doesn't, short enough that "npm run dev" does soon. */
+const COMMAND_NAME_DELAY_MS = 3000;
 
 export const TERMINUS_VIEW_TYPE = "terminus-view";
 
@@ -180,6 +184,13 @@ export class TerminalView extends ItemView {
   // plumbing (still keyed by `token` above). `color` is a literal CSS color
   // string (see terminal/colorPalette.ts), not an indirect id.
   private customName: string | null = null;
+  /** A name Terminus gave the terminal (Multi-agent): Claude's own title for
+   *  its conversation, or a long-running command. Never shown over a name
+   *  the user typed (customName). Saved in view state. */
+  private autoName: string | null = null;
+  private autoNameSource: "claude" | "command" | null = null;
+  /** A command earns the name only if it's still running after this. */
+  private commandNameTimer: number | null = null;
   private color: string | null = null;
   /** The group this terminal belongs to (Multi-agent); null when ungrouped.
    *  Saved in view state, so it survives restarts with the tab. */
@@ -224,7 +235,8 @@ export class TerminalView extends ItemView {
   }
 
   getDisplayText(): string {
-    return this.customName ?? `Terminus ${this.terminalNumber}`;
+    const auto = this.plugin.experience === "multi-agent" ? this.autoName : null;
+    return this.customName ?? auto ?? `Terminus ${this.terminalNumber}`;
   }
 
   getIcon(): string {
@@ -317,7 +329,13 @@ export class TerminalView extends ItemView {
       })
     );
 
-    this.commandTracker = new CommandTracker(this.term, (cmd) => this.handleCommandFinished(cmd));
+    this.commandTracker = new CommandTracker(
+      this.term,
+      (cmd) => this.handleCommandFinished(cmd),
+      (cmd) => this.onCommandStarted(cmd)
+    );
+    // Claude Code titles the terminal with a topic for its conversation.
+    this.term.onTitleChange((title) => this.onTitleChange(title));
     // Debounced, not a raw write -- but without this, workspace.json only
     // picks up a fresh cwd whenever Obsidian happens to re-serialize the
     // layout for its own reasons (pane changes, etc.), which a terminal
@@ -838,6 +856,7 @@ export class TerminalView extends ItemView {
     this.wikiLinkAutocomplete?.dispose();
     for (const decoration of this.failureBadges.values()) decoration.dispose();
     this.failureBadges.clear();
+    this.clearCommandNameTimer();
     this.term?.dispose();
   }
 
@@ -849,6 +868,8 @@ export class TerminalView extends ItemView {
       customName: this.customName ?? undefined,
       color: this.color ?? undefined,
       groupId: this.groupIdValue ?? undefined,
+      autoName: this.autoName ?? undefined,
+      autoNameSource: this.autoNameSource ?? undefined,
     };
   }
 
@@ -906,6 +927,8 @@ export class TerminalView extends ItemView {
       customName?: unknown;
       color?: unknown;
       groupId?: unknown;
+      autoName?: unknown;
+      autoNameSource?: unknown;
       launch?: { command?: unknown; prompt?: unknown };
     } | null;
     const launch = typedState?.launch;
@@ -932,6 +955,10 @@ export class TerminalView extends ItemView {
     // races with onOpen in.
     if (typeof typedState?.customName === "string" && typedState.customName.length > 0) {
       this.customName = typedState.customName;
+    }
+    if (typeof typedState?.autoName === "string" && typedState.autoName.length > 0) {
+      this.autoName = typedState.autoName;
+      this.autoNameSource = typedState.autoNameSource === "command" ? "command" : "claude";
     }
     if (typeof typedState?.color === "string" && typedState.color.length > 0) {
       this.color = typedState.color;
@@ -1061,6 +1088,46 @@ export class TerminalView extends ItemView {
     this.pty.start();
   }
 
+  /** Claude's topic for its conversation names the terminal, and its group
+   *  if nothing stronger has (see groupNaming.ts). A later topic renames the
+   *  terminal again; the group keeps its first. */
+  private onTitleChange(title: string): void {
+    const topic = titleFromClaude(title);
+    if (!topic) return;
+    this.setAutoName(topic, "claude");
+    if (this.groupIdValue) this.plugin.groupStore.autoName(this.groupIdValue, topic, "claude");
+  }
+
+  /** A command still running a few seconds in ("npm run dev") names a
+   *  terminal that Claude hasn't. */
+  private onCommandStarted(cmd: TrackedCommand): void {
+    this.clearCommandNameTimer();
+    const name = cmd.commandLine ? titleFromCommand(cmd.commandLine) : null;
+    if (!name) return;
+    this.commandNameTimer = window.setTimeout(() => {
+      this.commandNameTimer = null;
+      this.setAutoName(name, "command");
+    }, COMMAND_NAME_DELAY_MS);
+  }
+
+  private clearCommandNameTimer(): void {
+    if (this.commandNameTimer === null) return;
+    window.clearTimeout(this.commandNameTimer);
+    this.commandNameTimer = null;
+  }
+
+  /** A name the user typed always wins, and a command never replaces
+   *  Claude's topic: when Claude exits, the terminal keeps that name. */
+  private setAutoName(name: string, source: "claude" | "command"): void {
+    if (this.customName) return;
+    if (source === "command" && this.autoNameSource === "claude") return;
+    if (name === this.autoName && source === this.autoNameSource) return;
+    this.autoName = name;
+    this.autoNameSource = source;
+    this.app.workspace.requestSaveLayout();
+    this.refreshIdentity();
+  }
+
   /** Renders a small clickable badge next to a command that exited
    *  non-zero, anchored to a marker (so it stays correctly positioned as
    *  the buffer scrolls) at that command's own row -- see CommandTracker's
@@ -1076,6 +1143,7 @@ export class TerminalView extends ItemView {
    *  placing the badge just past it keeps it in space that's guaranteed
    *  blank. */
   private handleCommandFinished(cmd: TrackedCommand): void {
+    this.clearCommandNameTimer();
     if (!this.term || !cmd.exitCode) return;
 
     const line = this.term.buffer.active.getLine(cmd.startMarker.line);

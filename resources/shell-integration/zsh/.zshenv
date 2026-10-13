@@ -40,6 +40,12 @@ __rt_precmd() {
   printf '\033]7;%s\007' "$PWD"
 }
 __rt_preexec() {
+  # The command line, for naming the terminal after a long-running command
+  # (OSC 633;E, VS Code's convention). Newlines become spaces and every other
+  # control character is dropped, so it can't end or break the sequence.
+  local __rt_cmd="${1//$'\n'/ }"
+  __rt_cmd="${__rt_cmd//[$'\001'-$'\037'$'\177']/}"
+  printf '\033]633;E;%s\007' "${__rt_cmd:0:200}"
   printf '\033]133;C\007'
 }
 

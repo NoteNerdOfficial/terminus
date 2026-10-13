@@ -8,10 +8,13 @@
  * already has, with no request to Claude or anywhere else.
  */
 
-/** Where a group's name came from, weakest first. */
-export type NameSource = "placeholder" | "folder" | "branch" | "prompt" | "note" | "user";
+/** Where a group's name came from, weakest first. "claude" is the title
+ *  Claude Code gives its own conversation (see titleFromClaude); "prompt"
+ *  is Terminus's own reading of the first prompt, the fallback for the
+ *  seconds before Claude sets one. */
+export type NameSource = "placeholder" | "folder" | "branch" | "prompt" | "claude" | "note" | "user";
 
-const STRENGTH: Record<NameSource, number> = { placeholder: 0, folder: 1, branch: 2, prompt: 3, note: 4, user: 5 };
+const STRENGTH: Record<NameSource, number> = { placeholder: 0, folder: 1, branch: 2, prompt: 3, claude: 4, note: 5, user: 6 };
 
 /** Whether a name from `next` may replace one from `current`. The same
  *  source doesn't replace itself: the first prompt names the group. */
@@ -83,6 +86,36 @@ export function titleFromPrompt(prompt: string): string | null {
     if (kept.length === MAX_WORDS) break;
   }
   return finish(kept.join(" "));
+}
+
+/**
+ * The topic Claude Code sets as the terminal's title, e.g. "✳ Auth token
+ * rotation refresh" (captured from 2.1.296): one spinner symbol, a space,
+ * the topic. Null for anything else: Claude's placeholder "Claude Code"
+ * while it starts, or a title some other program set (a shell theme's
+ * "user@host: ~"), which doesn't open with a lone symbol.
+ */
+export function titleFromClaude(title: string): string | null {
+  // A single non-ASCII symbol (✳ ◐ ◑ ◒ ◓ …), a space, then the topic.
+  const match = /^\s*([^\p{L}\p{N}\s\p{ASCII}])\s+(.+)$/u.exec(title);
+  const text = match?.[2]?.trim();
+  if (!text || /^claude code$/i.test(text)) return null;
+  return finish(text, false);
+}
+
+/** Commands that are Claude itself (it names its terminal through its
+ *  title) or too short-lived or generic to name a terminal after. */
+const UNNAMING_COMMANDS = new Set(["claude", "cd", "ls", "ll", "clear", "cat", "less", "more", "man", "exit", "history", "pwd", "echo", "open"]);
+
+/** "npm run dev" for a command that's still running a few seconds in (see
+ *  TerminalView). Null for Claude itself and for generic commands. */
+export function titleFromCommand(commandLine: string): string | null {
+  const line = commandLine.replace(/\s+/g, " ").trim();
+  const first = line.split(" ")[0]?.replace(/^.*\//, "") ?? "";
+  // "sudo claude", "time claude" and the like are still Claude.
+  const wrapped = /^(sudo|env|time|nohup)$/.test(first) ? (line.split(" ")[1] ?? "") : first;
+  if (!first || UNNAMING_COMMANDS.has(first) || wrapped === "claude") return null;
+  return finish(line, false);
 }
 
 /** "feature/auth-rotation" becomes "Auth rotation". Null for a trunk
