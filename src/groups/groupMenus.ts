@@ -93,6 +93,19 @@ export function addForkItem(menu: Menu, plugin: TerminusPlugin, view: TerminalVi
   return true;
 }
 
+/** "Send to a new terminal…": a task for a new Claude session beside this
+ *  one. Only for a terminal with a running session. */
+export function addDelegateItem(menu: Menu, plugin: TerminusPlugin, view: TerminalView): boolean {
+  if (!plugin.agentSessionStore.get(view.hookToken)?.running) return false;
+  menu.addItem((item) =>
+    item
+      .setTitle("Send to a new terminal…")
+      .setIcon("corner-down-right")
+      .onClick(() => void plugin.sendToNewTerminal(view))
+  );
+  return true;
+}
+
 /** A note tab's (or file list's) Terminus items, together in one section:
  *  "Start Claude on this note", then, on a tab, the move items. */
 export function addNoteMenuItems(menu: Menu, plugin: TerminusPlugin, file: { path: string; extension: string }, leaf?: WorkspaceLeaf): void {

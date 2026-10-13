@@ -121,6 +121,20 @@ export class GroupController {
       ),
     });
     plugin.addCommand({
+      id: "send-to-new-terminal",
+      name: "Send a task to a new terminal…",
+      checkCallback: multiAgent(
+        () => {
+          const active = plugin.app.workspace.getActiveViewOfType(TerminalView);
+          return !!active && !!plugin.agentSessionStore.get(active.hookToken)?.running;
+        },
+        () => {
+          const active = plugin.app.workspace.getActiveViewOfType(TerminalView);
+          if (active) void plugin.sendToNewTerminal(active);
+        }
+      ),
+    });
+    plugin.addCommand({
       id: "move-tab-to-group",
       name: "Move tab to group…",
       checkCallback: multiAgent(

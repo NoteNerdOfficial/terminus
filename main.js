@@ -391,7 +391,7 @@ __export(main_exports, {
   default: () => TerminusPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian29 = require("obsidian");
+var import_obsidian30 = require("obsidian");
 var import_terminus_node_bridge28 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
@@ -17117,6 +17117,15 @@ function addForkItem(menu, plugin, view) {
   );
   return true;
 }
+function addDelegateItem(menu, plugin, view) {
+  var _a8;
+  if (!((_a8 = plugin.agentSessionStore.get(view.hookToken)) == null ? void 0 : _a8.running))
+    return false;
+  menu.addItem(
+    (item) => item.setTitle("Send to a new terminal\u2026").setIcon("corner-down-right").onClick(() => void plugin.sendToNewTerminal(view))
+  );
+  return true;
+}
 function addNoteMenuItems(menu, plugin, file, leaf) {
   const note = noteFile(plugin, file.path);
   const startable = (note == null ? void 0 : note.extension) === "md";
@@ -17801,6 +17810,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
       return;
     menu.addSeparator();
     addForkItem(menu, this.plugin, this);
+    addDelegateItem(menu, this.plugin, this);
     addMoveItems(menu, this.plugin, { terminals: [this] });
   }
   /** Its own colour tag, else its group's (Multi-agent). */
@@ -20403,6 +20413,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.feedbackStore.on("change", this.render);
     this.plugin.groupStore.on("change", this.render);
+    this.plugin.delegationStore.on("change", this.render);
     const front = (_a8 = this.app.workspace.getMostRecentLeaf()) == null ? void 0 : _a8.view;
     this.focusedToken = front instanceof TerminalView ? front.hookToken : null;
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.onFocusChange()));
@@ -20444,6 +20455,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.plugin.agentSessionStore.off("change", this.render);
     this.plugin.feedbackStore.off("change", this.render);
     this.plugin.groupStore.off("change", this.render);
+    this.plugin.delegationStore.off("change", this.render);
     if (!this.plugin.isUnloading)
       this.ui.userAction();
   }
@@ -20822,6 +20834,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       this.renderAgents(workEl, card);
     }
     this.renderFeedback(workEl, card.token, name);
+    this.renderDelegations(workEl, card.token, name);
     if (!workEl.hasChildNodes())
       workEl.remove();
     const foot = el2.createDiv({ cls: "terminus-inbox-card-foot" });
@@ -20849,6 +20862,51 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
         "click",
         () => void this.plugin.focusTerminal(card.token)
       );
+    }
+  }
+  /**
+   * Tasks sent from this session to new terminals ("Send to a new
+   * terminal…"), each with how its session is doing and, once its turn has
+   * ended, its closing message: to open, to type back into this session's
+   * input line (between turns, unsubmitted), or to dismiss.
+   */
+  renderDelegations(el2, token, parentName) {
+    var _a8;
+    const delegations = this.plugin.delegationStore.forParent(token);
+    if (delegations.length === 0)
+      return;
+    const section = el2.createDiv({ cls: "terminus-inbox-delegations" });
+    for (const delegation of delegations) {
+      const child = this.plugin.findTerminalView(delegation.childToken);
+      const childName = (_a8 = child == null ? void 0 : child.getDisplayText()) != null ? _a8 : delegation.childLabel;
+      const session = this.plugin.agentSessionStore.get(delegation.childToken);
+      const done = !!session && session.lastTurnEndedAt !== null && session.status !== "working";
+      const waiting = (session == null ? void 0 : session.status) === "needs-attention";
+      const row = section.createDiv({ cls: "terminus-inbox-delegation" });
+      const head = row.createDiv({ cls: "terminus-inbox-delegation-head" });
+      (0, import_obsidian19.setIcon)(head.createSpan({ cls: "terminus-meta-icon" }), "corner-down-right");
+      head.createSpan({ cls: "terminus-inbox-delegation-name", text: childName, attr: { title: delegation.task } });
+      const pill = !(session == null ? void 0 : session.running) && !done ? { kind: "ended", label: "Session ended" } : waiting ? { kind: "needs-attention", label: "Waiting for you" } : (session == null ? void 0 : session.status) === "working" ? { kind: "working", label: "Working" } : done ? { kind: "finished", label: "Finished" } : { kind: "idle", label: "Ready" };
+      head.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label });
+      if (done && (session == null ? void 0 : session.lastMessage)) {
+        const result = plainPreview(session.lastMessage);
+        row.createDiv({ cls: "terminus-inbox-quote", text: result, attr: { title: result } });
+      }
+      const actions = row.createDiv({ cls: "terminus-inbox-delegation-actions" });
+      if (child)
+        actions.createEl("button", { cls: "terminus-btn-ghost", text: "Open terminal" }).addEventListener("click", () => void this.plugin.focusTerminal(delegation.childToken));
+      if (done && (session == null ? void 0 : session.lastMessage)) {
+        const readiness = this.plugin.feedbackReadiness(token);
+        if (readiness.ready) {
+          const send = actions.createEl("button", { cls: "terminus-btn-ghost-accent", text: `Send to ${parentName}` });
+          (0, import_obsidian19.setTooltip)(send, "Types the result into this session's input line without sending it");
+          send.addEventListener("click", () => void this.plugin.sendDelegationResult(delegation.childToken));
+        } else {
+          actions.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
+        }
+      }
+      actions.createDiv({ cls: "terminus-inbox-spacer" });
+      actions.createEl("button", { cls: "terminus-btn-ghost", text: "Dismiss" }).addEventListener("click", () => this.plugin.delegationStore.remove(delegation.childToken));
     }
   }
   /** Queued review comments for this session, and the button that types
@@ -21923,8 +21981,12 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
   }
   showMoveMenu(evt, views) {
     const menu = new import_obsidian21.Menu();
-    if (views.length === 1 && views[0] && addForkItem(menu, this.plugin, views[0]))
-      menu.addSeparator();
+    if (views.length === 1 && views[0]) {
+      const forked = addForkItem(menu, this.plugin, views[0]);
+      const delegated = addDelegateItem(menu, this.plugin, views[0]);
+      if (forked || delegated)
+        menu.addSeparator();
+    }
     addMoveItems(menu, this.plugin, { terminals: views }, () => this.selected.clear());
     menu.showAtMouseEvent(evt);
   }
@@ -22365,6 +22427,22 @@ var GroupController = class {
       checkCallback: multiAgent(
         () => this.terminals().length > 0 || this.store.list().length > 0,
         () => new TerminalSwitcherModal(plugin).open()
+      )
+    });
+    plugin.addCommand({
+      id: "send-to-new-terminal",
+      name: "Send a task to a new terminal\u2026",
+      checkCallback: multiAgent(
+        () => {
+          var _a8;
+          const active = plugin.app.workspace.getActiveViewOfType(TerminalView);
+          return !!active && !!((_a8 = plugin.agentSessionStore.get(active.hookToken)) == null ? void 0 : _a8.running);
+        },
+        () => {
+          const active = plugin.app.workspace.getActiveViewOfType(TerminalView);
+          if (active)
+            void plugin.sendToNewTerminal(active);
+        }
       )
     });
     plugin.addCommand({
@@ -23470,6 +23548,89 @@ var InboxUiState = class {
   }
 };
 
+// src/state/DelegationStore.ts
+var DelegationStore = class extends TypedEmitter {
+  constructor() {
+    super(...arguments);
+    this.items = [];
+  }
+  add(delegation) {
+    this.items.push(delegation);
+    this.emit("change");
+  }
+  get(childToken) {
+    return this.items.find((d) => d.childToken === childToken);
+  }
+  forParent(parentToken) {
+    return this.items.filter((d) => d.parentToken === parentToken);
+  }
+  /** Dismissed, or its result sent back. */
+  remove(childToken) {
+    const before = this.items.length;
+    this.items = this.items.filter((d) => d.childToken !== childToken);
+    if (this.items.length !== before)
+      this.emit("change");
+  }
+};
+
+// src/modals/DelegateModal.ts
+var import_obsidian24 = require("obsidian");
+var DelegateModal = class extends import_obsidian24.Modal {
+  constructor(app, fromName, groupName) {
+    super(app);
+    this.fromName = fromName;
+    this.groupName = groupName;
+    this.resolvePromise = null;
+    this.textEl = null;
+  }
+  static prompt(app, fromName, groupName) {
+    return new Promise((resolve) => {
+      const modal = new DelegateModal(app, fromName, groupName);
+      modal.resolvePromise = resolve;
+      modal.open();
+    });
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: "Send to a new terminal" });
+    contentEl.createEl("p", {
+      cls: "setting-item-description",
+      text: `A new Claude session opens${this.groupName ? ` in ${this.groupName}` : ""}, beside ${this.fromName}, with this typed in. Nothing is sent until you press Enter there, and its result shows on ${this.fromName}'s card.`
+    });
+    this.textEl = contentEl.createEl("textarea", { cls: "terminus-delegate-input", attr: { rows: "6", placeholder: "What should it do?" } });
+    this.textEl.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" && (evt.metaKey || evt.ctrlKey)) {
+        evt.preventDefault();
+        this.submit();
+      }
+    });
+    window.setTimeout(() => {
+      var _a8;
+      return (_a8 = this.textEl) == null ? void 0 : _a8.focus();
+    }, 0);
+    const buttons = contentEl.createDiv({ cls: "terminus-confirm-modal-actions" });
+    buttons.createEl("button", { text: "Cancel" }).addEventListener("click", () => this.resolve(null));
+    buttons.createEl("button", { text: "Open terminal", cls: "mod-cta" }).addEventListener("click", () => this.submit());
+  }
+  submit() {
+    var _a8, _b;
+    const text = (_b = (_a8 = this.textEl) == null ? void 0 : _a8.value.trim()) != null ? _b : "";
+    this.resolve(text || null);
+  }
+  resolve(value) {
+    const resolve = this.resolvePromise;
+    this.resolvePromise = null;
+    this.close();
+    resolve == null ? void 0 : resolve(value);
+  }
+  onClose() {
+    this.contentEl.empty();
+    const resolve = this.resolvePromise;
+    this.resolvePromise = null;
+    resolve == null ? void 0 : resolve(null);
+  }
+};
+
 // src/claude/feedbackPrompt.ts
 var MAX_EXCERPT_LINES = 6;
 function composeFeedbackPrompt(items, relativePath) {
@@ -23530,7 +23691,7 @@ var ClosedTerminalBuffer = class {
 };
 
 // src/modals/RescueClosedTerminalModal.ts
-var import_obsidian24 = require("obsidian");
+var import_obsidian25 = require("obsidian");
 function formatRelativeTime(timestampMs) {
   const seconds = Math.max(0, Math.round((Date.now() - timestampMs) / 1e3));
   if (seconds < 60)
@@ -23541,7 +23702,7 @@ function formatRelativeTime(timestampMs) {
   const hours = Math.round(minutes / 60);
   return `${hours}h ago`;
 }
-var RescueClosedTerminalModal = class extends import_obsidian24.FuzzySuggestModal {
+var RescueClosedTerminalModal = class extends import_obsidian25.FuzzySuggestModal {
   constructor(app, entries, onChoose) {
     super(app);
     this.entries = entries;
@@ -23560,13 +23721,13 @@ var RescueClosedTerminalModal = class extends import_obsidian24.FuzzySuggestModa
 };
 
 // src/modals/GettingStartedModal.ts
-var import_obsidian27 = require("obsidian");
+var import_obsidian28 = require("obsidian");
 
 // src/onboarding/gettingStarted.ts
-var import_obsidian26 = require("obsidian");
+var import_obsidian27 = require("obsidian");
 
 // src/settings.ts
-var import_obsidian25 = require("obsidian");
+var import_obsidian26 = require("obsidian");
 var import_terminus_node_bridge27 = __toESM(require_dist());
 
 // src/terminal/fontCatalog.ts
@@ -23720,7 +23881,7 @@ var MIN_AUTO_REVEAL_DELAY_MS = 0;
 var MAX_AUTO_REVEAL_DELAY_MS = 5e3;
 var MIN_SCROLLBACK_LINES = 200;
 var MAX_SCROLLBACK_LINES = 5e4;
-var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
+var TerminusSettingTab = class extends import_obsidian26.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -23731,7 +23892,7 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
   }
   /** Shared by both modes' sections: the setting itself is shared. */
   renderConfirmBulkActions(containerEl) {
-    new import_obsidian25.Setting(containerEl).setName("Confirm before bulk actions").setDesc(
+    new import_obsidian26.Setting(containerEl).setName("Confirm before bulk actions").setDesc(
       'Ask for confirmation before "Reject all" / "Keep all" (global or per-terminal). Off by default -- every bulk action is already reversible via the "Recently resolved" list.'
     ).addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.confirmBulkActions).onChange(async (value) => {
@@ -23742,7 +23903,7 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
   }
   /** Same slider for both modes, each writing its own value. */
   renderRevealDelay(containerEl, value, desc, save) {
-    new import_obsidian25.Setting(containerEl).setName("Reveal delay").setDesc(desc).addSlider(
+    new import_obsidian26.Setting(containerEl).setName("Reveal delay").setDesc(desc).addSlider(
       (slider) => slider.setLimits(MIN_AUTO_REVEAL_DELAY_MS, MAX_AUTO_REVEAL_DELAY_MS, 100).setValue(value).setDynamicTooltip().onChange(async (v3) => {
         save(v3);
         await this.plugin.saveSettings();
@@ -23751,8 +23912,8 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
   }
   renderClassicSection(containerEl) {
     const classic = this.plugin.settings.classic;
-    new import_obsidian25.Setting(containerEl).setName("Review").setHeading();
-    new import_obsidian25.Setting(containerEl).setName("Automatically reveal Pending Changes panel").setDesc(
+    new import_obsidian26.Setting(containerEl).setName("Review").setHeading();
+    new import_obsidian26.Setting(containerEl).setName("Automatically reveal Pending Changes panel").setDesc(
       "Bring the panel to front once Claude finishes a burst of edits, so a review is never sitting there unnoticed."
     ).addToggle(
       (toggle) => toggle.setValue(classic.autoRevealPendingChanges).onChange(async (value) => {
@@ -23773,8 +23934,8 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
   }
   renderMultiAgentSection(containerEl) {
     const multiAgent = this.plugin.settings.multiAgent;
-    new import_obsidian25.Setting(containerEl).setName("Agents and review").setHeading();
-    new import_obsidian25.Setting(containerEl).setName("Automatically reveal Agent inbox").setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs your attention.").addToggle(
+    new import_obsidian26.Setting(containerEl).setName("Agents and review").setHeading();
+    new import_obsidian26.Setting(containerEl).setName("Automatically reveal Agent inbox").setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs your attention.").addToggle(
       (toggle) => toggle.setValue(multiAgent.autoRevealInbox).onChange(async (value) => {
         multiAgent.autoRevealInbox = value;
         await this.plugin.saveSettings();
@@ -23790,14 +23951,14 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
       );
     }
     this.renderConfirmBulkActions(containerEl);
-    new import_obsidian25.Setting(containerEl).setName("Track subagents").setDesc(
+    new import_obsidian26.Setting(containerEl).setName("Track subagents").setDesc(
       "Show each subagent Claude starts as a row on its session's card, with the changes it made. Turning this off removes the subagent hooks from .claude/settings.local.json and credits every change to the main session."
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.trackSubagents).onChange(async (value) => {
         await this.plugin.setTrackSubagents(value);
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Show estimated cost").setDesc(
+    new import_obsidian26.Setting(containerEl).setName("Show estimated cost").setDesc(
       'Show an approximate cost ("\u2248 $0.42") from a built-in price table that is updated with each release. Off leaves tokens and context only.'
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.showEstimatedCost).onChange(async (value) => {
@@ -23806,14 +23967,14 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
         this.plugin.refreshTerminusViews();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Show git branch on cards").setDesc("When a session's folder is a git repository, show its current branch on the session's card.").addToggle(
+    new import_obsidian26.Setting(containerEl).setName("Show git branch on cards").setDesc("When a session's folder is a git repository, show its current branch on the session's card.").addToggle(
       (toggle) => toggle.setValue(multiAgent.showGitBranch).onChange(async (value) => {
         multiAgent.showGitBranch = value;
         await this.plugin.saveSettings();
         this.plugin.refreshTerminusViews();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Check for updates").setDesc(
+    new import_obsidian26.Setting(containerEl).setName("Check for updates").setDesc(
       "Ask GitHub for the latest release at startup and twice a day, and show an update link next to the version in the sidebar. While this is off, the plugin makes no network requests."
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.checkForUpdates).onChange(async (value) => {
@@ -23825,7 +23986,7 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     if (MULTI_AGENT_AVAILABLE) {
-      new import_obsidian25.Setting(containerEl).setName("Experience").setDesc(
+      new import_obsidian26.Setting(containerEl).setName("Experience").setDesc(
         "Classic reviews every terminal's changes in one Pending Changes panel. Multi-agent adds an Agent inbox with a card per Claude session, and groups for your terminals. Each keeps its own review settings below; the rest are shared."
       ).addDropdown(
         (dropdown) => dropdown.addOptions(EXPERIENCE_LABELS).setValue(this.plugin.settings.experience).onChange(async (value) => {
@@ -23834,7 +23995,7 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
         })
       );
     }
-    new import_obsidian25.Setting(containerEl).setName("New terminal placement").setDesc(
+    new import_obsidian26.Setting(containerEl).setName("New terminal placement").setDesc(
       'Where the ribbon icon and "Open Terminus" command open a new terminal. "Always ask" shows a quick menu at the click; any other choice opens directly there every time.'
     ).addDropdown(
       (dropdown) => dropdown.addOptions(TERMINAL_PLACEMENT_LABELS).setValue(this.plugin.settings.terminalPlacement).onChange(async (value) => {
@@ -23842,8 +24003,8 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Terminal appearance").setHeading();
-    new import_obsidian25.Setting(containerEl).setName("Terminal font size").setDesc(
+    new import_obsidian26.Setting(containerEl).setName("Terminal appearance").setHeading();
+    new import_obsidian26.Setting(containerEl).setName("Terminal font size").setDesc(
       `Applies to all open terminal panels. Also adjustable via the "Increase/Decrease terminal font size" commands (${MIN_FONT_SIZE}-${MAX_FONT_SIZE}px).`
     ).addSlider(
       (slider) => slider.setLimits(MIN_FONT_SIZE, MAX_FONT_SIZE, 1).setValue(this.plugin.settings.fontSize).setDynamicTooltip().onChange(async (value) => {
@@ -23851,40 +24012,40 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
       })
     );
     this.displayFontFamilySetting(containerEl);
-    new import_obsidian25.Setting(containerEl).setName("Cursor style").addDropdown(
+    new import_obsidian26.Setting(containerEl).setName("Cursor style").addDropdown(
       (dropdown) => dropdown.addOptions(CURSOR_STYLE_LABELS).setValue(this.plugin.settings.cursorStyle).onChange(async (value) => {
         await this.plugin.setCursorStyle(value);
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Cursor blink").addToggle(
+    new import_obsidian26.Setting(containerEl).setName("Cursor blink").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.cursorBlink).onChange(async (value) => {
         await this.plugin.setCursorBlink(value);
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Scrollback").setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`).addSlider(
+    new import_obsidian26.Setting(containerEl).setName("Scrollback").setDesc(`How many lines of history each terminal keeps in memory (${MIN_SCROLLBACK_LINES}-${MAX_SCROLLBACK_LINES}). Applies to newly opened terminals.`).addSlider(
       (slider) => slider.setLimits(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES, 100).setValue(this.plugin.settings.scrollbackLines).setDynamicTooltip().onChange(async (value) => {
         this.plugin.settings.scrollbackLines = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Auto theme").setDesc("Terminal colors follow Obsidian's light/dark toggle. Turn off to use xterm.js's own default palette instead.").addToggle(
+    new import_obsidian26.Setting(containerEl).setName("Auto theme").setDesc("Terminal colors follow Obsidian's light/dark toggle. Turn off to use xterm.js's own default palette instead.").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.autoThemeTerminal).onChange(async (value) => {
         await this.plugin.setAutoThemeTerminal(value);
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Startup command").setDesc('Runs automatically in every new terminal once the shell is ready (e.g. "claude"). Leave blank for none.').addText(
+    new import_obsidian26.Setting(containerEl).setName("Startup command").setDesc('Runs automatically in every new terminal once the shell is ready (e.g. "claude"). Leave blank for none.').addText(
       (text) => text.setPlaceholder("e.g. claude").setValue(this.plugin.settings.startupCommand).onChange(async (value) => {
         this.plugin.settings.startupCommand = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Wiki-link autocomplete format").setDesc('Format inserted when picking a note after typing "[[" in a terminal.').addDropdown(
+    new import_obsidian26.Setting(containerEl).setName("Wiki-link autocomplete format").setDesc('Format inserted when picking a note after typing "[[" in a terminal.').addDropdown(
       (dropdown) => dropdown.addOptions(WIKI_LINK_INSERT_FORMAT_LABELS).setValue(this.plugin.settings.wikiLinkInsertFormat).onChange(async (value) => {
         this.plugin.settings.wikiLinkInsertFormat = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Ribbon icon").setDesc(`Any Lucide icon name (e.g. "square-terminal", "terminal"). Invalid names fall back to Obsidian's default icon silently.`).addText(
+    new import_obsidian26.Setting(containerEl).setName("Ribbon icon").setDesc(`Any Lucide icon name (e.g. "square-terminal", "terminal"). Invalid names fall back to Obsidian's default icon silently.`).addText(
       (text) => text.setPlaceholder("square-terminal").setValue(this.plugin.settings.ribbonIcon).onChange(async (value) => {
         await this.plugin.setRibbonIcon(value.trim() || DEFAULT_SETTINGS.ribbonIcon);
       })
@@ -23894,8 +24055,8 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
     } else {
       this.renderClassicSection(containerEl);
     }
-    new import_obsidian25.Setting(containerEl).setName("Advanced").setHeading();
-    new import_obsidian25.Setting(containerEl).setName("Shell binary override").setDesc(
+    new import_obsidian26.Setting(containerEl).setName("Advanced").setHeading();
+    new import_obsidian26.Setting(containerEl).setName("Shell binary override").setDesc(
       `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge27.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
     ).addText(
       (text) => text.setPlaceholder("e.g. /bin/zsh").setValue(this.plugin.settings.shellBinOverride).onChange(async (value) => {
@@ -23903,7 +24064,7 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian25.Setting(containerEl).setName("Python 3 binary override").setDesc(
+    new import_obsidian26.Setting(containerEl).setName("Python 3 binary override").setDesc(
       "Leave blank to auto-detect. Only needed if the plugin can't find python3 on its own (used to allocate the terminal's pseudo-terminal)."
     ).addText(
       (text) => text.setPlaceholder("e.g. /usr/local/bin/python3").setValue(this.plugin.settings.python3BinOverride).onChange(async (value) => {
@@ -23921,7 +24082,7 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
    *  need a full `display()` re-render, which would drop input focus. */
   displayClaudeAuthTokenSetting(containerEl) {
     let statusEl;
-    const setting = new import_obsidian25.Setting(containerEl).setName("Claude Code auth token").setDesc(
+    const setting = new import_obsidian26.Setting(containerEl).setName("Claude Code auth token").setDesc(
       `Only needed for "Explain this" / "Suggest a fix" on failed commands, and only if those hang or fail outright -- some machines can't read Claude Code's normal Keychain-based login from a spawned background process. Run "claude setup-token" in a real terminal and paste the result here. Leave blank to keep using your regular Claude Code login. Stored as plain text in this vault's plugin data, same as any other API key field.`
     ).addText((text) => {
       text.inputEl.type = "password";
@@ -23971,7 +24132,7 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
     for (const font of availableFonts)
       options[font] = font;
     options[CUSTOM_FONT_VALUE] = "Custom\u2026";
-    new import_obsidian25.Setting(containerEl).setName("Font family").setDesc(
+    new import_obsidian26.Setting(containerEl).setName("Font family").setDesc(
       "Monospace fonts detected on this system. Applies to all open terminal panels. Proportional fonts aren't listed -- a terminal aligns text to a fixed character grid, which only a monospace font can sit in evenly."
     ).addDropdown(
       (dropdown) => dropdown.addOptions(options).setValue(isCustom ? CUSTOM_FONT_VALUE : current).onChange(async (value) => {
@@ -23987,7 +24148,7 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
     );
     if (!isCustom)
       return;
-    const customSetting = new import_obsidian25.Setting(containerEl).setName("Custom font family").setDesc("Any font installed on this system, by its exact name.");
+    const customSetting = new import_obsidian26.Setting(containerEl).setName("Custom font family").setDesc("Any font installed on this system, by its exact name.");
     const warningEl = customSetting.descEl.createDiv({ cls: "terminus-setting-warning" });
     const refreshWarning = (value) => {
       warningEl.setText(this.describeCustomFontProblem(value));
@@ -24018,7 +24179,7 @@ var TerminusSettingTab = class extends import_obsidian25.PluginSettingTab {
 
 // src/onboarding/gettingStarted.ts
 function keys() {
-  const mac = import_obsidian26.Platform.isMacOS;
+  const mac = import_obsidian27.Platform.isMacOS;
   return {
     mod: mac ? "Cmd" : "Ctrl",
     alt: mac ? "Opt" : "Alt",
@@ -24137,7 +24298,7 @@ Reopen this any time with the **Terminus: Getting started** command.`;
 }
 
 // src/modals/GettingStartedModal.ts
-var GettingStartedModal = class extends import_obsidian27.Modal {
+var GettingStartedModal = class extends import_obsidian28.Modal {
   constructor(app, full) {
     super(app);
     this.full = full;
@@ -24145,7 +24306,7 @@ var GettingStartedModal = class extends import_obsidian27.Modal {
      *  embeds, internal-link hover) to a parent whose lifecycle it inherits.
      *  Modal isn't a Component, so this owns them and is unloaded on close --
      *  without it those children would leak past the modal. */
-    this.renderHost = new import_obsidian27.Component();
+    this.renderHost = new import_obsidian28.Component();
   }
   /** Short version, shown once on first load. */
   static openWelcome(app) {
@@ -24162,7 +24323,7 @@ var GettingStartedModal = class extends import_obsidian27.Modal {
     contentEl.createEl("h2", { text: this.full ? "Terminus \u2014 getting started" : "Welcome to Terminus" });
     const body = contentEl.createDiv({ cls: "terminus-getting-started-body" });
     const markdown = this.full ? buildGettingStartedMarkdown() : buildWelcomeMarkdown();
-    void import_obsidian27.MarkdownRenderer.render(this.app, markdown, body, "", this.renderHost);
+    void import_obsidian28.MarkdownRenderer.render(this.app, markdown, body, "", this.renderHost);
     const actions = contentEl.createDiv({ cls: "terminus-getting-started-actions" });
     if (!this.full) {
       actions.createEl("button", { text: "Full guide" }).addEventListener("click", () => {
@@ -24179,8 +24340,8 @@ var GettingStartedModal = class extends import_obsidian27.Modal {
 };
 
 // src/modals/MultiAgentInviteModal.ts
-var import_obsidian28 = require("obsidian");
-var MultiAgentInviteModal = class extends import_obsidian28.Modal {
+var import_obsidian29 = require("obsidian");
+var MultiAgentInviteModal = class extends import_obsidian29.Modal {
   constructor() {
     super(...arguments);
     this.resolvePromise = null;
@@ -24223,7 +24384,7 @@ var MultiAgentInviteModal = class extends import_obsidian28.Modal {
 // src/main.ts
 var AUTO_REVEAL_MIN_FILES = 3;
 var AUTO_REVEAL_MIN_LINES = 50;
-var TerminusPlugin = class extends import_obsidian29.Plugin {
+var TerminusPlugin = class extends import_obsidian30.Plugin {
   constructor() {
     super(...arguments);
     this.reviewServer = new ReviewServer();
@@ -24232,6 +24393,8 @@ var TerminusPlugin = class extends import_obsidian29.Plugin {
     this.agentSessionStore = new AgentSessionStore();
     /** Review comments queued per session (Multi-agent only). */
     this.feedbackStore = new FeedbackStore();
+    /** Tasks sent from a session to a new terminal (Multi-agent only). */
+    this.delegationStore = new DelegationStore();
     /** How the user has arranged the Agent inbox; outlives the view. */
     this.inboxUi = new InboxUiState();
     /** Files of the current burst of edits, for the auto-reveal's threshold. */
@@ -24555,7 +24718,7 @@ var TerminusPlugin = class extends import_obsidian29.Plugin {
       await provisionClaudeSettings(this.app, this.manifest, { experience: this.experience, trackSubagents: this.tracksSubagents });
     } catch (err) {
       console.error("Terminus: failed to provision .claude/settings.local.json", err);
-      new import_obsidian29.Notice(
+      new import_obsidian30.Notice(
         "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
       );
     }
@@ -24612,7 +24775,7 @@ var TerminusPlugin = class extends import_obsidian29.Plugin {
     await this.saveSettings();
     if (await MultiAgentInviteModal.ask(this.app)) {
       await this.setExperience("multi-agent");
-      new import_obsidian29.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
+      new import_obsidian30.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
     }
   }
   async saveSettings() {
@@ -24653,7 +24816,7 @@ var TerminusPlugin = class extends import_obsidian29.Plugin {
     this.settings.ribbonIcon = iconName;
     await this.saveSettings();
     if (this.ribbonIconEl)
-      (0, import_obsidian29.setIcon)(this.ribbonIconEl, iconName);
+      (0, import_obsidian30.setIcon)(this.ribbonIconEl, iconName);
   }
   forEachTerminalView(fn3) {
     for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
@@ -24669,7 +24832,7 @@ var TerminusPlugin = class extends import_obsidian29.Plugin {
     const changes = this.pendingChangesStore.list();
     const count = changes.length;
     if (count === 0) {
-      new import_obsidian29.Notice("Terminus: no pending changes");
+      new import_obsidian30.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && changes.some(hasCollision)) {
@@ -24689,22 +24852,22 @@ var TerminusPlugin = class extends import_obsidian29.Plugin {
     try {
       await this.pendingChangesStore.resolveAll(accepted);
     } catch (err) {
-      new import_obsidian29.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
+      new import_obsidian30.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
     }
   }
   async resolveOldestPendingChange(accepted) {
     const oldest = this.pendingChangesStore.list()[0];
     if (!oldest) {
-      new import_obsidian29.Notice("Terminus: no pending changes");
+      new import_obsidian30.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && !await confirmCollisionReject(this.app, [oldest]))
       return;
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian29.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge28.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian30.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge28.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian29.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge28.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian30.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge28.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -24854,6 +25017,57 @@ var TerminusPlugin = class extends import_obsidian29.Plugin {
     }
     return { ready: true };
   }
+  /**
+   * "Send to a new terminal": asks for a prompt, then opens a new Claude
+   * terminal beside the sender, in the folder its session runs in, with the
+   * prompt typed in (never submitted) and the task listed on the sender's
+   * card until its result comes back.
+   */
+  async sendToNewTerminal(from) {
+    var _a8, _b;
+    const session = this.agentSessionStore.get(from.hookToken);
+    if (!(session == null ? void 0 : session.running))
+      return;
+    const group = this.groupStore.get(from.groupId);
+    const task = await DelegateModal.prompt(this.app, from.getDisplayText(), (_a8 = group == null ? void 0 : group.name) != null ? _a8 : null);
+    if (!task)
+      return;
+    const title = task.replace(/\s+/g, " ").slice(0, 32);
+    const child = await this.groups.newTerminal(from.groupId, true, {
+      command: "claude",
+      prompt: task,
+      cwd: (_b = session.cwd) != null ? _b : void 0,
+      name: `${from.getDisplayText()} \u203A ${title}${task.length > 32 ? "\u2026" : ""}`
+    });
+    if (!child)
+      return;
+    this.delegationStore.add({
+      childToken: child.hookToken,
+      parentToken: from.hookToken,
+      task,
+      parentLabel: from.getDisplayText(),
+      childLabel: child.getDisplayText(),
+      createdAt: Date.now()
+    });
+  }
+  /** Types a delegated session's result into the sending session's input
+   *  line (unsubmitted, like feedback) and takes the task off the card. */
+  async sendDelegationResult(childToken) {
+    var _a8, _b, _c2;
+    const delegation = this.delegationStore.get(childToken);
+    const result = (_a8 = this.agentSessionStore.get(childToken)) == null ? void 0 : _a8.lastMessage;
+    const parent = delegation ? this.findTerminalView(delegation.parentToken) : null;
+    if (!delegation || !result || !parent || !this.feedbackReadiness(delegation.parentToken).ready)
+      return;
+    const childName = (_c2 = (_b = this.findTerminalView(childToken)) == null ? void 0 : _b.getDisplayText()) != null ? _c2 : delegation.childLabel;
+    if (!parent.typeIntoInput(`The result from ${childName} (I asked it: ${delegation.task.replace(/\s+/g, " ")}):
+
+${result}`))
+      return;
+    this.delegationStore.remove(childToken);
+    await this.focusTerminal(delegation.parentToken);
+    new import_obsidian30.Notice(`Terminus: result added to ${parent.getDisplayText()} \u2014 press Enter to send it`);
+  }
   /** Types a session's queued feedback into its terminal, unsubmitted, and
    *  clears the queue: the text is the user's to edit or send from here. */
   async sendFeedback(token) {
@@ -24870,7 +25084,7 @@ var TerminusPlugin = class extends import_obsidian29.Plugin {
       return;
     this.feedbackStore.clear(token);
     await this.focusTerminal(token);
-    new import_obsidian29.Notice(`Terminus: feedback added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
+    new import_obsidian30.Notice(`Terminus: feedback added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
   }
   /** Re-renders open Agent inboxes and Terminus sidebars for changes the
    *  stores don't see, such as a terminal being renamed or recoloured. */
@@ -24906,7 +25120,7 @@ var TerminusPlugin = class extends import_obsidian29.Plugin {
     var _a8;
     const waiting = this.agentSessionStore.list().filter((s15) => s15.running && s15.status === "needs-attention" && this.findTerminalView(s15.token));
     if (waiting.length === 0) {
-      new import_obsidian29.Notice("Terminus: no session needs attention");
+      new import_obsidian30.Notice("Terminus: no session needs attention");
       return;
     }
     const active = (_a8 = this.app.workspace.getActiveViewOfType(TerminalView)) == null ? void 0 : _a8.hookToken;
@@ -24937,7 +25151,7 @@ var TerminusPlugin = class extends import_obsidian29.Plugin {
    *  promise: Obsidian hides the menu before it runs an item's click, so
    *  "dismissed" can't be told apart from "picked" by the hide event. */
   askPlacement(evt, onPick, allowed = TERMINAL_OPEN_PLACEMENTS) {
-    const menu = new import_obsidian29.Menu();
+    const menu = new import_obsidian30.Menu();
     for (const placement of allowed) {
       menu.addItem((item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => onPick(placement)));
     }

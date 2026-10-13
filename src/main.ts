@@ -20,6 +20,8 @@ import { AgentSessionStore } from "./state/AgentSessionStore";
 import { TranscriptUsageReader, subagentTranscriptPath } from "./claude/transcriptUsage";
 import { FeedbackStore } from "./state/FeedbackStore";
 import { InboxUiState } from "./state/InboxUiState";
+import { DelegationStore } from "./state/DelegationStore";
+import { DelegateModal } from "./modals/DelegateModal";
 import { leafForPlacement, type OpenPlacement } from "./util/leafPlacement";
 import { composeFeedbackPrompt } from "./claude/feedbackPrompt";
 import { ClosedTerminalBuffer, ClosedTerminalEntry } from "./state/ClosedTerminalBuffer";
@@ -57,6 +59,8 @@ export default class TerminusPlugin extends Plugin {
   readonly agentSessionStore = new AgentSessionStore();
   /** Review comments queued per session (Multi-agent only). */
   readonly feedbackStore = new FeedbackStore();
+  /** Tasks sent from a session to a new terminal (Multi-agent only). */
+  readonly delegationStore = new DelegationStore();
   /** How the user has arranged the Agent inbox; outlives the view. */
   readonly inboxUi = new InboxUiState();
   /** Files of the current burst of edits, for the auto-reveal's threshold. */
@@ -724,6 +728,50 @@ export default class TerminusPlugin extends Plugin {
       return { ready: false, reason: "Answer Claude's prompt first" };
     }
     return { ready: true };
+  }
+
+  /**
+   * "Send to a new terminal": asks for a prompt, then opens a new Claude
+   * terminal beside the sender, in the folder its session runs in, with the
+   * prompt typed in (never submitted) and the task listed on the sender's
+   * card until its result comes back.
+   */
+  async sendToNewTerminal(from: TerminalView): Promise<void> {
+    const session = this.agentSessionStore.get(from.hookToken);
+    if (!session?.running) return;
+    const group = this.groupStore.get(from.groupId);
+    const task = await DelegateModal.prompt(this.app, from.getDisplayText(), group?.name ?? null);
+    if (!task) return;
+    const title = task.replace(/\s+/g, " ").slice(0, 32);
+    const child = await this.groups.newTerminal(from.groupId, true, {
+      command: "claude",
+      prompt: task,
+      cwd: session.cwd ?? undefined,
+      name: `${from.getDisplayText()} › ${title}${task.length > 32 ? "…" : ""}`,
+    });
+    if (!child) return;
+    this.delegationStore.add({
+      childToken: child.hookToken,
+      parentToken: from.hookToken,
+      task,
+      parentLabel: from.getDisplayText(),
+      childLabel: child.getDisplayText(),
+      createdAt: Date.now(),
+    });
+  }
+
+  /** Types a delegated session's result into the sending session's input
+   *  line (unsubmitted, like feedback) and takes the task off the card. */
+  async sendDelegationResult(childToken: string): Promise<void> {
+    const delegation = this.delegationStore.get(childToken);
+    const result = this.agentSessionStore.get(childToken)?.lastMessage;
+    const parent = delegation ? this.findTerminalView(delegation.parentToken) : null;
+    if (!delegation || !result || !parent || !this.feedbackReadiness(delegation.parentToken).ready) return;
+    const childName = this.findTerminalView(childToken)?.getDisplayText() ?? delegation.childLabel;
+    if (!parent.typeIntoInput(`The result from ${childName} (I asked it: ${delegation.task.replace(/\s+/g, " ")}):\n\n${result}`)) return;
+    this.delegationStore.remove(childToken);
+    await this.focusTerminal(delegation.parentToken);
+    new Notice(`Terminus: result added to ${parent.getDisplayText()} — press Enter to send it`);
   }
 
   /** Types a session's queued feedback into its terminal, unsubmitted, and

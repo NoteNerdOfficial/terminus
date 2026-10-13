@@ -1973,6 +1973,48 @@
   box-shadow: inset 0 0 0 1.5px var(--text-faint);
 }
 
+/* Tasks sent from a session to new terminals, on its card. */
+.terminus-inbox-delegations {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.terminus-inbox-delegation {
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
+.terminus-inbox-delegation-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.terminus-inbox-delegation-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.terminus-inbox-delegation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.terminus-delegate-input {
+  width: 100%;
+  resize: vertical;
+}
+
 /* A group back from a snooze, until it's visited. */
 .terminus-sidebar-woke {
   flex: none;

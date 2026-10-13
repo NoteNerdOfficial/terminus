@@ -61,6 +61,7 @@ export class AgentInboxView extends ItemView {
     // The selected group scopes what's shown; its change event also covers
     // groups being renamed, recoloured or closed.
     this.plugin.groupStore.on("change", this.render);
+    this.plugin.delegationStore.on("change", this.render);
     const front = this.app.workspace.getMostRecentLeaf()?.view;
     this.focusedToken = front instanceof TerminalView ? front.hookToken : null;
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.onFocusChange()));
@@ -104,6 +105,7 @@ export class AgentInboxView extends ItemView {
     this.plugin.agentSessionStore.off("change", this.render);
     this.plugin.feedbackStore.off("change", this.render);
     this.plugin.groupStore.off("change", this.render);
+    this.plugin.delegationStore.off("change", this.render);
     // The user closing the inbox is a choice an auto-reveal must respect;
     // Obsidian closing it on unload or a mode switch is not.
     if (!this.plugin.isUnloading) this.ui.userAction();
@@ -510,6 +512,7 @@ export class AgentInboxView extends ItemView {
     }
 
     this.renderFeedback(workEl, card.token, name);
+    this.renderDelegations(workEl, card.token, name);
     if (!workEl.hasChildNodes()) workEl.remove();
 
     const foot = el.createDiv({ cls: "terminus-inbox-card-foot" });
@@ -534,6 +537,58 @@ export class AgentInboxView extends ItemView {
       foot.createEl("button", { cls: "terminus-btn-ghost", text: "Open terminal" }).addEventListener("click", () =>
         void this.plugin.focusTerminal(card.token)
       );
+    }
+  }
+
+  /**
+   * Tasks sent from this session to new terminals ("Send to a new
+   * terminal…"), each with how its session is doing and, once its turn has
+   * ended, its closing message: to open, to type back into this session's
+   * input line (between turns, unsubmitted), or to dismiss.
+   */
+  private renderDelegations(el: HTMLElement, token: string, parentName: string): void {
+    const delegations = this.plugin.delegationStore.forParent(token);
+    if (delegations.length === 0) return;
+    const section = el.createDiv({ cls: "terminus-inbox-delegations" });
+    for (const delegation of delegations) {
+      const child = this.plugin.findTerminalView(delegation.childToken);
+      const childName = child?.getDisplayText() ?? delegation.childLabel;
+      const session = this.plugin.agentSessionStore.get(delegation.childToken);
+      const done = !!session && session.lastTurnEndedAt !== null && session.status !== "working";
+      const waiting = session?.status === "needs-attention";
+      const row = section.createDiv({ cls: "terminus-inbox-delegation" });
+      const head = row.createDiv({ cls: "terminus-inbox-delegation-head" });
+      setIcon(head.createSpan({ cls: "terminus-meta-icon" }), "corner-down-right");
+      head.createSpan({ cls: "terminus-inbox-delegation-name", text: childName, attr: { title: delegation.task } });
+      // The same words as a card's pill: "Ready" until its first turn.
+      const pill = !session?.running && !done
+        ? { kind: "ended", label: "Session ended" }
+        : waiting
+          ? { kind: "needs-attention", label: "Waiting for you" }
+          : session?.status === "working"
+            ? { kind: "working", label: "Working" }
+            : done
+              ? { kind: "finished", label: "Finished" }
+              : { kind: "idle", label: "Ready" };
+      head.createSpan({ cls: `terminus-inbox-pill is-${pill.kind}`, text: pill.label });
+      if (done && session?.lastMessage) {
+        const result = plainPreview(session.lastMessage);
+        row.createDiv({ cls: "terminus-inbox-quote", text: result, attr: { title: result } });
+      }
+      const actions = row.createDiv({ cls: "terminus-inbox-delegation-actions" });
+      if (child) actions.createEl("button", { cls: "terminus-btn-ghost", text: "Open terminal" }).addEventListener("click", () => void this.plugin.focusTerminal(delegation.childToken));
+      if (done && session?.lastMessage) {
+        const readiness = this.plugin.feedbackReadiness(token);
+        if (readiness.ready) {
+          const send = actions.createEl("button", { cls: "terminus-btn-ghost-accent", text: `Send to ${parentName}` });
+          setTooltip(send, "Types the result into this session's input line without sending it");
+          send.addEventListener("click", () => void this.plugin.sendDelegationResult(delegation.childToken));
+        } else {
+          actions.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
+        }
+      }
+      actions.createDiv({ cls: "terminus-inbox-spacer" });
+      actions.createEl("button", { cls: "terminus-btn-ghost", text: "Dismiss" }).addEventListener("click", () => this.plugin.delegationStore.remove(delegation.childToken));
     }
   }
 

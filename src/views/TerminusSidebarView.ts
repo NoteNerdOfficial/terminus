@@ -12,7 +12,7 @@ import { refreshTabPendingDot } from "../terminal/tabHeaderColor";
 import { getGitBranch } from "../git/gitBranch";
 import { COMMUNITY_PLUGIN_URL } from "../pluginVersion";
 import { isNoteStatus, linkNote, noteFile, noteStatus, openGroupNote, setNoteStatus } from "../groups/groupNotes";
-import { addForkItem, addMoveItems, showGroupMenu } from "../groups/groupMenus";
+import { addDelegateItem, addForkItem, addMoveItems, showGroupMenu } from "../groups/groupMenus";
 import type TerminusPlugin from "../main";
 
 export const TERMINUS_SIDEBAR_VIEW_TYPE = "terminus-sidebar";
@@ -687,7 +687,11 @@ export class TerminusSidebarView extends ItemView {
   private showMoveMenu(evt: MouseEvent, views: TerminalView[]): void {
     const menu = new Menu();
     // One terminal at a time: a fork continues one session.
-    if (views.length === 1 && views[0] && addForkItem(menu, this.plugin, views[0])) menu.addSeparator();
+    if (views.length === 1 && views[0]) {
+      const forked = addForkItem(menu, this.plugin, views[0]);
+      const delegated = addDelegateItem(menu, this.plugin, views[0]);
+      if (forked || delegated) menu.addSeparator();
+    }
     addMoveItems(menu, this.plugin, { terminals: views }, () => this.selected.clear());
     menu.showAtMouseEvent(evt);
   }

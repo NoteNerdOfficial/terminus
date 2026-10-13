@@ -28,7 +28,7 @@ import { RenameTerminalModal } from "../modals/RenameTerminalModal";
 import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload, StopHookPayload } from "../hooks/types";
 import { getGitBranch } from "../git/gitBranch";
 import { withoutInheritedClaudeSession } from "../pty/claudeSessionEnv";
-import { addForkItem, addMoveItems } from "../groups/groupMenus";
+import { addDelegateItem, addForkItem, addMoveItems } from "../groups/groupMenus";
 import { titleFromBranch, titleFromClaude, titleFromCommand, titleFromPrompt } from "../groups/groupNaming";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
@@ -729,6 +729,7 @@ export class TerminalView extends ItemView {
     if (this.plugin.experience !== "multi-agent") return;
     menu.addSeparator();
     addForkItem(menu, this.plugin, this);
+    addDelegateItem(menu, this.plugin, this);
     addMoveItems(menu, this.plugin, { terminals: [this] });
   }
 
