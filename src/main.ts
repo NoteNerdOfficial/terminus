@@ -145,11 +145,11 @@ export default class TerminusPlugin extends Plugin {
       },
     });
     this.addCommand({
-      id: "next-session-needing-you",
-      name: "Jump to next session that needs you",
+      id: "next-session-needing-attention",
+      name: "Jump to next session that needs attention",
       checkCallback: (checking) => {
         if (this.experience !== "multi-agent") return false;
-        if (!checking) void this.jumpToNextSessionNeedingYou();
+        if (!checking) void this.jumpToNextSessionNeedingAttention();
         return true;
       },
     });
@@ -507,12 +507,12 @@ export default class TerminusPlugin extends Plugin {
 
   /** Cycles through running sessions that need you, in inbox order,
    *  starting after the terminal that's active now. */
-  async jumpToNextSessionNeedingYou(): Promise<void> {
+  async jumpToNextSessionNeedingAttention(): Promise<void> {
     const waiting = this.agentSessionStore
       .list()
-      .filter((s) => s.running && s.status === "needs-you" && this.findTerminalView(s.token));
+      .filter((s) => s.running && s.status === "needs-attention" && this.findTerminalView(s.token));
     if (waiting.length === 0) {
-      new Notice("Terminus: no session needs you");
+      new Notice("Terminus: no session needs attention");
       return;
     }
     const active = this.app.workspace.getActiveViewOfType(TerminalView)?.hookToken;

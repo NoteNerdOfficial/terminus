@@ -18870,7 +18870,7 @@ var import_obsidian15 = require("obsidian");
 var import_terminus_node_bridge21 = __toESM(require_dist());
 
 // src/state/inboxModel.ts
-var VISIBLE_FINISHED_SUBAGENTS = 3;
+var VISIBLE_FINISHED_SUBAGENTS = 10;
 function buildInbox(sessions, changes) {
   var _a8, _b, _c2, _d, _e4;
   const changesByToken = /* @__PURE__ */ new Map();
@@ -18894,10 +18894,10 @@ function buildInbox(sessions, changes) {
     if (!sessionTokens.has(token))
       cards.push(buildCard(token, null, cardChanges));
   }
-  const inbox = { needsYou: [], working: [], finished: [] };
+  const inbox = { needsAttention: [], working: [], finished: [] };
   for (const card of cards) {
-    if (!card.ended && ((_d = card.session) == null ? void 0 : _d.status) === "needs-you")
-      inbox.needsYou.push(card);
+    if (!card.ended && ((_d = card.session) == null ? void 0 : _d.status) === "needs-attention")
+      inbox.needsAttention.push(card);
     else if (!card.ended && ((_e4 = card.session) == null ? void 0 : _e4.status) === "working")
       inbox.working.push(card);
     else
@@ -18971,9 +18971,9 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
       container.addClass("terminus-pending-view", "terminus-inbox-view");
       const inbox = buildInbox(this.plugin.agentSessionStore.list(), this.plugin.pendingChangesStore.list());
       const allChanges = this.plugin.pendingChangesStore.list();
-      this.renderHeader(container, inbox.needsYou.length, allChanges);
+      this.renderHeader(container, inbox.needsAttention.length, allChanges);
       const body = container.createDiv({ cls: "terminus-inbox-body" });
-      const cardCount = inbox.needsYou.length + inbox.working.length + inbox.finished.length;
+      const cardCount = inbox.needsAttention.length + inbox.working.length + inbox.finished.length;
       if (cardCount === 0) {
         const empty = body.createDiv({ cls: "terminus-pending-empty terminus-inbox-empty" });
         empty.appendText("No Claude sessions. Type ");
@@ -18981,7 +18981,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
         empty.createEl("code", { text: command });
         empty.appendText(" in a terminal to start one.");
       }
-      this.renderSection(body, "Needs you", inbox.needsYou);
+      this.renderSection(body, "Needs attention", inbox.needsAttention);
       this.renderSection(body, "Working", inbox.working);
       if (inbox.finished.length > 0) {
         const heading = this.renderSectionHeading(body, "Finished", inbox.finished.length, this.finishedCollapsed);
@@ -19025,10 +19025,10 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     const next = header.createEl("button", {
       cls: "terminus-btn-outline",
       text: needsCount > 0 ? `Next \u21E5 (${needsCount})` : "Next \u21E5",
-      attr: { "aria-label": "Jump to the next session that needs you" }
+      attr: { "aria-label": "Jump to the next session that needs attention" }
     });
     next.disabled = needsCount === 0;
-    next.addEventListener("click", () => void this.plugin.jumpToNextSessionNeedingYou());
+    next.addEventListener("click", () => void this.plugin.jumpToNextSessionNeedingAttention());
     const more = header.createEl("button", { cls: "terminus-btn-outline", text: "\u22EF", attr: { "aria-label": "More" } });
     more.addEventListener("click", (evt) => {
       const menu = new import_obsidian15.Menu();
@@ -19070,10 +19070,10 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     const name = (_b = (_a8 = terminal == null ? void 0 : terminal.getDisplayText()) != null ? _a8 : firstChange == null ? void 0 : firstChange.panelLabel) != null ? _b : "Closed terminal";
     const color = terminal ? terminal.colorTag : (_c2 = firstChange == null ? void 0 : firstChange.panelColor) != null ? _c2 : null;
     const session = card.session;
-    const needsYou = !card.ended && (session == null ? void 0 : session.status) === "needs-you";
+    const needsAttention = !card.ended && (session == null ? void 0 : session.status) === "needs-attention";
     const collapsed = this.collapsedCards.has(card.token);
     const el2 = body.createDiv({ cls: "terminus-inbox-card" });
-    el2.toggleClass("is-needs-you", needsYou);
+    el2.toggleClass("is-needs-attention", needsAttention);
     el2.toggleClass("is-ended", card.ended);
     if (color) {
       el2.addClass("terminus-group-colored");
@@ -19106,7 +19106,7 @@ var AgentInboxView = class extends import_obsidian15.ItemView {
     }
     if (collapsed)
       return;
-    if (needsYou && session) {
+    if (needsAttention && session) {
       const banner = el2.createDiv({ cls: "terminus-inbox-banner" });
       banner.createSpan({ text: `\u26A0 ${(_d = session.needsMessage) != null ? _d : needsFallback(session)}` });
       if (terminal) {
@@ -19211,8 +19211,8 @@ function statusPill(card) {
   if (card.ended || !session)
     return { kind: "ended", label: "Session ended" };
   switch (session.status) {
-    case "needs-you":
-      return { kind: "needs-you", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" ? "Waiting for you" : "Needs you" };
+    case "needs-attention":
+      return { kind: "needs-attention", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" ? "Waiting for you" : "Needs attention" };
     case "working":
       return { kind: "working", label: "Working" };
     case "finished-unread":
@@ -19234,7 +19234,7 @@ function needsFallback(session) {
     return "Claude needs your permission.";
   if (session.needs === "input")
     return "Claude is waiting for your input.";
-  return "Claude needs you.";
+  return "Claude needs your attention.";
 }
 function subagentTime(run) {
   if (!run)
@@ -19619,7 +19619,7 @@ var AgentSessionStore = class extends TypedEmitter {
     const s15 = this.ensure(token, identity);
     if (notificationType === "idle_prompt" && s15.status !== "working")
       return;
-    this.update({ ...s15, status: "needs-you", needs: needsKindOf(notificationType), needsMessage: (message == null ? void 0 : message.trim()) || null });
+    this.update({ ...s15, status: "needs-attention", needs: needsKindOf(notificationType), needsMessage: (message == null ? void 0 : message.trim()) || null });
   }
   /** The git branch read for this session's folder; see AgentSession.branch. */
   branchRead(token, branch) {
@@ -19629,7 +19629,7 @@ var AgentSessionStore = class extends TypedEmitter {
     this.update({ ...s15, branch });
   }
   /** The user looked at the terminal: a finished turn counts as read. A
-   *  session that needs you still does until Claude moves on. */
+   *  session that needs attention still does until Claude moves on. */
   seen(token) {
     const s15 = this.sessions.get(token);
     if (!s15 || s15.status !== "finished-unread")
@@ -19995,7 +19995,7 @@ var TerminusSettingTab = class extends import_obsidian17.PluginSettingTab {
   renderMultiAgentSection(containerEl) {
     const multiAgent = this.plugin.settings.multiAgent;
     new import_obsidian17.Setting(containerEl).setName("Agents and review").setHeading();
-    new import_obsidian17.Setting(containerEl).setName("Automatically reveal Agent inbox").setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs you.").addToggle(
+    new import_obsidian17.Setting(containerEl).setName("Automatically reveal Agent inbox").setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs your attention.").addToggle(
       (toggle) => toggle.setValue(multiAgent.autoRevealInbox).onChange(async (value) => {
         multiAgent.autoRevealInbox = value;
         await this.plugin.saveSettings();
@@ -20408,7 +20408,7 @@ var MultiAgentInviteModal = class extends import_obsidian20.Modal {
     const { contentEl } = this;
     contentEl.createEl("h3", { text: "Running Claude in more than one terminal?" });
     contentEl.createEl("p", {
-      text: "Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs you, plus groups to keep related terminals together."
+      text: "Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs your attention, plus groups to keep related terminals together."
     });
     contentEl.createEl("p", {
       cls: "setting-item-description",
@@ -20525,13 +20525,13 @@ var TerminusPlugin = class extends import_obsidian21.Plugin {
       }
     });
     this.addCommand({
-      id: "next-session-needing-you",
-      name: "Jump to next session that needs you",
+      id: "next-session-needing-attention",
+      name: "Jump to next session that needs attention",
       checkCallback: (checking) => {
         if (this.experience !== "multi-agent")
           return false;
         if (!checking)
-          void this.jumpToNextSessionNeedingYou();
+          void this.jumpToNextSessionNeedingAttention();
         return true;
       }
     });
@@ -20859,11 +20859,11 @@ var TerminusPlugin = class extends import_obsidian21.Plugin {
   }
   /** Cycles through running sessions that need you, in inbox order,
    *  starting after the terminal that's active now. */
-  async jumpToNextSessionNeedingYou() {
+  async jumpToNextSessionNeedingAttention() {
     var _a8;
-    const waiting = this.agentSessionStore.list().filter((s15) => s15.running && s15.status === "needs-you" && this.findTerminalView(s15.token));
+    const waiting = this.agentSessionStore.list().filter((s15) => s15.running && s15.status === "needs-attention" && this.findTerminalView(s15.token));
     if (waiting.length === 0) {
-      new import_obsidian21.Notice("Terminus: no session needs you");
+      new import_obsidian21.Notice("Terminus: no session needs attention");
       return;
     }
     const active = (_a8 = this.app.workspace.getActiveViewOfType(TerminalView)) == null ? void 0 : _a8.hookToken;

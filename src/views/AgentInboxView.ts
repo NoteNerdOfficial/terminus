@@ -12,7 +12,7 @@ export const AGENT_INBOX_VIEW_TYPE = "terminus-agent-inbox";
 
 /**
  * The Multi-agent experience's review view, in place of Pending Changes: a
- * card per Claude session, sorted into Needs you, Working and Finished, with
+ * card per Claude session, sorted into Needs attention, Working and Finished, with
  * each session's pending changes inside its card under the lead or the
  * subagent that made them. Built from AgentSessionStore and
  * PendingChangesStore and re-rendered when either changes; nothing polls.
@@ -61,10 +61,10 @@ export class AgentInboxView extends ItemView {
 
     const inbox = buildInbox(this.plugin.agentSessionStore.list(), this.plugin.pendingChangesStore.list());
     const allChanges = this.plugin.pendingChangesStore.list();
-    this.renderHeader(container, inbox.needsYou.length, allChanges);
+    this.renderHeader(container, inbox.needsAttention.length, allChanges);
 
     const body = container.createDiv({ cls: "terminus-inbox-body" });
-    const cardCount = inbox.needsYou.length + inbox.working.length + inbox.finished.length;
+    const cardCount = inbox.needsAttention.length + inbox.working.length + inbox.finished.length;
     if (cardCount === 0) {
       const empty = body.createDiv({ cls: "terminus-pending-empty terminus-inbox-empty" });
       empty.appendText("No Claude sessions. Type ");
@@ -74,7 +74,7 @@ export class AgentInboxView extends ItemView {
       empty.appendText(" in a terminal to start one.");
     }
 
-    this.renderSection(body, "Needs you", inbox.needsYou);
+    this.renderSection(body, "Needs attention", inbox.needsAttention);
     this.renderSection(body, "Working", inbox.working);
     if (inbox.finished.length > 0) {
       const heading = this.renderSectionHeading(body, "Finished", inbox.finished.length, this.finishedCollapsed);
@@ -96,10 +96,10 @@ export class AgentInboxView extends ItemView {
     const next = header.createEl("button", {
       cls: "terminus-btn-outline",
       text: needsCount > 0 ? `Next ⇥ (${needsCount})` : "Next ⇥",
-      attr: { "aria-label": "Jump to the next session that needs you" },
+      attr: { "aria-label": "Jump to the next session that needs attention" },
     });
     next.disabled = needsCount === 0;
-    next.addEventListener("click", () => void this.plugin.jumpToNextSessionNeedingYou());
+    next.addEventListener("click", () => void this.plugin.jumpToNextSessionNeedingAttention());
 
     const more = header.createEl("button", { cls: "terminus-btn-outline", text: "⋯", attr: { "aria-label": "More" } });
     more.addEventListener("click", (evt) => {
@@ -143,11 +143,11 @@ export class AgentInboxView extends ItemView {
     const name = terminal?.getDisplayText() ?? firstChange?.panelLabel ?? "Closed terminal";
     const color = terminal ? terminal.colorTag : (firstChange?.panelColor ?? null);
     const session = card.session;
-    const needsYou = !card.ended && session?.status === "needs-you";
+    const needsAttention = !card.ended && session?.status === "needs-attention";
     const collapsed = this.collapsedCards.has(card.token);
 
     const el = body.createDiv({ cls: "terminus-inbox-card" });
-    el.toggleClass("is-needs-you", needsYou);
+    el.toggleClass("is-needs-attention", needsAttention);
     el.toggleClass("is-ended", card.ended);
     if (color) {
       el.addClass("terminus-group-colored");
@@ -180,7 +180,7 @@ export class AgentInboxView extends ItemView {
     }
     if (collapsed) return;
 
-    if (needsYou && session) {
+    if (needsAttention && session) {
       const banner = el.createDiv({ cls: "terminus-inbox-banner" });
       banner.createSpan({ text: `⚠ ${session.needsMessage ?? needsFallback(session)}` });
       if (terminal) {
@@ -279,8 +279,8 @@ function statusPill(card: InboxCard): { kind: string; label: string } {
   const session = card.session;
   if (card.ended || !session) return { kind: "ended", label: "Session ended" };
   switch (session.status) {
-    case "needs-you":
-      return { kind: "needs-you", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" ? "Waiting for you" : "Needs you" };
+    case "needs-attention":
+      return { kind: "needs-attention", label: session.needs === "permission" ? "Needs permission" : session.needs === "input" ? "Waiting for you" : "Needs attention" };
     case "working":
       return { kind: "working", label: "Working" };
     case "finished-unread":
@@ -309,7 +309,7 @@ function plainPreview(markdown: string): string {
 function needsFallback(session: AgentSession): string {
   if (session.needs === "permission") return "Claude needs your permission.";
   if (session.needs === "input") return "Claude is waiting for your input.";
-  return "Claude needs you.";
+  return "Claude needs your attention.";
 }
 
 function subagentTime(run: SubagentRun | null): string | null {

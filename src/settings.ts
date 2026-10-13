@@ -249,7 +249,7 @@ export class TerminusSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Automatically reveal Agent inbox")
-      .setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs you.")
+      .setDesc("Bring the inbox to front once Claude finishes a burst of edits or needs your attention.")
       .addToggle((toggle) =>
         toggle.setValue(multiAgent.autoRevealInbox).onChange(async (value) => {
           multiAgent.autoRevealInbox = value;

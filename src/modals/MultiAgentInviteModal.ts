@@ -22,7 +22,7 @@ export class MultiAgentInviteModal extends Modal {
     const { contentEl } = this;
     contentEl.createEl("h3", { text: "Running Claude in more than one terminal?" });
     contentEl.createEl("p", {
-      text: "Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs you, plus groups to keep related terminals together.",
+      text: "Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs your attention, plus groups to keep related terminals together.",
     });
     contentEl.createEl("p", {
       cls: "setting-item-description",

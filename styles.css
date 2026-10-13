@@ -1523,7 +1523,7 @@
   background-color: var(--background-primary);
 }
 
-.terminus-inbox-card.is-needs-you {
+.terminus-inbox-card.is-needs-attention {
   border-color: var(--color-orange, #e8871e);
 }
 
@@ -1561,7 +1561,7 @@
   color: var(--text-muted);
 }
 
-.terminus-inbox-pill.is-needs-you {
+.terminus-inbox-pill.is-needs-attention {
   background-color: rgba(var(--color-orange-rgb, 232, 135, 30), 0.18);
   color: var(--color-orange, #e8871e);
 }

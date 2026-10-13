@@ -30,7 +30,7 @@ export interface InboxCard {
 }
 
 export interface Inbox {
-  needsYou: InboxCard[];
+  needsAttention: InboxCard[];
   working: InboxCard[];
   /** Unread first, then read, then ended sessions that still have changes. */
   finished: InboxCard[];
@@ -38,7 +38,7 @@ export interface Inbox {
 
 /** Finished subagents with nothing pending still show, up to this many
  *  (the most recent); running ones and ones with changes always do. */
-export const VISIBLE_FINISHED_SUBAGENTS = 3;
+export const VISIBLE_FINISHED_SUBAGENTS = 10;
 
 /**
  * Sorts sessions and pending changes into the inbox's sections. A change
@@ -68,9 +68,9 @@ export function buildInbox(sessions: AgentSession[], changes: PendingChange[]): 
     if (!sessionTokens.has(token)) cards.push(buildCard(token, null, cardChanges));
   }
 
-  const inbox: Inbox = { needsYou: [], working: [], finished: [] };
+  const inbox: Inbox = { needsAttention: [], working: [], finished: [] };
   for (const card of cards) {
-    if (!card.ended && card.session?.status === "needs-you") inbox.needsYou.push(card);
+    if (!card.ended && card.session?.status === "needs-attention") inbox.needsAttention.push(card);
     else if (!card.ended && card.session?.status === "working") inbox.working.push(card);
     else inbox.finished.push(card);
   }

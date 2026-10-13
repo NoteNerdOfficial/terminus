@@ -2,13 +2,13 @@ import { TypedEmitter } from "../node/emitter";
 
 /**
  * - `working`: Claude is mid-turn.
- * - `needs-you`: Claude asked for permission, or is waiting on input.
+ * - `needs-attention`: Claude asked for permission, or is waiting on input.
  * - `finished-unread`: the turn ended and nobody has looked at the terminal since.
  * - `idle`: the turn ended and the terminal has been looked at since, or no turn yet.
  */
-export type AgentStatus = "working" | "needs-you" | "finished-unread" | "idle";
+export type AgentStatus = "working" | "needs-attention" | "finished-unread" | "idle";
 
-/** Why a session needs you, when the Notification payload says. */
+/** Why a session needs attention, when the Notification payload says. */
 export type NeedsKind = "permission" | "input";
 
 export interface AgentSession {
@@ -19,10 +19,10 @@ export interface AgentSession {
   /** False once SessionEnd fired, the shell exited or the terminal closed. */
   running: boolean;
   status: AgentStatus;
-  /** Set only while `status` is `needs-you`, and only when the payload said which. */
+  /** Set only while `status` is `needs-attention`, and only when the payload said which. */
   needs: NeedsKind | null;
   /** What Claude asked for ("Claude needs your permission to use Bash"),
-   *  while `status` is `needs-you` and the payload carried one. */
+   *  while `status` is `needs-attention` and the payload carried one. */
   needsMessage: string | null;
   /** Claude's closing message from the last turn, truncated. */
   lastMessage: string | null;
@@ -214,9 +214,9 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
     // Claude Code sends idle_prompt about a minute after every finished turn
     // (seen in a live 2.1.296 session). After a Stop that's no news: the
     // card already says Finished, and moving every finished session into
-    // Needs you would empty the Finished section.
+    // Needs attention would empty the Finished section.
     if (notificationType === "idle_prompt" && s.status !== "working") return;
-    this.update({ ...s, status: "needs-you", needs: needsKindOf(notificationType), needsMessage: message?.trim() || null });
+    this.update({ ...s, status: "needs-attention", needs: needsKindOf(notificationType), needsMessage: message?.trim() || null });
   }
 
   /** The git branch read for this session's folder; see AgentSession.branch. */
@@ -227,7 +227,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
   }
 
   /** The user looked at the terminal: a finished turn counts as read. A
-   *  session that needs you still does until Claude moves on. */
+   *  session that needs attention still does until Claude moves on. */
   seen(token: string): void {
     const s = this.sessions.get(token);
     if (!s || s.status !== "finished-unread") return;
