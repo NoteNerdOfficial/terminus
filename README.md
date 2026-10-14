@@ -1,4 +1,4 @@
-> ⭐ **New feature: Multi-agent.** Run several Claude sessions side by side with an Agent inbox and groups for your terminals. **To turn it on:** click **Try multi-agent** in the popup shown once after you update, or open **Settings → Terminus → Experience** and choose **Multi-agent** (switch back to Classic any time). [See what it does](#multi-agent).
+> ⭐ **New feature: Multi-agent.** Run several Claude sessions side by side with an Agent inbox and groups for your terminals. **To turn it on:** click **Try multi-agent** in the popup shown once after you update, or open **Settings → Terminus → Experience** and choose **Multi-agent** (switch back to Classic any time). [How to switch](#choose-your-experience) · [See what it does](#multi-agent-experience).
 
 # Terminus
 
@@ -11,15 +11,98 @@
 A real terminal inside Obsidian that never lets you lose the thread on what [Claude Code](https://claude.com/product/claude-code) just did. You type `claude` (or anything else) exactly like you would in any other terminal, with nothing wrapped or intercepted, and Claude keeps working through a whole multi-file turn uninterrupted. Two things happen because of that:
 
 - **A command fails, and you don't leave the terminal to deal with it.** A small badge appears right next to the failed command. Click it and Claude explains what happened and proposes a fix, using the surrounding command history for context. No copying an error into a separate chat window and pasting the context back and forth by hand.
-- **Claude finishes editing, and nothing is a mystery.** Every file it edits shows up in one Pending Changes panel (what changed, where, and by how much), with a real line-numbered diff per file and Accept / Reject / Open right there. No more hunting for "where did that change happen"; even editor plugins built specifically for opening code in Obsidian don't show you a diff, and Terminus does.
+- **Claude finishes editing, and nothing is a mystery.** Every file it edits shows up in one Pending Changes panel, or on its session's card in Multi-agent (what changed, where, and by how much), with a real line-numbered diff per file and Accept / Reject / Open right there. No more hunting for "where did that change happen"; even editor plugins built specifically for opening code in Obsidian don't show you a diff, and Terminus does.
 
 Edits land on disk immediately; you review what changed afterwards, with the option to revert.
 
-Running several Claude sessions at once? The **Multi-agent experience** adds an Agent inbox with a card per session and groups to keep related terminals together. See [Multi-agent](#multi-agent).
+Running several Claude sessions at once? Switch to the **Multi-agent experience**: an Agent inbox with a card per session, and groups to keep related terminals together. See [Choose your experience](#choose-your-experience).
 
-## Screenshots
+## Choose your experience
 
-### Multi-agent
+Terminus has two experiences. They share the same terminal, the same hooks and the same pending changes; they differ in how you keep track of Claude's work.
+
+| | **Classic** | **Multi-agent** |
+| --- | --- | --- |
+| Best for | One Claude session at a time, or a few you watch yourself | Several Claude sessions running side by side |
+| Where you review | One **Pending Changes** panel, grouped by terminal | An **Agent inbox** with a card per session, and **groups** for your terminals |
+| Organising terminals | Tabs, names and colours | Groups, snooze and settle, a "go to" picker, forking and sending tasks between sessions |
+| Talking to a running session | Type in its terminal | A steer / queue box on each card |
+| Default | Yes | Opt in |
+
+**To switch:** open **Settings → Terminus → Experience** and pick **Classic** or **Multi-agent**. Switching is instant and reversible: terminals, pending changes and every other setting carry over, and each experience keeps its own review settings. A one-time popup after you update also offers **Try multi-agent**.
+
+![The Experience setting in Settings → Terminus, set to Multi-agent](screenshots/settings-experience.png)
+
+## Both experiences
+
+### Terminal
+
+- **A real PTY-backed terminal.** Full interactive shell (zsh/bash), not a fake console. Run anything, not just `claude`.
+- **Multiple concurrent terminals.** Open as many as you want; each runs its own session, defaulting to a numbered label ("Terminus 1", "Terminus 2", ...).
+- **Rename and color-code terminals.** A pencil and palette icon in each terminal's own header let you give it a custom name and a color tag. Both show on the terminal's native tab, carry through into its Pending Changes group so you can tell at a glance which session made which edits, and survive an Obsidian restart (or a "Rescue closed terminal", below).
+- **Choose where a new terminal opens.** Clicking the ribbon icon shows a quick menu: new tab, split right, split down, or new window. Set a fixed default in Settings to skip the menu entirely, or use the "Open in new tab" / "Open in split right" / "Open in split down" / "Open in new window" commands to go straight to a placement (each can take its own hotkey).
+- **Clickable paths and URLs.** `Cmd/Ctrl` + click a file path or link in terminal output to open it. Files in your vault open in a new tab — notes as notes, and anything else in whichever editor has claimed that extension — with a trailing `:42` (the form compilers, linters and Claude all print) landing on that line; URLs open in your browser; anything Obsidian can't open at all, including dot-files and paths outside the vault, goes to your system's default app. Paths are checked against disk before being linkified, so prose and version numbers don't turn into false links.
+- **Drag-and-drop path insertion.** Drag a note from Obsidian's file explorer, or a file from Finder/Explorer, onto a terminal to insert its absolute path into the input line (quoted if it has spaces), unexecuted.
+- **Wiki-link autocomplete.** Type `[[` in a terminal to fuzzy-search your vault's notes and insert one as a wiki-link, a vault-relative path, or an absolute path, configurable in Settings.
+- **Scrollback and working-directory persistence.** Closing and reopening Obsidian restores what was on screen (clearly marked as a previous session) and resumes each shell in the same directory you left it in, not the vault root.
+- **Rescue closed terminals.** Closed a tab by accident? The "Rescue closed terminal" command brings back its transcript, working directory, name, and color from a 10-entry buffer.
+- **Startup command.** Optionally run a fixed command (e.g. `claude`) automatically in every new terminal once its shell is ready.
+- **Deep appearance settings.** Font size and family, cursor style and blink, scrollback size, and a customizable ribbon icon, plus a terminal color theme that follows Obsidian's light/dark toggle automatically. Font size also has its own increase/decrease/reset commands, which apply live to every open terminal.
+
+### Terminal help for beginners
+
+- **Shell integration** (zsh and bash) tracks every command's boundaries and exit code, without modifying your actual `.zshrc`/`.bashrc`.
+- **Failure badges.** A small ⚠ appears next to any command that exits non-zero.
+- **Explain this.** Click the badge for a plain-English explanation of what happened, from an isolated `claude -p` call with no file/tool access. Its result has a fixed spot above the action buttons and stays there regardless of what else you do in the popup. Both this and Suggest a fix see not just the failed command but a few commands run right before it too, so a failure that's really about an earlier step (e.g. a `git push` failing because nothing was committed yet) gets diagnosed with that context, not just the last line.
+- **Suggest a fix.** Asks Claude for its single best corrective command with a one-sentence rationale, shown below the action buttons with its own Apply/Cancel. Apply types it into your terminal's input line, unexecuted, so you review, edit, or press Enter yourself. Clicking "Suggest a fix" again gets the next-best option instead of repeating itself. Claude never runs anything on its own here.
+
+### Screenshots
+
+| Command help: Explain / Suggest a fix |
+| --- |
+| ![Command help popup](screenshots/command-help.png) |
+
+| Rename a terminal |
+| --- |
+| ![Rename terminal modal](screenshots/terminal-rename.png) |
+
+| Color-code a terminal, with the tint carried to its native tab |
+| --- |
+| ![Terminal color picker](screenshots/terminal-color.png) |
+
+## Classic experience
+
+The default. Every file Claude edits lands in one **Pending Changes** panel, grouped by terminal, where you accept or reject it after the fact. Edits land on disk immediately and nothing is blocked. (Multi-agent reviews through the same hooks and the same diff views; it just presents them per session in the inbox.)
+
+### Screenshots
+
+| Split Diff: per-hunk Accept/Reject |
+| --- |
+| ![Split Diff view](screenshots/diffpanel-splitdiff.png) |
+
+### Claude Code review workflow
+
+- **Non-blocking by design.** A `PreToolUse` hook records the pre-edit snapshot of every file Claude touches, but never blocks the write. Claude finishes its whole turn; you review afterward.
+- **Live "Claude is editing X" chip.** A pulsing dot and the file currently being written, floating in the bottom-right of the terminal right by Claude's own input box, collapsing to a count once a turn touches more than one. It's up for the whole turn — including the stretches where Claude is thinking or running tools that aren't writes — because a `Stop` hook tells the plugin when the turn actually ends. The dot carries that terminal's own color, so it's clear which session is busy.
+- **Blinking "needs attention" dot on the tab.** Lights up on a terminal's native tab the moment Claude needs permission to use a tool, or has gone idle waiting on you — the case a floating chip inside the pane can't help with, since you only see that if you're already looking at the right tab. Positioned to stay visible even when several tabs are open and the title text itself has truncated. Clears as soon as you focus that tab, or on its own once the turn ends.
+- **Pending Changes panel.** A persistent sidebar panel, grouped by terminal (each group collapsible independently), showing every file changed with a line-numbered, word-level diff and a scroll minimap. Colors follow your vault's accent color rather than a fixed theme.
+- **Comes to front automatically.** Once Claude finishes a burst of edits, the panel reveals itself (debounced across a whole multi-file turn, so it doesn't interrupt mid-turn or pop up once per file). Toggleable in Settings, with an adjustable delay.
+- **Accept / Reject, per file or in bulk.** Accept is a no-op (the file's already correct); Reject reverts to the exact pre-edit content, or deletes the file if it was newly created. A global "Reject all" / "Keep all" covers everything; each terminal group also gets its own scoped (visually secondary) versions. Optionally require a confirmation before any bulk action, off by default since every one is already reversible via "Recently resolved".
+- **Edits coalesce within a turn.** Multiple edits to the same file in one turn merge into a single row with one true revert point, instead of several overlapping ones.
+- **Undo, even after Accept.** A "Recently resolved" list lets you reverse either outcome after the fact.
+- **Persistent, searchable action log.** A lightweight on-disk history (filename, stats, outcome) that survives Obsidian restarts, independent of the short in-memory undo list.
+- **Rendered markdown preview.** Toggle a pending change's diff view to see the note as it will actually render, not just raw markdown text.
+- **Git-aware baseline.** For a vault under version control, an extra "vs git HEAD" diff view alongside the since-last-edit one (purely informational).
+- **Backlink-breakage warnings.** Flags when an edit removes a heading or block that other notes reference via `[[Note#Heading]]` or `[[Note#^block]]`.
+- **Inline in-editor diff.** Click "Open" on a pending change to open the file, with the diff marked up directly in the real note and Accept/Reject controls right there. The editor lands on the first changed hunk rather than the top of the file. "Open" always just opens: a file another plugin handles (a code editor for `.ts`, say) opens in that editor without the inline markup rather than being swapped for another view, and files Obsidian can't open at all — dot-files, paths outside the vault — go to your system's default app, the same as a `Cmd`-clicked path in the terminal.
+- **Split Diff view, with per-hunk Accept/Reject.** Click "Split Diff" on a pending change for a dedicated side-by-side (old | new) view with its own Accept/Reject bar on every individual changed block, so you can keep some edits and revert others within the same file instead of an all-or-nothing per-file decision. Not available for `NotebookEdit` changes, since their diff is a display-only approximation of the real file content and can't be safely spliced.
+- **Keyboard-driven review.** Accept/reject the oldest pending change without touching the panel.
+
+## Multi-agent experience
+
+Switch the **Experience** setting from Classic to Multi-agent ([how](#choose-your-experience)) to run several Claude sessions side by side without losing track of them. Classic keeps the single Pending Changes panel; the two share your terminals, pending changes and every other setting. Each keeps its own review settings.
+
+### Screenshots
 
 ![Terminus with groups on the left and the Agent inbox on the right](screenshots/multi-agent-overview.png)
 
@@ -49,62 +132,6 @@ Running several Claude sessions at once? The **Multi-agent experience** adds an 
 | --- |
 | ![Split diff opened from the Agent inbox](screenshots/multi-agent-split-diff.png) |
 
-### Terminal and review
-
-| Split Diff: per-hunk Accept/Reject |
-| --- |
-| ![Split Diff view](screenshots/diffpanel-splitdiff.png) |
-
-| Command help: Explain / Suggest a fix |
-| --- |
-| ![Command help popup](screenshots/command-help.png) |
-
-| Rename a terminal |
-| --- |
-| ![Rename terminal modal](screenshots/terminal-rename.png) |
-
-| Color-code a terminal, with the tint carried to its native tab |
-| --- |
-| ![Terminal color picker](screenshots/terminal-color.png) |
-
-## Features
-
-### Terminal
-
-- **A real PTY-backed terminal.** Full interactive shell (zsh/bash), not a fake console. Run anything, not just `claude`.
-- **Multiple concurrent terminals.** Open as many as you want; each runs its own session, defaulting to a numbered label ("Terminus 1", "Terminus 2", ...).
-- **Rename and color-code terminals.** A pencil and palette icon in each terminal's own header let you give it a custom name and a color tag. Both show on the terminal's native tab, carry through into its Pending Changes group so you can tell at a glance which session made which edits, and survive an Obsidian restart (or a "Rescue closed terminal", below).
-- **Choose where a new terminal opens.** Clicking the ribbon icon shows a quick menu: new tab, split right, split down, or new window. Set a fixed default in Settings to skip the menu entirely, or use the "Open in new tab" / "Open in split right" / "Open in split down" / "Open in new window" commands to go straight to a placement (each can take its own hotkey).
-- **Clickable paths and URLs.** `Cmd/Ctrl` + click a file path or link in terminal output to open it. Files in your vault open in a new tab — notes as notes, and anything else in whichever editor has claimed that extension — with a trailing `:42` (the form compilers, linters and Claude all print) landing on that line; URLs open in your browser; anything Obsidian can't open at all, including dot-files and paths outside the vault, goes to your system's default app. Paths are checked against disk before being linkified, so prose and version numbers don't turn into false links.
-- **Drag-and-drop path insertion.** Drag a note from Obsidian's file explorer, or a file from Finder/Explorer, onto a terminal to insert its absolute path into the input line (quoted if it has spaces), unexecuted.
-- **Wiki-link autocomplete.** Type `[[` in a terminal to fuzzy-search your vault's notes and insert one as a wiki-link, a vault-relative path, or an absolute path, configurable in Settings.
-- **Scrollback and working-directory persistence.** Closing and reopening Obsidian restores what was on screen (clearly marked as a previous session) and resumes each shell in the same directory you left it in, not the vault root.
-- **Rescue closed terminals.** Closed a tab by accident? The "Rescue closed terminal" command brings back its transcript, working directory, name, and color from a 10-entry buffer.
-- **Startup command.** Optionally run a fixed command (e.g. `claude`) automatically in every new terminal once its shell is ready.
-- **Deep appearance settings.** Font size and family, cursor style and blink, scrollback size, and a customizable ribbon icon, plus a terminal color theme that follows Obsidian's light/dark toggle automatically. Font size also has its own increase/decrease/reset commands, which apply live to every open terminal.
-
-### Claude Code review workflow
-
-- **Non-blocking by design.** A `PreToolUse` hook records the pre-edit snapshot of every file Claude touches, but never blocks the write. Claude finishes its whole turn; you review afterward.
-- **Live "Claude is editing X" chip.** A pulsing dot and the file currently being written, floating in the bottom-right of the terminal right by Claude's own input box, collapsing to a count once a turn touches more than one. It's up for the whole turn — including the stretches where Claude is thinking or running tools that aren't writes — because a `Stop` hook tells the plugin when the turn actually ends. The dot carries that terminal's own color, so it's clear which session is busy.
-- **Blinking "needs attention" dot on the tab.** Lights up on a terminal's native tab the moment Claude needs permission to use a tool, or has gone idle waiting on you — the case a floating chip inside the pane can't help with, since you only see that if you're already looking at the right tab. Positioned to stay visible even when several tabs are open and the title text itself has truncated. Clears as soon as you focus that tab, or on its own once the turn ends.
-- **Pending Changes panel.** A persistent sidebar panel, grouped by terminal (each group collapsible independently), showing every file changed with a line-numbered, word-level diff and a scroll minimap. Colors follow your vault's accent color rather than a fixed theme.
-- **Comes to front automatically.** Once Claude finishes a burst of edits, the panel reveals itself (debounced across a whole multi-file turn, so it doesn't interrupt mid-turn or pop up once per file). Toggleable in Settings, with an adjustable delay.
-- **Accept / Reject, per file or in bulk.** Accept is a no-op (the file's already correct); Reject reverts to the exact pre-edit content, or deletes the file if it was newly created. A global "Reject all" / "Keep all" covers everything; each terminal group also gets its own scoped (visually secondary) versions. Optionally require a confirmation before any bulk action, off by default since every one is already reversible via "Recently resolved".
-- **Edits coalesce within a turn.** Multiple edits to the same file in one turn merge into a single row with one true revert point, instead of several overlapping ones.
-- **Undo, even after Accept.** A "Recently resolved" list lets you reverse either outcome after the fact.
-- **Persistent, searchable action log.** A lightweight on-disk history (filename, stats, outcome) that survives Obsidian restarts, independent of the short in-memory undo list.
-- **Rendered markdown preview.** Toggle a pending change's diff view to see the note as it will actually render, not just raw markdown text.
-- **Git-aware baseline.** For a vault under version control, an extra "vs git HEAD" diff view alongside the since-last-edit one (purely informational).
-- **Backlink-breakage warnings.** Flags when an edit removes a heading or block that other notes reference via `[[Note#Heading]]` or `[[Note#^block]]`.
-- **Inline in-editor diff.** Click "Open" on a pending change to open the file, with the diff marked up directly in the real note and Accept/Reject controls right there. The editor lands on the first changed hunk rather than the top of the file. "Open" always just opens: a file another plugin handles (a code editor for `.ts`, say) opens in that editor without the inline markup rather than being swapped for another view, and files Obsidian can't open at all — dot-files, paths outside the vault — go to your system's default app, the same as a `Cmd`-clicked path in the terminal.
-- **Split Diff view, with per-hunk Accept/Reject.** Click "Split Diff" on a pending change for a dedicated side-by-side (old | new) view with its own Accept/Reject bar on every individual changed block, so you can keep some edits and revert others within the same file instead of an all-or-nothing per-file decision. Not available for `NotebookEdit` changes, since their diff is a display-only approximation of the real file content and can't be safely spliced.
-- **Keyboard-driven review.** Accept/reject the oldest pending change without touching the panel.
-
-## Multi-agent
-
-Switch the **Experience** setting from Classic to Multi-agent (Settings → Terminus → Experience) to run several Claude sessions side by side without losing track of them. Classic keeps the single Pending Changes panel; the two share your terminals, pending changes and every other setting. Each keeps its own review settings.
-
 ### Groups (left sidebar)
 
 - **A group is one piece of work.** It holds the terminals for that task, plus the notes you have open in it. Selecting a group shows only its terminals in the editor; the others keep running in the background. Terminals outside any group show in every group.
@@ -126,14 +153,7 @@ Switch the **Experience** setting from Classic to Multi-agent (Settings → Term
 - **Send a task to a new terminal.** Opens a new Claude session beside the sender with your prompt typed in, unsent. Its result shows on the sender's card, and one click types it back into the sender's input line.
 - **Fork a session.** Starts a new terminal in the same group continuing from this session's conversation (`claude --resume <id> --fork-session`), named "(fork)".
 - **Review feedback.** Comment on a hunk in Split Diff, queue comments per session, and type them into that session's input line between turns.
-- **Quiet by default.** An inbox you already have open only comes forward after a meaningful burst of edits (three files or 50 lines), and never while you are rearranging it. Terminus never submits anything for you except when you press Send now.
-
-### Terminal help for beginners
-
-- **Shell integration** (zsh and bash) tracks every command's boundaries and exit code, without modifying your actual `.zshrc`/`.bashrc`.
-- **Failure badges.** A small ⚠ appears next to any command that exits non-zero.
-- **Explain this.** Click the badge for a plain-English explanation of what happened, from an isolated `claude -p` call with no file/tool access. Its result has a fixed spot above the action buttons and stays there regardless of what else you do in the popup. Both this and Suggest a fix see not just the failed command but a few commands run right before it too, so a failure that's really about an earlier step (e.g. a `git push` failing because nothing was committed yet) gets diagnosed with that context, not just the last line.
-- **Suggest a fix.** Asks Claude for its single best corrective command with a one-sentence rationale, shown below the action buttons with its own Apply/Cancel. Apply types it into your terminal's input line, unexecuted, so you review, edit, or press Enter yourself. Clicking "Suggest a fix" again gets the next-best option instead of repeating itself. Claude never runs anything on its own here.
+- **Quiet by default.** An inbox you already have open only comes forward after a meaningful burst of edits (three files or 50 lines), and never while you are rearranging it. Terminus never submits anything for you except when you press Steer (or send a queued message).
 
 ## Commands
 
