@@ -17,7 +17,11 @@ export class GettingStartedModal extends Modal {
    *  without it those children would leak past the modal. */
   private readonly renderHost = new Component();
 
-  private constructor(app: App, private readonly full: boolean) {
+  private constructor(
+    app: App,
+    private readonly full: boolean,
+    private readonly section?: string
+  ) {
     super(app);
   }
 
@@ -26,9 +30,10 @@ export class GettingStartedModal extends Modal {
     new GettingStartedModal(app, false).open();
   }
 
-  /** Full reference, from the command palette. */
-  static openGuide(app: App): void {
-    new GettingStartedModal(app, true).open();
+  /** Full reference, from the command palette. `section` scrolls to the
+   *  first heading that starts with that text. */
+  static openGuide(app: App, section?: string): void {
+    new GettingStartedModal(app, true, section).open();
   }
 
   onOpen(): void {
@@ -42,7 +47,13 @@ export class GettingStartedModal extends Modal {
     const markdown = this.full ? buildGettingStartedMarkdown() : buildWelcomeMarkdown();
     // Empty sourcePath: the content is bundled, not a vault note, so there
     // are no relative links for Obsidian to resolve against a file.
-    void MarkdownRenderer.render(this.app, markdown, body, "", this.renderHost);
+    void MarkdownRenderer.render(this.app, markdown, body, "", this.renderHost).then(() => {
+      if (!this.section) return;
+      const heading = Array.from(body.querySelectorAll("h2, h3")).find((h) => h.textContent?.startsWith(this.section ?? ""));
+      // The body is the scroller; scrolling the heading into view would also
+      // try to move the modal itself.
+      if (heading instanceof HTMLElement) body.scrollTop = heading.offsetTop - body.offsetTop;
+    });
 
     const actions = contentEl.createDiv({ cls: "terminus-getting-started-actions" });
     if (!this.full) {

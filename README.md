@@ -1,4 +1,4 @@
-> ⭐ **Multi-agent is now the default.** Run several Claude sessions side by side with an Agent inbox and groups for your terminals. **Prefer the single Pending Changes panel?** Open **Settings → Terminus → Experience** and choose **Classic** (or click **Switch to Classic** in the popup shown once after you update). [How to switch](#choose-your-experience) · [See what it does](#multi-agent-experience).
+> ⭐ **Multi-agent is now the default.** Run several Claude sessions side by side with an Agent inbox and groups for your terminals. **Prefer the single Pending Changes panel?** Open **Settings → Terminus → Experience** and choose **Classic** (or click **Switch to Classic** in the "What's new" popup shown once after you update). [How to switch](#choose-your-experience) · [See what it does](#multi-agent-experience).
 
 # Terminus
 
@@ -55,7 +55,7 @@ Terminus has two experiences. They share the same terminal, the same hooks and t
 
 **To switch:** open **Settings → Terminus → Experience** and pick **Classic** or **Multi-agent**. Switching is instant and reversible: terminals, pending changes and every other setting carry over, and each experience keeps its own review settings.
 
-**Updating from an earlier version?** If you hadn't chosen an experience yet, Terminus moves you to Multi-agent once and shows a popup with a **Switch to Classic** button. If you had already declined Multi-agent or picked Classic yourself, nothing changes.
+**Updating from an earlier version?** If you hadn't chosen an experience yet, Terminus moves you to Multi-agent once and shows a "What's new" popup with a short demo, a **Read the guide** button (opens the in-app guide at the Multi-agent section) and a **Switch to Classic** button. If you had already declined Multi-agent or picked Classic yourself, nothing changes.
 
 ![The Experience setting in Settings → Terminus, set to Multi-agent](screenshots/settings-experience.png)
 

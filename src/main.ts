@@ -33,7 +33,7 @@ import { confirmCollisionReject, hasCollision } from "./modals/collisions";
 import { RescueClosedTerminalModal } from "./modals/RescueClosedTerminalModal";
 import { GettingStartedModal } from "./modals/GettingStartedModal";
 import { MultiAgentInviteModal } from "./modals/MultiAgentInviteModal";
-import { MultiAgentDefaultModal } from "./modals/MultiAgentDefaultModal";
+import { WhatsNewModal } from "./modals/WhatsNewModal";
 import { computeDiffStats } from "./diff/renderDiff";
 import { inlineDiffDecorations, inlineDiffField } from "./editor/inlineDiff";
 import { errorMessage } from "./util/errors";
@@ -364,16 +364,20 @@ export default class TerminusPlugin extends Plugin {
     return moved;
   }
 
-  /** The one-time notice for an install moved to Multi-agent, a few seconds
-   *  after the workspace is up so it doesn't land on a half-loaded window.
-   *  "Switch to Classic" is the way back without opening settings. */
+  /** The one-time "What's new" popup for an install moved to Multi-agent, a
+   *  few seconds after the workspace is up so it doesn't land on a half-
+   *  loaded window. "Switch to Classic" is the way back without opening
+   *  settings; "Read the guide" opens the guide at the Multi-agent section. */
   private announceMultiAgentDefault(): void {
     window.setTimeout(() => {
       if (this.isUnloading) return;
-      void MultiAgentDefaultModal.ask(this.app).then(async (choice) => {
-        if (choice !== "classic") return;
-        await this.setExperience("classic");
-        new Notice("Terminus: switched to the Classic experience. Change it any time in settings.");
+      void WhatsNewModal.ask(this.app).then(async (choice) => {
+        if (choice === "guide") {
+          GettingStartedModal.openGuide(this.app, "Multi-agent");
+        } else if (choice === "classic") {
+          await this.setExperience("classic");
+          new Notice("Terminus: switched to the Classic experience. Change it any time in settings.");
+        }
       });
     }, 3000);
   }
