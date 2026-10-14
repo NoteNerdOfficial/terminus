@@ -17,6 +17,24 @@ Edits land on disk immediately; you review what changed afterwards, with the opt
 
 Running several Claude sessions at once? Switch to the **Multi-agent experience**: an Agent inbox with a card per session, and groups to keep related terminals together. See [Choose your experience](#choose-your-experience).
 
+## Contents
+
+- [Choose your experience](#choose-your-experience): Classic or Multi-agent, and how to switch
+- [Both experiences](#both-experiences)
+  - [Terminal](#terminal)
+  - [Terminal help for beginners](#terminal-help-for-beginners)
+- [Classic experience](#classic-experience)
+  - [Claude Code review workflow](#claude-code-review-workflow)
+- [Multi-agent experience](#multi-agent-experience)
+  - [Groups (left sidebar)](#groups-left-sidebar)
+  - [Agent inbox (right sidebar)](#agent-inbox-right-sidebar)
+- [Commands](#commands)
+- [How it works](#how-it-works)
+- [Requirements](#requirements)
+- [Development](#development)
+- [Layout](#layout)
+- [License](#license)
+
 ## Choose your experience
 
 Terminus has two experiences. They share the same terminal, the same hooks and the same pending changes; they differ in how you keep track of Claude's work.
