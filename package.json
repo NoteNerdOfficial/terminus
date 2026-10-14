@@ -1,7 +1,7 @@
 {
   "name": "terminus",
   "version": "1.0.36",
-  "description": "A real terminal in Obsidian for Claude Code. Run several sessions side by side with an Agent inbox and groups, and review every edit with word-level diffs and undo.",
+  "description": "A real terminal for Claude Code, right beside your notes. Run several sessions side by side with an Agent inbox and groups, and review every edit with word-level diffs and undo.",
   "main": "main.js",
   "scripts": {
     "predev": "node scripts/generateResourceFiles.mjs",
