@@ -17,6 +17,12 @@ Edits land on disk immediately; you review what changed afterwards, with the opt
 
 Terminus opens in the **Multi-agent experience**: an Agent inbox with a card per Claude session, and groups to keep related terminals together. Prefer one Pending Changes panel? You can switch to Classic any time. See [Choose your experience](#choose-your-experience).
 
+<p align="center">
+  <img src="screenshots/multi-agent-demo.gif" alt="Three Claude sessions working in separate groups: the inbox shows one rewriting a page with two subagents, one finished, and one that needs permission, and Next jumps straight to it" width="900">
+</p>
+
+*Three sessions at once. Groups on the left show who is working and who needs you; the Agent inbox lists what each changed. One session asks for permission, and **Next** jumps straight to it.*
+
 ## Contents
 
 - [Choose your experience](#choose-your-experience): Classic or Multi-agent, and how to switch
