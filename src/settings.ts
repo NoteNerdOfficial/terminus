@@ -65,6 +65,8 @@ export interface ClassicSettings {
   autoRevealDelayMs: number;
 }
 
+export type SendBehavior = "steer" | "queue";
+
 export interface MultiAgentSettings {
   autoRevealInbox: boolean;
   autoRevealDelayMs: number;
@@ -73,6 +75,10 @@ export interface MultiAgentSettings {
   /** A terminal restored after a restart picks its Claude session back up
    *  (`claude --resume`). See TerminalView's claudeSession. */
   resumeSessions: boolean;
+  /** What Cmd/Ctrl+Enter does in an inbox card's "Tell this session…" box:
+   *  steer sends the text into the running turn now, queue holds it until
+   *  the turn ends. Cmd/Ctrl+Shift+Enter does the other. */
+  sendBehavior: SendBehavior;
   showEstimatedCost: boolean;
   showGitBranch: boolean;
   /** Asks GitHub for the latest release (the sidebar's update link). Off by
@@ -122,6 +128,7 @@ export const DEFAULT_MULTI_AGENT_SETTINGS: MultiAgentSettings = {
   autoRevealDelayMs: 800,
   trackSubagents: true,
   resumeSessions: true,
+  sendBehavior: "steer",
   showEstimatedCost: true,
   showGitBranch: true,
   checkForUpdates: false,
@@ -308,6 +315,22 @@ export class TerminusSettingTab extends PluginSettingTab {
           multiAgent.resumeSessions = value;
           await this.plugin.saveSettings();
         })
+      );
+
+    new Setting(containerEl)
+      .setName("Default for messages to a running session")
+      .setDesc(
+        "What Cmd/Ctrl+Enter does in an inbox card's message box. Steer sends it into the turn Claude is working on; Queue holds it until the turn ends, then sends queued messages one turn at a time. Cmd/Ctrl+Shift+Enter does the other."
+      )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("steer", "Steer")
+          .addOption("queue", "Queue")
+          .setValue(multiAgent.sendBehavior)
+          .onChange(async (value) => {
+            multiAgent.sendBehavior = value === "queue" ? "queue" : "steer";
+            await this.plugin.saveSettings();
+          })
       );
 
     new Setting(containerEl)

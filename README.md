@@ -25,6 +25,14 @@ Running several Claude sessions at once? The **Multi-agent experience** adds an 
 
 *Groups on the left, and the Agent inbox on the right following the selected group. The working session's changes hang under the lead and each subagent that made them.*
 
+| Steer a running session, or queue messages for when its turn ends |
+| --- |
+| ![The Agent inbox with three queued messages that can be dragged, edited, steered or removed](screenshots/multi-agent-queue-steer.png) |
+
+| Reorder, edit and steer queued messages |
+| --- |
+| <img src="screenshots/multi-agent-queue-steer.gif" alt="Dragging a queued message to reorder it, editing one in place, and steering one into the running turn" width="360"> |
+
 | Fork a session into a new terminal |
 | --- |
 | ![A Claude session forked into a second terminal in the same group](screenshots/multi-agent-fork-session.png) |
@@ -113,7 +121,8 @@ Switch the **Experience** setting from Classic to Multi-agent (Settings → Term
 - **A card per Claude session**, sorted into Needs attention, Working and Finished, with what it is doing (or its closing message), how long its turn took, its git branch, and tokens, context use and an estimated cost from its transcript.
 - **It follows the sidebar.** The inbox shows the selected group; sessions in other groups are listed in one line each under Elsewhere, and a line says how many of them need you. **Show all** lists everything.
 - **Changes sit under whoever made them.** A session's pending changes are listed under the lead or the subagent that made them, with the subagent's task as its name and live timers. A long list over several folders groups under foldable folders.
-- **Tell a running session something.** Each card has a box: *Add to input* types your message into the session's input line for you to send, *Send now* types it and presses Enter. It works mid-turn (Claude queues what is entered then), and is refused only while Claude waits on a prompt. Drafts survive re-renders.
+- **Tell a running session something.** Each card has a box with three ways to deliver a message: *Steer* types it into the session's input line and presses Enter, and Claude folds it into the turn it is working on; *Queue* holds it until the turn ends; *Add to input* types it for you to review and send. Steering works mid-turn and is refused only while Claude waits on a prompt. Cmd/Ctrl+Enter does your default (Settings → Terminus → Default for messages to a running session) and Cmd/Ctrl+Shift+Enter does the other. Drafts survive re-renders.
+- **A queue you can manage.** Queued messages are listed above the box in the order they will go. Drag to reorder, edit in place, remove, or promote one with *Steer* to send it now. When a turn ends, the next queued message is sent, one per turn, unless Claude is waiting on a prompt or the last turn failed (the card says why). The queue is saved with the terminal, so it survives a restart, and comes back paused with a *Resume* button.
 - **Send a task to a new terminal.** Opens a new Claude session beside the sender with your prompt typed in, unsent. Its result shows on the sender's card, and one click types it back into the sender's input line.
 - **Fork a session.** Starts a new terminal in the same group continuing from this session's conversation (`claude --resume <id> --fork-session`), named "(fork)".
 - **Review feedback.** Comment on a hunk in Split Diff, queue comments per session, and type them into that session's input line between turns.

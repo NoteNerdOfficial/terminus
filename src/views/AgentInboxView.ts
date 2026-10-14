@@ -27,6 +27,8 @@ export class AgentInboxView extends ItemView {
   private focusedToken: string | null = null;
   /** A render was asked for while a guidance box had focus (see renderNow). */
   private renderSkipped = false;
+  /** The queued message being edited in place, if any. */
+  private editingQueueId: number | null = null;
   /** Set in onOpen: holds renders while a mouse button is down here. */
   private guardedRender: () => void = () => this.renderNow();
 
@@ -60,6 +62,7 @@ export class AgentInboxView extends ItemView {
     this.plugin.pendingChangesStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.feedbackStore.on("change", this.render);
+    this.plugin.steerQueue.on("change", this.render);
     // The selected group scopes what's shown; its change event also covers
     // groups being renamed, recoloured or closed.
     this.plugin.groupStore.on("change", this.render);
@@ -106,6 +109,7 @@ export class AgentInboxView extends ItemView {
     this.plugin.pendingChangesStore.off("change", this.render);
     this.plugin.agentSessionStore.off("change", this.render);
     this.plugin.feedbackStore.off("change", this.render);
+    this.plugin.steerQueue.off("change", this.render);
     this.plugin.groupStore.off("change", this.render);
     this.plugin.delegationStore.off("change", this.render);
     // The user closing the inbox is a choice an auto-reveal must respect;
@@ -555,63 +559,202 @@ export class AgentInboxView extends ItemView {
   }
 
   /**
-   * "Tell this session…": a box on a running session's card, to steer it.
-   * "Add to input" types the text into the session's input line for the
-   * user to send; "Send now" types it and presses Enter. Claude queues text
-   * entered mid-turn and folds it into the running turn, so this works while
-   * it works. Cmd/Ctrl+Enter is Send now. The draft is kept in the plugin's
-   * inbox state, so folding the card or re-rendering doesn't lose it.
+   * "Tell this session…": a box on a running session's card, with the
+   * session's queued messages above it. Three ways to deliver:
+   * - "Add to input" types the text into the session's input line for the
+   *   user to send.
+   * - "Steer" types it and presses Enter. Claude queues text entered mid-turn
+   *   and folds it into the running turn, so this works while it works.
+   * - "Queue" holds it here until the turn ends (see queueGuidance).
+   * Cmd/Ctrl+Enter does the default one (settings), Cmd/Ctrl+Shift+Enter the
+   * other. The draft is kept in the plugin's inbox state, so folding the card
+   * or re-rendering doesn't lose it.
    */
   private renderSteer(el: HTMLElement, card: InboxCard, name: string): void {
     const token = card.token;
     if (card.ended || !this.plugin.agentSessionStore.get(token)?.running || !this.plugin.findTerminalView(token)) return;
     const readiness = this.plugin.steerReadiness(token);
+    const defaultBehavior = this.plugin.settings.multiAgent.sendBehavior;
     const section = el.createDiv({ cls: "terminus-inbox-steer" });
+    this.renderQueue(section, token);
+
+    const mod = Platform.isMacOS ? "⌘" : "Ctrl";
     const input = section.createEl("textarea", {
       cls: "terminus-inbox-steer-input",
-      attr: { rows: "2", placeholder: `Tell ${name}…  (${Platform.isMacOS ? "⌘" : "Ctrl"}↵ sends now)` },
+      attr: { rows: "2", placeholder: `Tell ${name}…  (${mod}↵ ${defaultBehavior}s · ${mod}⇧↵ ${defaultBehavior === "steer" ? "queues" : "steers"})` },
     });
     input.value = this.ui.drafts.get(token) ?? "";
     input.addEventListener("input", () => {
       if (input.value) this.ui.drafts.set(token, input.value);
       else this.ui.drafts.delete(token);
     });
-    input.addEventListener("blur", () => {
-      if (!this.renderSkipped) return;
-      this.renderSkipped = false;
-      this.render();
-    });
+    input.addEventListener("blur", () => this.renderIfSkipped());
 
     const actions = section.createDiv({ cls: "terminus-inbox-steer-actions" });
     const add = actions.createEl("button", { cls: "terminus-btn-ghost", text: "Add to input" });
     setTooltip(add, "Types it into the session's input line and takes you to the terminal; you press Enter");
-    const send = actions.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Send now" });
-    setTooltip(send, "Types it into the session's input line and presses Enter");
+    const buttons = {
+      queue: actions.createEl("button", { text: "Queue" }),
+      steer: actions.createEl("button", { text: "Steer" }),
+    };
+    setTooltip(buttons.queue, "Holds it until this turn ends, then sends it (one queued message per turn)");
+    setTooltip(buttons.steer, "Types it into the session's input line and presses Enter: Claude folds it into the turn it's working on");
+    for (const behavior of ["queue", "steer"] as const) {
+      buttons[behavior].addClass(behavior === defaultBehavior ? "terminus-btn-ghost-accent" : "terminus-btn-ghost");
+    }
     if (!readiness.ready) {
       add.disabled = true;
-      send.disabled = true;
+      buttons.steer.disabled = true;
       actions.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
     }
-    const deliver = async (submit: boolean) => {
+    const deliver = async (mode: "add" | "steer" | "queue") => {
       const text = input.value.trim();
       if (!text) {
         input.focus();
         return;
       }
-      if (!(await this.plugin.sendGuidance(token, text, submit))) return;
+      const sent = mode === "queue" ? this.plugin.queueGuidance(token, text) : await this.plugin.sendGuidance(token, text, mode === "steer");
+      if (!sent) return;
       this.ui.drafts.delete(token);
       input.value = "";
       input.blur();
       this.render();
     };
-    add.addEventListener("click", () => void deliver(false));
-    send.addEventListener("click", () => void deliver(true));
+    add.addEventListener("click", () => void deliver("add"));
+    buttons.queue.addEventListener("click", () => void deliver("queue"));
+    buttons.steer.addEventListener("click", () => void deliver("steer"));
     input.addEventListener("keydown", (evt) => {
-      if (evt.key === "Enter" && (evt.metaKey || evt.ctrlKey)) {
+      if (evt.key !== "Enter" || !(evt.metaKey || evt.ctrlKey)) return;
+      evt.preventDefault();
+      const opposite = defaultBehavior === "steer" ? "queue" : "steer";
+      const mode = evt.shiftKey ? opposite : defaultBehavior;
+      if (mode === "steer" && !readiness.ready) return;
+      void deliver(mode);
+    });
+  }
+
+  /** A render that was skipped while a box had focus runs once it's left. */
+  private renderIfSkipped(): void {
+    if (!this.renderSkipped) return;
+    this.renderSkipped = false;
+    this.render();
+  }
+
+  /**
+   * A session's queued messages, in the order they'll be sent: drag to
+   * reorder, edit in place, Steer to send one into the running turn now, or
+   * remove. They go out one per turn end unless something holds the queue
+   * (a prompt open, a failed turn, a restart), which the header says.
+   */
+  private renderQueue(el: HTMLElement, token: string): void {
+    const items = this.plugin.steerQueue.listFor(token);
+    if (items.length === 0) return;
+    const queue = el.createDiv({ cls: "terminus-inbox-queue" });
+    const head = queue.createDiv({ cls: "terminus-inbox-queue-head" });
+    iconLabel(head, "list-ordered", `Queued ${items.length}`, "terminus-inbox-queue-title");
+    const hold = this.plugin.queueHoldReason(token);
+    if (hold) head.createSpan({ cls: "terminus-inbox-foot-note", text: hold });
+    head.createDiv({ cls: "terminus-inbox-spacer" });
+    if (this.plugin.steerQueue.isPaused(token)) {
+      const resume = head.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Resume" });
+      setTooltip(resume, "Send the queue from here: the next message goes out when the session is between turns");
+      resume.addEventListener("click", () => this.plugin.steerQueue.resume(token));
+    }
+    const clear = head.createEl("button", { cls: "terminus-btn-ghost", text: "Clear" });
+    setTooltip(clear, "Remove every queued message for this session");
+    clear.addEventListener("click", () => this.plugin.steerQueue.clear(token));
+
+    const steerReady = this.plugin.steerReadiness(token).ready;
+    let dragId: number | null = null;
+    const clearDropMarks = () => queue.querySelectorAll(".is-drop-before, .is-drop-after").forEach((row) => row.removeClasses(["is-drop-before", "is-drop-after"]));
+    items.forEach((item, index) => {
+      const row = queue.createDiv({ cls: "terminus-inbox-queue-item", attr: { draggable: "true" } });
+      const grip = row.createSpan({ cls: "terminus-inbox-queue-grip" });
+      setIcon(grip, "grip-vertical");
+      setTooltip(grip, "Drag to reorder");
+      if (this.editingQueueId === item.id) {
+        this.renderQueueEditor(row, token, item.id, item.text);
+        row.draggable = false;
+        return;
+      }
+      row.createSpan({ cls: "terminus-inbox-queue-text", text: item.text, attr: { title: item.text } });
+      iconButton(row, "pencil", "Edit this message", () => {
+        this.editingQueueId = item.id;
+        this.render();
+      });
+      const steer = row.createEl("button", { cls: "terminus-btn-ghost terminus-inbox-queue-steer" });
+      setIcon(steer.createSpan({ cls: "terminus-meta-icon" }), "corner-up-right");
+      steer.createSpan({ text: "Steer" });
+      if (steerReady) {
+        setTooltip(steer, "Send this into the running turn now, ahead of the rest of the queue");
+        steer.addEventListener("click", () => void this.plugin.steerQueued(token, item.id));
+      } else {
+        steer.disabled = true;
+      }
+      iconButton(row, "x", "Remove this message", () => this.plugin.steerQueue.remove(token, item.id));
+
+      row.addEventListener("dragstart", (evt) => {
+        dragId = item.id;
+        evt.dataTransfer?.setData("text/plain", item.text);
+        if (evt.dataTransfer) evt.dataTransfer.effectAllowed = "move";
+        row.addClass("is-dragging");
+      });
+      row.addEventListener("dragend", () => {
+        dragId = null;
+        row.removeClass("is-dragging");
+        clearDropMarks();
+      });
+      row.addEventListener("dragover", (evt) => {
+        if (dragId === null || dragId === item.id) return;
         evt.preventDefault();
-        if (readiness.ready) void deliver(true);
+        const rect = row.getBoundingClientRect();
+        const after = evt.clientY > rect.top + rect.height / 2;
+        clearDropMarks();
+        row.addClass(after ? "is-drop-after" : "is-drop-before");
+      });
+      row.addEventListener("drop", (evt) => {
+        if (dragId === null) return;
+        evt.preventDefault();
+        const rect = row.getBoundingClientRect();
+        const after = evt.clientY > rect.top + rect.height / 2;
+        const before = after ? (items[index + 1]?.id ?? null) : item.id;
+        const moving = dragId;
+        dragId = null;
+        clearDropMarks();
+        this.plugin.steerQueue.move(token, moving, before);
+      });
+    });
+  }
+
+  /** The in-place editor for one queued message: Enter saves, Escape
+   *  cancels, leaving the box saves. Emptying it removes the message. */
+  private renderQueueEditor(row: HTMLElement, token: string, id: number, text: string): void {
+    const box = row.createEl("textarea", { cls: "terminus-inbox-steer-input terminus-inbox-queue-editor", attr: { rows: "2" } });
+    box.value = text;
+    let done = false;
+    const finish = (save: boolean) => {
+      if (done) return;
+      done = true;
+      this.editingQueueId = null;
+      if (save) this.plugin.steerQueue.edit(token, id, box.value);
+      // A focused box holds a render back, and an unchanged save emits none.
+      box.blur();
+      this.render();
+    };
+    box.addEventListener("keydown", (evt) => {
+      if (evt.key === "Escape") {
+        evt.preventDefault();
+        finish(false);
+      } else if (evt.key === "Enter" && !evt.shiftKey && !evt.isComposing) {
+        evt.preventDefault();
+        finish(true);
       }
     });
+    box.addEventListener("blur", () => finish(true));
+    window.setTimeout(() => {
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    }, 0);
   }
 
   /**

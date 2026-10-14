@@ -907,6 +907,7 @@ export class TerminalView extends ItemView {
       autoName: this.autoName ?? undefined,
       autoNameSource: this.autoNameSource ?? undefined,
       claudeSession: this.plugin.experience === "multi-agent" ? (this.claudeSession ?? undefined) : undefined,
+      steerQueue: this.plugin.experience === "multi-agent" && this.plugin.steerQueue.listFor(this.token).length > 0 ? this.plugin.steerQueue.texts(this.token) : undefined,
     };
   }
 
@@ -978,6 +979,7 @@ export class TerminalView extends ItemView {
       autoNameSource?: unknown;
       launch?: { command?: unknown; prompt?: unknown };
       claudeSession?: { id?: unknown; cwd?: unknown };
+      steerQueue?: unknown;
     } | null;
     const launch = typedState?.launch;
     if (launch && typeof launch.command === "string" && launch.command) {
@@ -1017,6 +1019,12 @@ export class TerminalView extends ItemView {
     if (!this.startupDecided && !this.launch && isSessionId(saved?.id) && typeof saved?.cwd === "string" && saved.cwd) {
       this.claudeSession = { id: saved.id, cwd: saved.cwd };
       this.resumeOnStart = this.plugin.experience === "multi-agent" && this.plugin.settings.multiAgent.resumeSessions;
+    }
+    // Messages queued for this session when Obsidian last saved; restored
+    // paused (see SteerQueueStore).
+    const savedQueue = typedState?.steerQueue;
+    if (Array.isArray(savedQueue) && this.plugin.steerQueue.listFor(this.token).length === 0) {
+      this.plugin.steerQueue.restore(this.token, savedQueue.filter((text): text is string => typeof text === "string"));
     }
     // A group that no longer exists leaves the terminal ungrouped.
     if (typeof typedState?.groupId === "string" && this.plugin.groupStore.get(typedState.groupId)) {

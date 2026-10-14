@@ -17992,7 +17992,8 @@ var TerminalView = class extends import_obsidian10.ItemView {
       groupId: (_f = this.groupIdValue) != null ? _f : void 0,
       autoName: (_g = this.autoName) != null ? _g : void 0,
       autoNameSource: (_h = this.autoNameSource) != null ? _h : void 0,
-      claudeSession: this.plugin.experience === "multi-agent" ? (_i3 = this.claudeSession) != null ? _i3 : void 0 : void 0
+      claudeSession: this.plugin.experience === "multi-agent" ? (_i3 = this.claudeSession) != null ? _i3 : void 0 : void 0,
+      steerQueue: this.plugin.experience === "multi-agent" && this.plugin.steerQueue.listFor(this.token).length > 0 ? this.plugin.steerQueue.texts(this.token) : void 0
     };
   }
   /** Saves (or, with null, forgets) the session to resume after a restart,
@@ -18083,6 +18084,10 @@ var TerminalView = class extends import_obsidian10.ItemView {
     if (!this.startupDecided && !this.launch && isSessionId(saved == null ? void 0 : saved.id) && typeof (saved == null ? void 0 : saved.cwd) === "string" && saved.cwd) {
       this.claudeSession = { id: saved.id, cwd: saved.cwd };
       this.resumeOnStart = this.plugin.experience === "multi-agent" && this.plugin.settings.multiAgent.resumeSessions;
+    }
+    const savedQueue = typedState == null ? void 0 : typedState.steerQueue;
+    if (Array.isArray(savedQueue) && this.plugin.steerQueue.listFor(this.token).length === 0) {
+      this.plugin.steerQueue.restore(this.token, savedQueue.filter((text) => typeof text === "string"));
     }
     if (typeof (typedState == null ? void 0 : typedState.groupId) === "string" && this.plugin.groupStore.get(typedState.groupId)) {
       this.groupIdValue = typedState.groupId;
@@ -20503,6 +20508,8 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.focusedToken = null;
     /** A render was asked for while a guidance box had focus (see renderNow). */
     this.renderSkipped = false;
+    /** The queued message being edited in place, if any. */
+    this.editingQueueId = null;
     /** Set in onOpen: holds renders while a mouse button is down here. */
     this.guardedRender = () => this.renderNow();
     /** Every re-render goes through here: the stores change often while
@@ -20532,6 +20539,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.plugin.pendingChangesStore.on("change", this.render);
     this.plugin.agentSessionStore.on("change", this.render);
     this.plugin.feedbackStore.on("change", this.render);
+    this.plugin.steerQueue.on("change", this.render);
     this.plugin.groupStore.on("change", this.render);
     this.plugin.delegationStore.on("change", this.render);
     const front = (_a8 = this.app.workspace.getMostRecentLeaf()) == null ? void 0 : _a8.view;
@@ -20574,6 +20582,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.plugin.pendingChangesStore.off("change", this.render);
     this.plugin.agentSessionStore.off("change", this.render);
     this.plugin.feedbackStore.off("change", this.render);
+    this.plugin.steerQueue.off("change", this.render);
     this.plugin.groupStore.off("change", this.render);
     this.plugin.delegationStore.off("change", this.render);
     if (!this.plugin.isUnloading)
@@ -20994,12 +21003,16 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
   }
   /**
-   * "Tell this session…": a box on a running session's card, to steer it.
-   * "Add to input" types the text into the session's input line for the
-   * user to send; "Send now" types it and presses Enter. Claude queues text
-   * entered mid-turn and folds it into the running turn, so this works while
-   * it works. Cmd/Ctrl+Enter is Send now. The draft is kept in the plugin's
-   * inbox state, so folding the card or re-rendering doesn't lose it.
+   * "Tell this session…": a box on a running session's card, with the
+   * session's queued messages above it. Three ways to deliver:
+   * - "Add to input" types the text into the session's input line for the
+   *   user to send.
+   * - "Steer" types it and presses Enter. Claude queues text entered mid-turn
+   *   and folds it into the running turn, so this works while it works.
+   * - "Queue" holds it here until the turn ends (see queueGuidance).
+   * Cmd/Ctrl+Enter does the default one (settings), Cmd/Ctrl+Shift+Enter the
+   * other. The draft is kept in the plugin's inbox state, so folding the card
+   * or re-rendering doesn't lose it.
    */
   renderSteer(el2, card, name) {
     var _a8, _b;
@@ -21007,10 +21020,13 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     if (card.ended || !((_a8 = this.plugin.agentSessionStore.get(token)) == null ? void 0 : _a8.running) || !this.plugin.findTerminalView(token))
       return;
     const readiness = this.plugin.steerReadiness(token);
+    const defaultBehavior = this.plugin.settings.multiAgent.sendBehavior;
     const section = el2.createDiv({ cls: "terminus-inbox-steer" });
+    this.renderQueue(section, token);
+    const mod = import_obsidian19.Platform.isMacOS ? "\u2318" : "Ctrl";
     const input = section.createEl("textarea", {
       cls: "terminus-inbox-steer-input",
-      attr: { rows: "2", placeholder: `Tell ${name}\u2026  (${import_obsidian19.Platform.isMacOS ? "\u2318" : "Ctrl"}\u21B5 sends now)` }
+      attr: { rows: "2", placeholder: `Tell ${name}\u2026  (${mod}\u21B5 ${defaultBehavior}s \xB7 ${mod}\u21E7\u21B5 ${defaultBehavior === "steer" ? "queues" : "steers"})` }
     });
     input.value = (_b = this.ui.drafts.get(token)) != null ? _b : "";
     input.addEventListener("input", () => {
@@ -21019,44 +21035,179 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       else
         this.ui.drafts.delete(token);
     });
-    input.addEventListener("blur", () => {
-      if (!this.renderSkipped)
-        return;
-      this.renderSkipped = false;
-      this.render();
-    });
+    input.addEventListener("blur", () => this.renderIfSkipped());
     const actions = section.createDiv({ cls: "terminus-inbox-steer-actions" });
     const add = actions.createEl("button", { cls: "terminus-btn-ghost", text: "Add to input" });
     (0, import_obsidian19.setTooltip)(add, "Types it into the session's input line and takes you to the terminal; you press Enter");
-    const send = actions.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Send now" });
-    (0, import_obsidian19.setTooltip)(send, "Types it into the session's input line and presses Enter");
+    const buttons = {
+      queue: actions.createEl("button", { text: "Queue" }),
+      steer: actions.createEl("button", { text: "Steer" })
+    };
+    (0, import_obsidian19.setTooltip)(buttons.queue, "Holds it until this turn ends, then sends it (one queued message per turn)");
+    (0, import_obsidian19.setTooltip)(buttons.steer, "Types it into the session's input line and presses Enter: Claude folds it into the turn it's working on");
+    for (const behavior of ["queue", "steer"]) {
+      buttons[behavior].addClass(behavior === defaultBehavior ? "terminus-btn-ghost-accent" : "terminus-btn-ghost");
+    }
     if (!readiness.ready) {
       add.disabled = true;
-      send.disabled = true;
+      buttons.steer.disabled = true;
       actions.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
     }
-    const deliver = async (submit) => {
+    const deliver = async (mode) => {
       const text = input.value.trim();
       if (!text) {
         input.focus();
         return;
       }
-      if (!await this.plugin.sendGuidance(token, text, submit))
+      const sent = mode === "queue" ? this.plugin.queueGuidance(token, text) : await this.plugin.sendGuidance(token, text, mode === "steer");
+      if (!sent)
         return;
       this.ui.drafts.delete(token);
       input.value = "";
       input.blur();
       this.render();
     };
-    add.addEventListener("click", () => void deliver(false));
-    send.addEventListener("click", () => void deliver(true));
+    add.addEventListener("click", () => void deliver("add"));
+    buttons.queue.addEventListener("click", () => void deliver("queue"));
+    buttons.steer.addEventListener("click", () => void deliver("steer"));
     input.addEventListener("keydown", (evt) => {
-      if (evt.key === "Enter" && (evt.metaKey || evt.ctrlKey)) {
+      if (evt.key !== "Enter" || !(evt.metaKey || evt.ctrlKey))
+        return;
+      evt.preventDefault();
+      const opposite = defaultBehavior === "steer" ? "queue" : "steer";
+      const mode = evt.shiftKey ? opposite : defaultBehavior;
+      if (mode === "steer" && !readiness.ready)
+        return;
+      void deliver(mode);
+    });
+  }
+  /** A render that was skipped while a box had focus runs once it's left. */
+  renderIfSkipped() {
+    if (!this.renderSkipped)
+      return;
+    this.renderSkipped = false;
+    this.render();
+  }
+  /**
+   * A session's queued messages, in the order they'll be sent: drag to
+   * reorder, edit in place, Steer to send one into the running turn now, or
+   * remove. They go out one per turn end unless something holds the queue
+   * (a prompt open, a failed turn, a restart), which the header says.
+   */
+  renderQueue(el2, token) {
+    const items = this.plugin.steerQueue.listFor(token);
+    if (items.length === 0)
+      return;
+    const queue = el2.createDiv({ cls: "terminus-inbox-queue" });
+    const head = queue.createDiv({ cls: "terminus-inbox-queue-head" });
+    iconLabel(head, "list-ordered", `Queued ${items.length}`, "terminus-inbox-queue-title");
+    const hold = this.plugin.queueHoldReason(token);
+    if (hold)
+      head.createSpan({ cls: "terminus-inbox-foot-note", text: hold });
+    head.createDiv({ cls: "terminus-inbox-spacer" });
+    if (this.plugin.steerQueue.isPaused(token)) {
+      const resume = head.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Resume" });
+      (0, import_obsidian19.setTooltip)(resume, "Send the queue from here: the next message goes out when the session is between turns");
+      resume.addEventListener("click", () => this.plugin.steerQueue.resume(token));
+    }
+    const clear = head.createEl("button", { cls: "terminus-btn-ghost", text: "Clear" });
+    (0, import_obsidian19.setTooltip)(clear, "Remove every queued message for this session");
+    clear.addEventListener("click", () => this.plugin.steerQueue.clear(token));
+    const steerReady = this.plugin.steerReadiness(token).ready;
+    let dragId = null;
+    const clearDropMarks = () => queue.querySelectorAll(".is-drop-before, .is-drop-after").forEach((row) => row.removeClasses(["is-drop-before", "is-drop-after"]));
+    items.forEach((item, index) => {
+      const row = queue.createDiv({ cls: "terminus-inbox-queue-item", attr: { draggable: "true" } });
+      const grip = row.createSpan({ cls: "terminus-inbox-queue-grip" });
+      (0, import_obsidian19.setIcon)(grip, "grip-vertical");
+      (0, import_obsidian19.setTooltip)(grip, "Drag to reorder");
+      if (this.editingQueueId === item.id) {
+        this.renderQueueEditor(row, token, item.id, item.text);
+        row.draggable = false;
+        return;
+      }
+      row.createSpan({ cls: "terminus-inbox-queue-text", text: item.text, attr: { title: item.text } });
+      iconButton(row, "pencil", "Edit this message", () => {
+        this.editingQueueId = item.id;
+        this.render();
+      });
+      const steer = row.createEl("button", { cls: "terminus-btn-ghost terminus-inbox-queue-steer" });
+      (0, import_obsidian19.setIcon)(steer.createSpan({ cls: "terminus-meta-icon" }), "corner-up-right");
+      steer.createSpan({ text: "Steer" });
+      if (steerReady) {
+        (0, import_obsidian19.setTooltip)(steer, "Send this into the running turn now, ahead of the rest of the queue");
+        steer.addEventListener("click", () => void this.plugin.steerQueued(token, item.id));
+      } else {
+        steer.disabled = true;
+      }
+      iconButton(row, "x", "Remove this message", () => this.plugin.steerQueue.remove(token, item.id));
+      row.addEventListener("dragstart", (evt) => {
+        var _a8;
+        dragId = item.id;
+        (_a8 = evt.dataTransfer) == null ? void 0 : _a8.setData("text/plain", item.text);
+        if (evt.dataTransfer)
+          evt.dataTransfer.effectAllowed = "move";
+        row.addClass("is-dragging");
+      });
+      row.addEventListener("dragend", () => {
+        dragId = null;
+        row.removeClass("is-dragging");
+        clearDropMarks();
+      });
+      row.addEventListener("dragover", (evt) => {
+        if (dragId === null || dragId === item.id)
+          return;
         evt.preventDefault();
-        if (readiness.ready)
-          void deliver(true);
+        const rect = row.getBoundingClientRect();
+        const after = evt.clientY > rect.top + rect.height / 2;
+        clearDropMarks();
+        row.addClass(after ? "is-drop-after" : "is-drop-before");
+      });
+      row.addEventListener("drop", (evt) => {
+        var _a8, _b;
+        if (dragId === null)
+          return;
+        evt.preventDefault();
+        const rect = row.getBoundingClientRect();
+        const after = evt.clientY > rect.top + rect.height / 2;
+        const before = after ? (_b = (_a8 = items[index + 1]) == null ? void 0 : _a8.id) != null ? _b : null : item.id;
+        const moving = dragId;
+        dragId = null;
+        clearDropMarks();
+        this.plugin.steerQueue.move(token, moving, before);
+      });
+    });
+  }
+  /** The in-place editor for one queued message: Enter saves, Escape
+   *  cancels, leaving the box saves. Emptying it removes the message. */
+  renderQueueEditor(row, token, id, text) {
+    const box = row.createEl("textarea", { cls: "terminus-inbox-steer-input terminus-inbox-queue-editor", attr: { rows: "2" } });
+    box.value = text;
+    let done = false;
+    const finish2 = (save) => {
+      if (done)
+        return;
+      done = true;
+      this.editingQueueId = null;
+      if (save)
+        this.plugin.steerQueue.edit(token, id, box.value);
+      box.blur();
+      this.render();
+    };
+    box.addEventListener("keydown", (evt) => {
+      if (evt.key === "Escape") {
+        evt.preventDefault();
+        finish2(false);
+      } else if (evt.key === "Enter" && !evt.shiftKey && !evt.isComposing) {
+        evt.preventDefault();
+        finish2(true);
       }
     });
+    box.addEventListener("blur", () => finish2(true));
+    window.setTimeout(() => {
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    }, 0);
   }
   /**
    * Tasks sent from this session to new terminals ("Send to a new
@@ -23739,6 +23890,120 @@ var FeedbackStore = class extends TypedEmitter {
   }
 };
 
+// src/state/SteerQueueStore.ts
+var SteerQueueStore = class extends TypedEmitter {
+  constructor() {
+    super(...arguments);
+    this.queues = /* @__PURE__ */ new Map();
+    this.paused = /* @__PURE__ */ new Set();
+    this.nextId = 1;
+  }
+  listFor(token) {
+    var _a8;
+    return (_a8 = this.queues.get(token)) != null ? _a8 : [];
+  }
+  /** Every session with something queued. */
+  tokens() {
+    return [...this.queues.keys()];
+  }
+  isPaused(token) {
+    return this.paused.has(token);
+  }
+  add(token, text) {
+    const trimmed = text.trim();
+    if (!trimmed)
+      return null;
+    const item = { id: this.nextId++, text: trimmed };
+    this.queues.set(token, [...this.listFor(token), item]);
+    this.emit("change");
+    return item;
+  }
+  edit(token, id, text) {
+    const trimmed = text.trim();
+    const items = this.listFor(token);
+    const at3 = items.findIndex((item) => item.id === id);
+    if (at3 === -1)
+      return;
+    if (!trimmed) {
+      this.remove(token, id);
+      return;
+    }
+    if (items[at3].text === trimmed)
+      return;
+    this.set(token, items.map((item) => item.id === id ? { ...item, text: trimmed } : item));
+  }
+  /** Moves an item to sit before `beforeId`, or to the end when null. */
+  move(token, id, beforeId) {
+    const items = this.listFor(token);
+    const moving = items.find((item) => item.id === id);
+    if (!moving || id === beforeId)
+      return;
+    const rest = items.filter((item) => item.id !== id);
+    const at3 = beforeId === null ? rest.length : rest.findIndex((item) => item.id === beforeId);
+    rest.splice(at3 === -1 ? rest.length : at3, 0, moving);
+    if (rest.every((item, i8) => item === items[i8]))
+      return;
+    this.set(token, rest);
+  }
+  remove(token, id) {
+    const items = this.listFor(token);
+    if (!items.some((item) => item.id === id))
+      return;
+    this.set(token, items.filter((item) => item.id !== id));
+  }
+  /** Takes the first item off, for sending. */
+  shift(token) {
+    const [first, ...rest] = this.listFor(token);
+    if (!first)
+      return void 0;
+    this.set(token, rest);
+    return first;
+  }
+  clear(token) {
+    if (!this.queues.has(token) && !this.paused.has(token))
+      return;
+    this.set(token, []);
+  }
+  pause(token) {
+    if (this.paused.has(token))
+      return;
+    this.paused.add(token);
+    this.emit("change");
+  }
+  resume(token) {
+    if (!this.paused.delete(token))
+      return;
+    this.emit("change");
+  }
+  /** What a terminal saves in its state. */
+  texts(token) {
+    return this.listFor(token).map((item) => item.text);
+  }
+  /** A restored terminal's saved queue, paused. Silent: nothing to save. */
+  restore(token, texts) {
+    const items = texts.filter((text) => text.trim()).map((text) => ({ id: this.nextId++, text }));
+    if (items.length === 0)
+      return;
+    this.queues.set(token, items);
+    this.paused.add(token);
+    this.emit("change");
+  }
+  /** The terminal closed. */
+  forget(token) {
+    this.queues.delete(token);
+    this.paused.delete(token);
+  }
+  set(token, items) {
+    if (items.length === 0) {
+      this.queues.delete(token);
+      this.paused.delete(token);
+    } else {
+      this.queues.set(token, items);
+    }
+    this.emit("change");
+  }
+};
+
 // src/state/InboxUiState.ts
 var InboxUiState = class {
   constructor() {
@@ -24059,6 +24324,7 @@ var DEFAULT_MULTI_AGENT_SETTINGS = {
   autoRevealDelayMs: 800,
   trackSubagents: true,
   resumeSessions: true,
+  sendBehavior: "steer",
   showEstimatedCost: true,
   showGitBranch: true,
   checkForUpdates: false
@@ -24189,6 +24455,14 @@ var TerminusSettingTab = class extends import_obsidian26.PluginSettingTab {
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.resumeSessions).onChange(async (value) => {
         multiAgent.resumeSessions = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian26.Setting(containerEl).setName("Default for messages to a running session").setDesc(
+      "What Cmd/Ctrl+Enter does in an inbox card's message box. Steer sends it into the turn Claude is working on; Queue holds it until the turn ends, then sends queued messages one turn at a time. Cmd/Ctrl+Shift+Enter does the other."
+    ).addDropdown(
+      (dropdown) => dropdown.addOption("steer", "Steer").addOption("queue", "Queue").setValue(multiAgent.sendBehavior).onChange(async (value) => {
+        multiAgent.sendBehavior = value === "queue" ? "queue" : "steer";
         await this.plugin.saveSettings();
       })
     );
@@ -24629,6 +24903,11 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     this.agentSessionStore = new AgentSessionStore();
     /** Review comments queued per session (Multi-agent only). */
     this.feedbackStore = new FeedbackStore();
+    /** Messages queued per session, sent one per turn end (Multi-agent only). */
+    this.steerQueue = new SteerQueueStore();
+    /** Sessions whose queued message was just sent and hasn't started its turn
+     *  yet, so the next one waits for that turn to end. */
+    this.queueSendPending = /* @__PURE__ */ new Map();
     /** Tasks sent from a session to a new terminal (Multi-agent only). */
     this.delegationStore = new DelegationStore();
     /** Spaces out Claude sessions resumed after a restart (Multi-agent only). */
@@ -24670,6 +24949,16 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     await provisionResources(this.getPluginDir());
     this.actionLog = new ActionLog((0, import_terminus_node_bridge28.pathJoin)(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
+    this.steerQueue.on("change", () => {
+      this.app.workspace.requestSaveLayout();
+      for (const token of this.steerQueue.tokens())
+        this.drainSteerQueue(token);
+    });
+    this.agentSessionStore.on("change", (session) => {
+      if (session.status === "working")
+        this.clearQueueSendPending(session.token);
+      this.drainSteerQueue(session.token);
+    });
     this.pendingChangesStore.on("resolved", (item) => {
       const stats = computeDiffStats(item.diff);
       void this.actionLog.append({
@@ -24855,6 +25144,9 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
   onunload() {
     this.unloading = true;
     this.resumeQueue.dispose();
+    for (const timer of this.queueSendPending.values())
+      window.clearTimeout(timer);
+    this.queueSendPending.clear();
     if (this.revealPendingChangesTimer)
       window.clearTimeout(this.revealPendingChangesTimer);
     void this.reviewServer.stop();
@@ -25362,6 +25654,70 @@ ${result}`))
       new import_obsidian30.Notice(`Terminus: added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
     }
     return true;
+  }
+  /**
+   * "Queue": holds the text until the session's turn ends, then sends it,
+   * one message per turn. Between turns it goes at once. Allowed while
+   * Claude waits on a prompt (it's only held then), so only a running
+   * session with a terminal is required.
+   */
+  queueGuidance(token, text) {
+    const session = this.agentSessionStore.get(token);
+    if (!(session == null ? void 0 : session.running) || !this.findTerminalView(token))
+      return false;
+    if (!this.steerQueue.add(token, text))
+      return false;
+    this.steerQueue.resume(token);
+    return true;
+  }
+  /** "Steer" on a queued message: sends it into the running turn now. */
+  async steerQueued(token, id) {
+    const item = this.steerQueue.listFor(token).find((queued) => queued.id === id);
+    if (!item || !await this.sendGuidance(token, item.text, true))
+      return false;
+    this.steerQueue.remove(token, id);
+    return true;
+  }
+  /** Why a session's queue isn't sending on its own right now, or null. */
+  queueHoldReason(token) {
+    if (this.steerQueue.listFor(token).length === 0)
+      return null;
+    if (this.steerQueue.isPaused(token))
+      return "Paused after a restart";
+    const session = this.agentSessionStore.get(token);
+    if (!(session == null ? void 0 : session.running) || !this.findTerminalView(token))
+      return "Session ended";
+    if (session.status === "needs-attention" && session.needs !== "unread-turn")
+      return "Waiting for Claude's prompt";
+    if (session.lastTurnFailed)
+      return "Paused: the last turn failed";
+    return null;
+  }
+  clearQueueSendPending(token) {
+    const timer = this.queueSendPending.get(token);
+    if (timer === void 0)
+      return;
+    window.clearTimeout(timer);
+    this.queueSendPending.delete(token);
+  }
+  /** Sends a session's next queued message if it's between turns and
+   *  nothing holds the queue (see queueHoldReason). */
+  drainSteerQueue(token) {
+    const next = this.steerQueue.listFor(token)[0];
+    const session = this.agentSessionStore.get(token);
+    const terminal = this.findTerminalView(token);
+    if (!next || !session || !terminal || session.status === "working")
+      return;
+    if (this.queueSendPending.has(token) || this.queueHoldReason(token))
+      return;
+    if (!terminal.typeIntoInput(next.text))
+      return;
+    this.queueSendPending.set(
+      token,
+      window.setTimeout(() => this.queueSendPending.delete(token), 8e3)
+    );
+    this.steerQueue.shift(token);
+    window.setTimeout(() => terminal.submitInput(), 250);
   }
   /** Types a session's queued feedback into its terminal, unsubmitted, and
    *  clears the queue: the text is the user's to edit or send from here. */

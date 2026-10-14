@@ -20,6 +20,7 @@ import { ActionLog } from "./state/ActionLog";
 import { AgentSessionStore } from "./state/AgentSessionStore";
 import { TranscriptUsageReader, subagentTranscriptPath } from "./claude/transcriptUsage";
 import { FeedbackStore } from "./state/FeedbackStore";
+import { SteerQueueStore } from "./state/SteerQueueStore";
 import { InboxUiState } from "./state/InboxUiState";
 import { DelegationStore } from "./state/DelegationStore";
 import { DelegateModal } from "./modals/DelegateModal";
@@ -60,6 +61,11 @@ export default class TerminusPlugin extends Plugin {
   readonly agentSessionStore = new AgentSessionStore();
   /** Review comments queued per session (Multi-agent only). */
   readonly feedbackStore = new FeedbackStore();
+  /** Messages queued per session, sent one per turn end (Multi-agent only). */
+  readonly steerQueue = new SteerQueueStore();
+  /** Sessions whose queued message was just sent and hasn't started its turn
+   *  yet, so the next one waits for that turn to end. */
+  private readonly queueSendPending = new Map<string, number>();
   /** Tasks sent from a session to a new terminal (Multi-agent only). */
   readonly delegationStore = new DelegationStore();
   /** Spaces out Claude sessions resumed after a restart (Multi-agent only). */
@@ -115,6 +121,16 @@ export default class TerminusPlugin extends Plugin {
 
     this.actionLog = new ActionLog(pathJoin(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
+    // Each terminal saves its queue in its own state, so a change asks
+    // Obsidian to write the layout; a session's turn ending sends the next.
+    this.steerQueue.on("change", () => {
+      this.app.workspace.requestSaveLayout();
+      for (const token of this.steerQueue.tokens()) this.drainSteerQueue(token);
+    });
+    this.agentSessionStore.on("change", (session) => {
+      if (session.status === "working") this.clearQueueSendPending(session.token);
+      this.drainSteerQueue(session.token);
+    });
     this.pendingChangesStore.on("resolved", (item: ResolvedChange) => {
       const stats = computeDiffStats(item.diff);
       void this.actionLog.append({
@@ -318,6 +334,8 @@ export default class TerminusPlugin extends Plugin {
   onunload(): void {
     this.unloading = true;
     this.resumeQueue.dispose();
+    for (const timer of this.queueSendPending.values()) window.clearTimeout(timer);
+    this.queueSendPending.clear();
     if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
     void this.reviewServer.stop();
   }
@@ -831,6 +849,68 @@ export default class TerminusPlugin extends Plugin {
       new Notice(`Terminus: added to ${terminal.getDisplayText()} — press Enter to send it`);
     }
     return true;
+  }
+
+  /**
+   * "Queue": holds the text until the session's turn ends, then sends it,
+   * one message per turn. Between turns it goes at once. Allowed while
+   * Claude waits on a prompt (it's only held then), so only a running
+   * session with a terminal is required.
+   */
+  queueGuidance(token: string, text: string): boolean {
+    const session = this.agentSessionStore.get(token);
+    if (!session?.running || !this.findTerminalView(token)) return false;
+    if (!this.steerQueue.add(token, text)) return false;
+    // Queueing is the user's own call on this session: it un-pauses a queue
+    // restored after a restart.
+    this.steerQueue.resume(token);
+    return true;
+  }
+
+  /** "Steer" on a queued message: sends it into the running turn now. */
+  async steerQueued(token: string, id: number): Promise<boolean> {
+    const item = this.steerQueue.listFor(token).find((queued) => queued.id === id);
+    if (!item || !(await this.sendGuidance(token, item.text, true))) return false;
+    this.steerQueue.remove(token, id);
+    return true;
+  }
+
+  /** Why a session's queue isn't sending on its own right now, or null. */
+  queueHoldReason(token: string): string | null {
+    if (this.steerQueue.listFor(token).length === 0) return null;
+    if (this.steerQueue.isPaused(token)) return "Paused after a restart";
+    const session = this.agentSessionStore.get(token);
+    if (!session?.running || !this.findTerminalView(token)) return "Session ended";
+    if (session.status === "needs-attention" && session.needs !== "unread-turn") return "Waiting for Claude's prompt";
+    if (session.lastTurnFailed) return "Paused: the last turn failed";
+    return null;
+  }
+
+  private clearQueueSendPending(token: string): void {
+    const timer = this.queueSendPending.get(token);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    this.queueSendPending.delete(token);
+  }
+
+  /** Sends a session's next queued message if it's between turns and
+   *  nothing holds the queue (see queueHoldReason). */
+  private drainSteerQueue(token: string): void {
+    const next = this.steerQueue.listFor(token)[0];
+    const session = this.agentSessionStore.get(token);
+    const terminal = this.findTerminalView(token);
+    if (!next || !session || !terminal || session.status === "working") return;
+    if (this.queueSendPending.has(token) || this.queueHoldReason(token)) return;
+    if (!terminal.typeIntoInput(next.text)) return;
+    // The turn starts a moment after Enter; until it does, the session still
+    // reads as idle and must not send the next message on top of this one.
+    // Set before the shift below, which re-enters this method via "change".
+    this.queueSendPending.set(
+      token,
+      window.setTimeout(() => this.queueSendPending.delete(token), 8000)
+    );
+    this.steerQueue.shift(token);
+    window.setTimeout(() => terminal.submitInput(), 250);
   }
 
   /** Types a session's queued feedback into its terminal, unsubmitted, and

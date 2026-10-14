@@ -2018,6 +2018,98 @@
   text-align: right;
 }
 
+/* Messages queued for a session, above its "Tell this session…" box. */
+.terminus-inbox-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background-color: var(--background-primary);
+}
+
+.terminus-inbox-queue-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 2px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-inbox-queue-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: var(--font-semibold);
+}
+
+.terminus-inbox-queue-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 2px 2px 0;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-small);
+}
+
+.terminus-inbox-queue-item:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-inbox-queue-item.is-dragging {
+  opacity: 0.45;
+}
+
+.terminus-inbox-queue-item.is-drop-before::before,
+.terminus-inbox-queue-item.is-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: var(--interactive-accent);
+}
+
+.terminus-inbox-queue-item.is-drop-before::before {
+  top: -2px;
+}
+
+.terminus-inbox-queue-item.is-drop-after::after {
+  bottom: -2px;
+}
+
+.terminus-inbox-queue-grip {
+  display: flex;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  cursor: grab;
+}
+
+.terminus-inbox-queue-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-inbox-queue-steer {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.terminus-inbox-queue-editor {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* Tasks sent from a session to new terminals, on its card. */
 .terminus-inbox-delegations {
   display: flex;
