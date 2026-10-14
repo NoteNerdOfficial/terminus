@@ -12,6 +12,7 @@ import { AGENT_INBOX_VIEW_TYPE, AgentInboxView } from "./views/AgentInboxView";
 import { TERMINUS_SIDEBAR_VIEW_TYPE, TerminusSidebarView } from "./views/TerminusSidebarView";
 import { GroupStore } from "./state/GroupStore";
 import { GroupController } from "./groups/GroupController";
+import { ResumeQueue } from "./groups/ResumeQueue";
 import { TERMINAL_COLOR_PALETTE } from "./terminal/colorPalette";
 import { fetchLatestPluginVersion, PluginVersionStatus, versionStatus } from "./pluginVersion";
 import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore";
@@ -61,6 +62,8 @@ export default class TerminusPlugin extends Plugin {
   readonly feedbackStore = new FeedbackStore();
   /** Tasks sent from a session to a new terminal (Multi-agent only). */
   readonly delegationStore = new DelegationStore();
+  /** Spaces out Claude sessions resumed after a restart (Multi-agent only). */
+  readonly resumeQueue = new ResumeQueue();
   /** How the user has arranged the Agent inbox; outlives the view. */
   readonly inboxUi = new InboxUiState();
   /** Files of the current burst of edits, for the auto-reveal's threshold. */
@@ -314,6 +317,7 @@ export default class TerminusPlugin extends Plugin {
 
   onunload(): void {
     this.unloading = true;
+    this.resumeQueue.dispose();
     if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
     void this.reviewServer.stop();
   }

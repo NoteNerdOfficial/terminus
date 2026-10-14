@@ -9,6 +9,16 @@
  */
 const SESSION_ID = /^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/;
 
+export function isSessionId(value: unknown): value is string {
+  return typeof value === "string" && SESSION_ID.test(value);
+}
+
 export function forkCommand(sessionId: string | null): string | null {
-  return sessionId && SESSION_ID.test(sessionId) ? `claude --resume ${sessionId} --fork-session` : null;
+  return isSessionId(sessionId) ? `claude --resume ${sessionId} --fork-session` : null;
+}
+
+/** Picking a session back up in a restored terminal (see TerminalView's
+ *  claudeSession): the same session, not a fork of it. */
+export function resumeCommand(sessionId: string | null): string | null {
+  return isSessionId(sessionId) ? `claude --resume ${sessionId}` : null;
 }

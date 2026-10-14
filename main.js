@@ -17055,8 +17055,14 @@ var GroupSuggestModal = class extends import_obsidian8.SuggestModal {
 
 // src/groups/forkSession.ts
 var SESSION_ID = /^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$/;
+function isSessionId(value) {
+  return typeof value === "string" && SESSION_ID.test(value);
+}
 function forkCommand(sessionId) {
-  return sessionId && SESSION_ID.test(sessionId) ? `claude --resume ${sessionId} --fork-session` : null;
+  return isSessionId(sessionId) ? `claude --resume ${sessionId} --fork-session` : null;
+}
+function resumeCommand(sessionId) {
+  return isSessionId(sessionId) ? `claude --resume ${sessionId}` : null;
 }
 
 // src/groups/snoozePresets.ts
@@ -17301,6 +17307,7 @@ var FolderSuggestModal = class extends import_obsidian9.FuzzySuggestModal {
 
 // src/views/TerminalView.ts
 var COMMAND_NAME_DELAY_MS = 3e3;
+var SESSION_DONE_REASONS = /* @__PURE__ */ new Set(["prompt_input_exit", "clear", "logout"]);
 var TERMINUS_VIEW_TYPE = "terminus-view";
 var SCROLLBACK_PERSIST_LINES = 1e3;
 var SCROLLBACK_CACHE_TTL_MS = 2e3;
@@ -17402,6 +17409,20 @@ var TerminalView = class extends import_obsidian10.ItemView {
      *  a restart doesn't launch it again. */
     this.launch = null;
     this.pendingPrompt = null;
+    /** The Claude session running here, and the folder Claude finds it by
+     *  (Multi-agent). Saved in view state from SessionStart until the user
+     *  ends it, so a restart -- including a crash -- can pick it back up. */
+    this.claudeSession = null;
+    /** Set by setState when this view is a restored terminal whose saved
+     *  session should be resumed once its shell is ready. */
+    this.resumeOnStart = false;
+    /** The shell has reported ready and the startup command (or a resume)
+     *  has been decided. Obsidian runs onOpen before setState, so the shell
+     *  already exists when the saved state arrives; this, not the PTY, is
+     *  what says it's still early enough to resume. */
+    this.startupDecided = false;
+    /** The folder the shell was started in. */
+    this.spawnCwd = null;
     // Live "Claude is editing X" chip, floating over the terminal's
     // bottom-right corner (see mountActivityIndicator). Raised by
     // onChangeApplied (once per file this terminal's PreToolUse hook reports)
@@ -17700,6 +17721,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
     switch (payload.hook_event_name) {
       case "SessionStart":
         store.sessionStarted(this.token, identity, payload.agent_type);
+        this.rememberClaudeSession(payload.session_id, payload.cwd);
         this.typePendingPrompt();
         void this.readGitBranch();
         void this.plugin.refreshUsage(this.token);
@@ -17712,6 +17734,8 @@ var TerminalView = class extends import_obsidian10.ItemView {
         break;
       case "SessionEnd":
         store.sessionEnded(this.token);
+        if (SESSION_DONE_REASONS.has(payload.reason))
+          this.rememberClaudeSession(null, null);
         break;
       case "PreToolUse":
         if (this.plugin.tracksSubagents) {
@@ -17958,7 +17982,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
     (_k = this.term) == null ? void 0 : _k.dispose();
   }
   getState() {
-    var _a8, _b, _c2, _d, _e4, _f, _g, _h;
+    var _a8, _b, _c2, _d, _e4, _f, _g, _h, _i3;
     return {
       ...super.getState(),
       scrollback: this.serializeScrollback(),
@@ -17967,8 +17991,20 @@ var TerminalView = class extends import_obsidian10.ItemView {
       color: (_e4 = this.color) != null ? _e4 : void 0,
       groupId: (_f = this.groupIdValue) != null ? _f : void 0,
       autoName: (_g = this.autoName) != null ? _g : void 0,
-      autoNameSource: (_h = this.autoNameSource) != null ? _h : void 0
+      autoNameSource: (_h = this.autoNameSource) != null ? _h : void 0,
+      claudeSession: this.plugin.experience === "multi-agent" ? (_i3 = this.claudeSession) != null ? _i3 : void 0 : void 0
     };
+  }
+  /** Saves (or, with null, forgets) the session to resume after a restart,
+   *  and writes the layout now rather than whenever Obsidian next does: a
+   *  crash between the two would otherwise lose it. */
+  rememberClaudeSession(id, cwd) {
+    var _a8, _b;
+    const next = isSessionId(id) && cwd ? { id, cwd } : null;
+    if ((next == null ? void 0 : next.id) === ((_a8 = this.claudeSession) == null ? void 0 : _a8.id) && (next == null ? void 0 : next.cwd) === ((_b = this.claudeSession) == null ? void 0 : _b.cwd))
+      return;
+    this.claudeSession = next;
+    this.app.workspace.requestSaveLayout();
   }
   /**
    * A running program (Claude Code's own TUI included) can leave DEC
@@ -18043,6 +18079,11 @@ var TerminalView = class extends import_obsidian10.ItemView {
     if (typeof (typedState == null ? void 0 : typedState.color) === "string" && typedState.color.length > 0) {
       this.color = typedState.color;
     }
+    const saved = typedState == null ? void 0 : typedState.claudeSession;
+    if (!this.startupDecided && !this.launch && isSessionId(saved == null ? void 0 : saved.id) && typeof (saved == null ? void 0 : saved.cwd) === "string" && saved.cwd) {
+      this.claudeSession = { id: saved.id, cwd: saved.cwd };
+      this.resumeOnStart = this.plugin.experience === "multi-agent" && this.plugin.settings.multiAgent.resumeSessions;
+    }
     if (typeof (typedState == null ? void 0 : typedState.groupId) === "string" && this.plugin.groupStore.get(typedState.groupId)) {
       this.groupIdValue = typedState.groupId;
     }
@@ -18107,11 +18148,13 @@ var TerminalView = class extends import_obsidian10.ItemView {
     const helperPath = (0, import_terminus_node_bridge14.pathJoin)(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
     const restoredCwdStillExists = this.restoredCwd && (0, import_terminus_node_bridge14.fileExistsSync)(this.restoredCwd);
+    const cwd = restoredCwdStillExists ? this.restoredCwd : this.plugin.getVaultBasePath();
+    this.spawnCwd = cwd;
     this.pty = new PtyProcess({
       pythonBin,
       helperPath,
       shell: shell2,
-      cwd: restoredCwdStillExists ? this.restoredCwd : this.plugin.getVaultBasePath(),
+      cwd,
       cols: (_b = (_a8 = this.term) == null ? void 0 : _a8.cols) != null ? _b : 80,
       rows: (_d = (_c2 = this.term) == null ? void 0 : _c2.rows) != null ? _d : 24,
       env: {
@@ -18133,6 +18176,11 @@ var TerminalView = class extends import_obsidian10.ItemView {
     });
     this.pty.on("ready", () => {
       var _a9, _b2, _c3, _d2, _e4;
+      if (this.startupDecided)
+        return;
+      this.startupDecided = true;
+      if (this.startResume())
+        return;
       const command = (_b2 = (_a9 = this.launch) == null ? void 0 : _a9.command) != null ? _b2 : this.plugin.settings.startupCommand.trim();
       this.pendingPrompt = (_d2 = (_c3 = this.launch) == null ? void 0 : _c3.prompt) != null ? _d2 : null;
       this.launch = null;
@@ -18140,6 +18188,31 @@ var TerminalView = class extends import_obsidian10.ItemView {
         (_e4 = this.pty) == null ? void 0 : _e4.write(`${command}\r`);
     });
     this.pty.start();
+  }
+  /** Resumes the saved Claude session in place of the startup command, in
+   *  turn with other restored terminals (see ResumeQueue). A settled or
+   *  snoozed group's terminal isn't resumed -- it was put away -- but says
+   *  how to. Returns whether the startup command should be skipped. */
+  startResume() {
+    if (!this.resumeOnStart || !this.claudeSession)
+      return false;
+    this.resumeOnStart = false;
+    const resume = resumeCommand(this.claudeSession.id);
+    const { cwd } = this.claudeSession;
+    if (!resume || !(0, import_terminus_node_bridge14.fileExistsSync)(cwd))
+      return false;
+    const command = cwd === this.spawnCwd ? resume : `cd ${shellQuoteIfNeeded(cwd)} && ${resume}`;
+    const group = this.groupIdValue ? this.plugin.groupStore.get(this.groupIdValue) : void 0;
+    if (group && !isOpenGroup(group)) {
+      this.writeToTerminal(`\x1B[90mClaude wasn't resumed while this group is put away. To pick it up: ${command}\x1B[0m\r
+`);
+      return true;
+    }
+    this.plugin.resumeQueue.run(() => {
+      var _a8;
+      return (_a8 = this.pty) == null ? void 0 : _a8.write(`${command}\r`);
+    });
+    return true;
   }
   /** Claude's topic for its conversation names the terminal, and its group
    *  if nothing stronger has (see groupNaming.ts). A later topic renames the
@@ -23023,6 +23096,34 @@ var GroupController = class {
   }
 };
 
+// src/groups/ResumeQueue.ts
+var RESUME_SPACING_MS = 1500;
+var ResumeQueue = class {
+  constructor() {
+    this.nextAt = 0;
+    this.timers = /* @__PURE__ */ new Set();
+  }
+  run(start) {
+    const now = Date.now();
+    const at3 = Math.max(now, this.nextAt);
+    this.nextAt = at3 + RESUME_SPACING_MS;
+    if (at3 === now) {
+      start();
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      this.timers.delete(timer);
+      start();
+    }, at3 - now);
+    this.timers.add(timer);
+  }
+  dispose() {
+    for (const timer of this.timers)
+      window.clearTimeout(timer);
+    this.timers.clear();
+  }
+};
+
 // src/state/PendingChangesStore.ts
 var import_terminus_node_bridge25 = __toESM(require_dist());
 var MAX_HISTORY = 20;
@@ -23957,6 +24058,7 @@ var DEFAULT_MULTI_AGENT_SETTINGS = {
   autoRevealInbox: true,
   autoRevealDelayMs: 800,
   trackSubagents: true,
+  resumeSessions: true,
   showEstimatedCost: true,
   showGitBranch: true,
   checkForUpdates: false
@@ -24080,6 +24182,14 @@ var TerminusSettingTab = class extends import_obsidian26.PluginSettingTab {
     ).addToggle(
       (toggle) => toggle.setValue(multiAgent.trackSubagents).onChange(async (value) => {
         await this.plugin.setTrackSubagents(value);
+      })
+    );
+    new import_obsidian26.Setting(containerEl).setName("Resume Claude sessions on reopen").setDesc(
+      "When Obsidian reopens (after quitting, a crash or a restart), each terminal that had Claude running picks up the same conversation. Terminals in settled or snoozed groups aren't resumed. Quitting Claude yourself means it isn't resumed."
+    ).addToggle(
+      (toggle) => toggle.setValue(multiAgent.resumeSessions).onChange(async (value) => {
+        multiAgent.resumeSessions = value;
+        await this.plugin.saveSettings();
       })
     );
     new import_obsidian26.Setting(containerEl).setName("Show estimated cost").setDesc(
@@ -24521,6 +24631,8 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     this.feedbackStore = new FeedbackStore();
     /** Tasks sent from a session to a new terminal (Multi-agent only). */
     this.delegationStore = new DelegationStore();
+    /** Spaces out Claude sessions resumed after a restart (Multi-agent only). */
+    this.resumeQueue = new ResumeQueue();
     /** How the user has arranged the Agent inbox; outlives the view. */
     this.inboxUi = new InboxUiState();
     /** Files of the current burst of edits, for the auto-reveal's threshold. */
@@ -24742,6 +24854,7 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
   }
   onunload() {
     this.unloading = true;
+    this.resumeQueue.dispose();
     if (this.revealPendingChangesTimer)
       window.clearTimeout(this.revealPendingChangesTimer);
     void this.reviewServer.stop();

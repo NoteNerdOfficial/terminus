@@ -29,6 +29,8 @@ import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload
 import { getGitBranch } from "../git/gitBranch";
 import { withoutInheritedClaudeSession } from "../pty/claudeSessionEnv";
 import { addDelegateItem, addForkItem, addMoveItems } from "../groups/groupMenus";
+import { isSessionId, resumeCommand } from "../groups/forkSession";
+import { isOpenGroup } from "../state/GroupStore";
 import { titleFromBranch, titleFromClaude, titleFromCommand, titleFromPrompt } from "../groups/groupNaming";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
@@ -36,6 +38,12 @@ import type TerminusPlugin from "../main";
 /** How long a command must run before it names its terminal: long enough
  *  that "git status" doesn't, short enough that "npm run dev" does soon. */
 const COMMAND_NAME_DELAY_MS = 3000;
+
+/** SessionEnd reasons that mean the user finished with the session
+ *  (quit Claude, /clear, logged out). Anything else -- "other", which is
+ *  what Obsidian quitting or the shell being killed looks like -- leaves it
+ *  to be resumed. */
+const SESSION_DONE_REASONS = new Set(["prompt_input_exit", "clear", "logout"]);
 
 export const TERMINUS_VIEW_TYPE = "terminus-view";
 
@@ -201,6 +209,20 @@ export class TerminalView extends ItemView {
    *  a restart doesn't launch it again. */
   private launch: { command: string; prompt?: string } | null = null;
   private pendingPrompt: string | null = null;
+  /** The Claude session running here, and the folder Claude finds it by
+   *  (Multi-agent). Saved in view state from SessionStart until the user
+   *  ends it, so a restart -- including a crash -- can pick it back up. */
+  private claudeSession: { id: string; cwd: string } | null = null;
+  /** Set by setState when this view is a restored terminal whose saved
+   *  session should be resumed once its shell is ready. */
+  private resumeOnStart = false;
+  /** The shell has reported ready and the startup command (or a resume)
+   *  has been decided. Obsidian runs onOpen before setState, so the shell
+   *  already exists when the saved state arrives; this, not the PTY, is
+   *  what says it's still early enough to resume. */
+  private startupDecided = false;
+  /** The folder the shell was started in. */
+  private spawnCwd: string | null = null;
   // Live "Claude is editing X" chip, floating over the terminal's
   // bottom-right corner (see mountActivityIndicator). Raised by
   // onChangeApplied (once per file this terminal's PreToolUse hook reports)
@@ -582,6 +604,7 @@ export class TerminalView extends ItemView {
     switch (payload.hook_event_name) {
       case "SessionStart":
         store.sessionStarted(this.token, identity, payload.agent_type);
+        this.rememberClaudeSession(payload.session_id, payload.cwd);
         this.typePendingPrompt();
         void this.readGitBranch();
         // A resumed session's transcript already has usage in it.
@@ -596,6 +619,7 @@ export class TerminalView extends ItemView {
         break;
       case "SessionEnd":
         store.sessionEnded(this.token);
+        if (SESSION_DONE_REASONS.has(payload.reason)) this.rememberClaudeSession(null, null);
         break;
       case "PreToolUse":
         if (this.plugin.tracksSubagents) {
@@ -882,7 +906,18 @@ export class TerminalView extends ItemView {
       groupId: this.groupIdValue ?? undefined,
       autoName: this.autoName ?? undefined,
       autoNameSource: this.autoNameSource ?? undefined,
+      claudeSession: this.plugin.experience === "multi-agent" ? (this.claudeSession ?? undefined) : undefined,
     };
+  }
+
+  /** Saves (or, with null, forgets) the session to resume after a restart,
+   *  and writes the layout now rather than whenever Obsidian next does: a
+   *  crash between the two would otherwise lose it. */
+  private rememberClaudeSession(id: string | null, cwd: string | null): void {
+    const next = isSessionId(id) && cwd ? { id, cwd } : null;
+    if (next?.id === this.claudeSession?.id && next?.cwd === this.claudeSession?.cwd) return;
+    this.claudeSession = next;
+    this.app.workspace.requestSaveLayout();
   }
 
   /**
@@ -942,6 +977,7 @@ export class TerminalView extends ItemView {
       autoName?: unknown;
       autoNameSource?: unknown;
       launch?: { command?: unknown; prompt?: unknown };
+      claudeSession?: { id?: unknown; cwd?: unknown };
     } | null;
     const launch = typedState?.launch;
     if (launch && typeof launch.command === "string" && launch.command) {
@@ -974,6 +1010,13 @@ export class TerminalView extends ItemView {
     }
     if (typeof typedState?.color === "string" && typedState.color.length > 0) {
       this.color = typedState.color;
+    }
+    // Only before the shell is ready: setState can run again on a live
+    // view, and that must never type a resume into it.
+    const saved = typedState?.claudeSession;
+    if (!this.startupDecided && !this.launch && isSessionId(saved?.id) && typeof saved?.cwd === "string" && saved.cwd) {
+      this.claudeSession = { id: saved.id, cwd: saved.cwd };
+      this.resumeOnStart = this.plugin.experience === "multi-agent" && this.plugin.settings.multiAgent.resumeSessions;
     }
     // A group that no longer exists leaves the terminal ungrouped.
     if (typeof typedState?.groupId === "string" && this.plugin.groupStore.get(typedState.groupId)) {
@@ -1056,11 +1099,13 @@ export class TerminalView extends ItemView {
     // the last session) -- fall back rather than handing PtyProcess a path
     // that would make the shell's own cwd-change (or the spawn itself) fail.
     const restoredCwdStillExists = this.restoredCwd && fileExistsSync(this.restoredCwd);
+    const cwd = restoredCwdStillExists ? this.restoredCwd! : this.plugin.getVaultBasePath();
+    this.spawnCwd = cwd;
     this.pty = new PtyProcess({
       pythonBin,
       helperPath,
       shell,
-      cwd: restoredCwdStillExists ? this.restoredCwd! : this.plugin.getVaultBasePath(),
+      cwd,
       cols: this.term?.cols ?? 80,
       rows: this.term?.rows ?? 24,
       env: {
@@ -1091,6 +1136,9 @@ export class TerminalView extends ItemView {
       this.plugin.agentSessionStore.sessionEnded(this.token);
     });
     this.pty.on("ready", () => {
+      if (this.startupDecided) return;
+      this.startupDecided = true;
+      if (this.startResume()) return;
       const command = this.launch?.command ?? this.plugin.settings.startupCommand.trim();
       this.pendingPrompt = this.launch?.prompt ?? null;
       this.launch = null;
@@ -1098,6 +1146,28 @@ export class TerminalView extends ItemView {
     });
 
     this.pty.start();
+  }
+
+  /** Resumes the saved Claude session in place of the startup command, in
+   *  turn with other restored terminals (see ResumeQueue). A settled or
+   *  snoozed group's terminal isn't resumed -- it was put away -- but says
+   *  how to. Returns whether the startup command should be skipped. */
+  private startResume(): boolean {
+    if (!this.resumeOnStart || !this.claudeSession) return false;
+    this.resumeOnStart = false;
+    const resume = resumeCommand(this.claudeSession.id);
+    // Claude looks a session up by the folder it ran in; without that
+    // folder there's nothing to resume.
+    const { cwd } = this.claudeSession;
+    if (!resume || !fileExistsSync(cwd)) return false;
+    const command = cwd === this.spawnCwd ? resume : `cd ${shellQuoteIfNeeded(cwd)} && ${resume}`;
+    const group = this.groupIdValue ? this.plugin.groupStore.get(this.groupIdValue) : undefined;
+    if (group && !isOpenGroup(group)) {
+      this.writeToTerminal(`\x1b[90mClaude wasn't resumed while this group is put away. To pick it up: ${command}\x1b[0m\r\n`);
+      return true;
+    }
+    this.plugin.resumeQueue.run(() => this.pty?.write(`${command}\r`));
+    return true;
   }
 
   /** Claude's topic for its conversation names the terminal, and its group

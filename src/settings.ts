@@ -70,6 +70,9 @@ export interface MultiAgentSettings {
   autoRevealDelayMs: number;
   /** Installs the SubagentStart/SubagentStop hooks and the Agent matcher. */
   trackSubagents: boolean;
+  /** A terminal restored after a restart picks its Claude session back up
+   *  (`claude --resume`). See TerminalView's claudeSession. */
+  resumeSessions: boolean;
   showEstimatedCost: boolean;
   showGitBranch: boolean;
   /** Asks GitHub for the latest release (the sidebar's update link). Off by
@@ -118,6 +121,7 @@ export const DEFAULT_MULTI_AGENT_SETTINGS: MultiAgentSettings = {
   autoRevealInbox: true,
   autoRevealDelayMs: 800,
   trackSubagents: true,
+  resumeSessions: true,
   showEstimatedCost: true,
   showGitBranch: true,
   checkForUpdates: false,
@@ -291,6 +295,18 @@ export class TerminusSettingTab extends PluginSettingTab {
       .addToggle((toggle) =>
         toggle.setValue(multiAgent.trackSubagents).onChange(async (value) => {
           await this.plugin.setTrackSubagents(value);
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Resume Claude sessions on reopen")
+      .setDesc(
+        "When Obsidian reopens (after quitting, a crash or a restart), each terminal that had Claude running picks up the same conversation. Terminals in settled or snoozed groups aren't resumed. Quitting Claude yourself means it isn't resumed."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(multiAgent.resumeSessions).onChange(async (value) => {
+          multiAgent.resumeSessions = value;
+          await this.plugin.saveSettings();
         })
       );
 
