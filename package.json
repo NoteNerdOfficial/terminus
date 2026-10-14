@@ -1,7 +1,7 @@
 {
   "name": "terminus",
   "version": "1.0.36",
-  "description": "Obsidian terminal plugin with Claude Code diff-review gating",
+  "description": "A real terminal in Obsidian for Claude Code. Run several sessions side by side with an Agent inbox and groups, and review every edit with word-level diffs and undo.",
   "main": "main.js",
   "scripts": {
     "predev": "node scripts/generateResourceFiles.mjs",

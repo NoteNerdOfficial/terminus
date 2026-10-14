@@ -3,7 +3,7 @@
   "name": "Terminus",
   "version": "1.0.36",
   "minAppVersion": "1.7.2",
-  "description": "A real terminal with shell integration and beginner-friendly command help, plus a review workflow for Claude Code file edits: word-level diffs, undo, backlink-breakage warnings, and more.",
+  "description": "A real terminal in Obsidian for Claude Code. Run several sessions side by side with an Agent inbox and groups, and review every edit with word-level diffs and undo.",
   "author": "NoteNerd",
   "authorUrl": "",
   "fundingUrl": "",
