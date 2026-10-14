@@ -165,6 +165,26 @@ Queued messages appear above the box in the order they will go. Drag to reorder,
 - **Review feedback.** Comment on a hunk in Split Diff, queue comments per session, and send them to that session between turns.
 - **Resume after a restart.** Terminals that had Claude running pick the same conversation back up when Obsidian reopens (turn off in settings).
 
+### Shortcuts and commands
+
+| Shortcut | Does |
+| --- | --- |
+| \`${k.mod}\` \`Enter\` in a card's box | Your default: steer or queue |
+| \`${k.mod}\` \`Shift\` \`Enter\` in a card's box | The other one |
+
+Commands, from the command palette (they have no default hotkey; assign your own in **Settings → Hotkeys**):
+
+| Command | Does |
+| --- | --- |
+| **Open agent inbox** | Brings the Agent inbox to front |
+| **Jump to next session that needs attention** | The same as **Next** in the inbox |
+| **Go to terminal or group…** | Fuzzy picker over every terminal and group, urgent ones first |
+| **Switch group…** | Shows one group's terminals |
+| **New group** / **Close group** | Create or close a group |
+| **Move tab to group…** | Moves the current terminal into a group |
+| **Start Claude on this note** | Opens a Claude session for the note you have open |
+| **Send a task to a new terminal…** | Opens a new session beside this one with your prompt typed in |
+
 `
       : ""
   }## Working with your vault
