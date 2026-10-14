@@ -1,4 +1,4 @@
-> ⭐ **New feature: Multi-agent.** Run several Claude sessions side by side with an Agent inbox and groups for your terminals. **To turn it on:** click **Try multi-agent** in the popup shown once after you update, or open **Settings → Terminus → Experience** and choose **Multi-agent** (switch back to Classic any time). [How to switch](#choose-your-experience) · [See what it does](#multi-agent-experience).
+> ⭐ **Multi-agent is now the default.** Run several Claude sessions side by side with an Agent inbox and groups for your terminals. **Prefer the single Pending Changes panel?** Open **Settings → Terminus → Experience** and choose **Classic** (or click **Switch to Classic** in the popup shown once after you update). [How to switch](#choose-your-experience) · [See what it does](#multi-agent-experience).
 
 # Terminus
 
@@ -15,7 +15,7 @@ A real terminal inside Obsidian that never lets you lose the thread on what [Cla
 
 Edits land on disk immediately; you review what changed afterwards, with the option to revert.
 
-Running several Claude sessions at once? Switch to the **Multi-agent experience**: an Agent inbox with a card per session, and groups to keep related terminals together. See [Choose your experience](#choose-your-experience).
+Terminus opens in the **Multi-agent experience**: an Agent inbox with a card per Claude session, and groups to keep related terminals together. Prefer one Pending Changes panel? You can switch to Classic any time. See [Choose your experience](#choose-your-experience).
 
 ## Contents
 
@@ -45,9 +45,11 @@ Terminus has two experiences. They share the same terminal, the same hooks and t
 | Where you review | One **Pending Changes** panel, grouped by terminal | An **Agent inbox** with a card per session, and **groups** for your terminals |
 | Organising terminals | Tabs, names and colours | Groups, snooze and settle, a "go to" picker, forking and sending tasks between sessions |
 | Talking to a running session | Type in its terminal | A steer / queue box on each card |
-| Default | Yes | Opt in |
+| Default | Opt in | Yes (new installs and updates) |
 
-**To switch:** open **Settings → Terminus → Experience** and pick **Classic** or **Multi-agent**. Switching is instant and reversible: terminals, pending changes and every other setting carry over, and each experience keeps its own review settings. A one-time popup after you update also offers **Try multi-agent**.
+**To switch:** open **Settings → Terminus → Experience** and pick **Classic** or **Multi-agent**. Switching is instant and reversible: terminals, pending changes and every other setting carry over, and each experience keeps its own review settings.
+
+**Updating from an earlier version?** If you hadn't chosen an experience yet, Terminus moves you to Multi-agent once and shows a popup with a **Switch to Classic** button. If you had already declined Multi-agent or picked Classic yourself, nothing changes.
 
 ![The Experience setting in Settings → Terminus, set to Multi-agent](screenshots/settings-experience.png)
 
@@ -90,7 +92,7 @@ Terminus has two experiences. They share the same terminal, the same hooks and t
 
 ## Classic experience
 
-The default. Every file Claude edits lands in one **Pending Changes** panel, grouped by terminal, where you accept or reject it after the fact. Edits land on disk immediately and nothing is blocked. (Multi-agent reviews through the same hooks and the same diff views; it just presents them per session in the inbox.)
+The single-panel experience. Every file Claude edits lands in one **Pending Changes** panel, grouped by terminal, where you accept or reject it after the fact. Edits land on disk immediately and nothing is blocked. (Multi-agent reviews through the same hooks and the same diff views; it just presents them per session in the inbox.)
 
 ### Screenshots
 
@@ -118,7 +120,7 @@ The default. Every file Claude edits lands in one **Pending Changes** panel, gro
 
 ## Multi-agent experience
 
-Switch the **Experience** setting from Classic to Multi-agent ([how](#choose-your-experience)) to run several Claude sessions side by side without losing track of them. Classic keeps the single Pending Changes panel; the two share your terminals, pending changes and every other setting. Each keeps its own review settings.
+Multi-agent is the default: it lets you run several Claude sessions side by side without losing track of them. If you would rather have Classic's single Pending Changes panel, [switch back](#choose-your-experience) in Settings → Terminus → Experience. The two share your terminals, pending changes and every other setting, and each keeps its own review settings.
 
 ### Screenshots
 

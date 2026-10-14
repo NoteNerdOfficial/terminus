@@ -50,14 +50,13 @@ export const EXPERIENCE_LABELS: Record<Experience, string> = {
   "multi-agent": "Multi-agent",
 };
 
-/** Set at build time by esbuild.config.mjs: false unless built with
- *  TERMINUS_MULTI_AGENT=1 (a test build; see .claude/scripts/deploy.mjs). */
+/** Set at build time by esbuild.config.mjs: true unless built with
+ *  TERMINUS_MULTI_AGENT=0 (a Classic-only build). */
 declare const TERMINUS_MULTI_AGENT_AVAILABLE: boolean;
 
-/** Off in normal builds until Multi-agent ships: while it's off, the
- *  Experience setting and the invite to try Multi-agent stay hidden and
- *  every install runs Classic, whatever its saved `experience` says, so a
- *  release can never offer a mode that isn't ready. */
+/** When off (a Classic-only build), the Experience setting and the
+ *  Multi-agent notices stay hidden and every install runs Classic, whatever
+ *  its saved `experience` says. */
 export const MULTI_AGENT_AVAILABLE: boolean = TERMINUS_MULTI_AGENT_AVAILABLE;
 
 export interface ClassicSettings {
@@ -113,6 +112,10 @@ export interface TerminusSettings {
   /** Same one-time gate as hasSeenWelcome, for the invite to try
    *  Multi-agent. Set whether it was accepted or dismissed. */
   hasSeenMultiAgentInvite: boolean;
+  /** Set once Multi-agent has become this install's default: a new install
+   *  starts in it, and an existing one that never chose is moved to it once
+   *  (see main.ts's applyMultiAgentDefault). */
+  hasSeenMultiAgentDefault: boolean;
   /** Multi-agent's terminal groups (see GroupStore). Kept while Classic is
    *  selected, like the per-mode settings. */
   groups: GroupsData;
@@ -135,7 +138,7 @@ export const DEFAULT_MULTI_AGENT_SETTINGS: MultiAgentSettings = {
 };
 
 export const DEFAULT_SETTINGS: TerminusSettings = {
-  experience: "classic",
+  experience: "multi-agent",
   classic: DEFAULT_CLASSIC_SETTINGS,
   multiAgent: DEFAULT_MULTI_AGENT_SETTINGS,
   fontSize: 13,
@@ -154,6 +157,7 @@ export const DEFAULT_SETTINGS: TerminusSettings = {
   wikiLinkInsertFormat: "wikilink",
   hasSeenWelcome: false,
   hasSeenMultiAgentInvite: false,
+  hasSeenMultiAgentDefault: false,
   groups: DEFAULT_GROUPS_DATA,
 };
 

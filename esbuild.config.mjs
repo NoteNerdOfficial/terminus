@@ -12,11 +12,11 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = process.argv[2] === "production";
 
-// Test builds: TERMINUS_MULTI_AGENT=1 makes the Multi-agent experience
-// available (src/settings.ts, MULTI_AGENT_AVAILABLE), and TERMINUS_OUTFILE
+// Multi-agent ships on by default (src/settings.ts, MULTI_AGENT_AVAILABLE);
+// TERMINUS_MULTI_AGENT=0 builds a Classic-only bundle. TERMINUS_OUTFILE
 // writes the bundle somewhere other than the committed main.js, so a test
 // build can't end up in a commit. See .claude/scripts/deploy.mjs.
-const multiAgentAvailable = process.env.TERMINUS_MULTI_AGENT === "1";
+const multiAgentAvailable = process.env.TERMINUS_MULTI_AGENT !== "0";
 const outfile = process.env.TERMINUS_OUTFILE || "main.js";
 
 // resources/ lives at the plugin root next to main.js in THIS repo (a git

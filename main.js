@@ -391,7 +391,7 @@ __export(main_exports, {
   default: () => TerminusPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian30 = require("obsidian");
+var import_obsidian31 = require("obsidian");
 var import_terminus_node_bridge28 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
@@ -24314,7 +24314,7 @@ var EXPERIENCE_LABELS = {
   classic: "Classic",
   "multi-agent": "Multi-agent"
 };
-var MULTI_AGENT_AVAILABLE = false;
+var MULTI_AGENT_AVAILABLE = true;
 var DEFAULT_CLASSIC_SETTINGS = {
   autoRevealPendingChanges: true,
   autoRevealDelayMs: 800
@@ -24330,7 +24330,7 @@ var DEFAULT_MULTI_AGENT_SETTINGS = {
   checkForUpdates: false
 };
 var DEFAULT_SETTINGS = {
-  experience: "classic",
+  experience: "multi-agent",
   classic: DEFAULT_CLASSIC_SETTINGS,
   multiAgent: DEFAULT_MULTI_AGENT_SETTINGS,
   fontSize: 13,
@@ -24349,6 +24349,7 @@ var DEFAULT_SETTINGS = {
   wikiLinkInsertFormat: "wikilink",
   hasSeenWelcome: false,
   hasSeenMultiAgentInvite: false,
+  hasSeenMultiAgentDefault: false,
   groups: DEFAULT_GROUPS_DATA
 };
 function resolveSettings(saved) {
@@ -24700,7 +24701,7 @@ function buildWelcomeMarkdown() {
 
 #### Nothing Claude writes is final
 
-No more hunting for "where did that change happen." Each file it edits shows up in one Pending Changes panel (what changed, where, and by how much), with a real line-numbered diff per file and Accept / Reject / Open right there.
+No more hunting for "where did that change happen." Each file it edits shows up in one Pending Changes panel, or on its session's card in Multi-agent (what changed, where, and by how much), with a real line-numbered diff per file and Accept / Reject / Open right there.
 
 #### Typing shortcuts
 
@@ -24722,7 +24723,7 @@ No more hunting for "where did that change happen." Each file it edits shows up 
 
 ${MULTI_AGENT_AVAILABLE ? `#### Running Claude in several terminals?
 
-Try the Multi-agent experience in Settings \u2192 Terminus \u2192 Experience: an Agent inbox with a card per Claude session, and groups for your terminals.
+Terminus opens in the Multi-agent experience: an Agent inbox with a card per Claude session, and groups for your terminals. Prefer one Pending Changes panel? Switch to Classic in Settings \u2192 Terminus \u2192 Experience.
 
 ` : ""}Everything else \u2014 reviewing diffs, colored terminals, settings \u2014 is in the full guide.`;
 }
@@ -24850,24 +24851,22 @@ var GettingStartedModal = class extends import_obsidian28.Modal {
 // src/modals/MultiAgentInviteModal.ts
 var import_obsidian29 = require("obsidian");
 var MultiAgentInviteModal = class extends import_obsidian29.Modal {
-  constructor(app, reason) {
+  constructor(app) {
     super(app);
-    this.reason = reason;
     this.resolvePromise = null;
   }
-  static ask(app, reason = "two-terminals") {
+  static ask(app) {
     return new Promise((resolve) => {
-      const modal = new MultiAgentInviteModal(app, reason);
+      const modal = new MultiAgentInviteModal(app);
       modal.resolvePromise = resolve;
       modal.open();
     });
   }
   onOpen() {
     const { contentEl } = this;
-    const announcement = this.reason === "announcement";
-    contentEl.createEl("h3", { text: announcement ? "New in Terminus: Multi-agent" : "Running Claude in more than one terminal?" });
+    contentEl.createEl("h3", { text: "Running Claude in more than one terminal?" });
     contentEl.createEl("p", {
-      text: `${announcement ? "Run several Claude sessions side by side. " : ""}Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs your attention, plus groups to keep related terminals together.`
+      text: "Try the Multi-agent experience: an Agent inbox with a card per Claude session showing what it's doing, what it changed, and when it needs your attention, plus groups to keep related terminals together."
     });
     contentEl.createEl("p", {
       cls: "setting-item-description",
@@ -24891,10 +24890,52 @@ var MultiAgentInviteModal = class extends import_obsidian29.Modal {
   }
 };
 
+// src/modals/MultiAgentDefaultModal.ts
+var import_obsidian30 = require("obsidian");
+var MultiAgentDefaultModal = class extends import_obsidian30.Modal {
+  constructor(app) {
+    super(app);
+    this.resolvePromise = null;
+  }
+  static ask(app) {
+    return new Promise((resolve) => {
+      const modal = new MultiAgentDefaultModal(app);
+      modal.resolvePromise = resolve;
+      modal.open();
+    });
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: "Terminus now opens in Multi-agent" });
+    contentEl.createEl("p", {
+      text: "You now get an Agent inbox with a card per Claude session showing what it's doing, what it changed and when it needs you, plus groups to keep related terminals together. Your terminals and pending changes carry over."
+    });
+    contentEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "Prefer the single Pending Changes panel? Switch back to Classic here, or any time under Settings \u2192 Terminus \u2192 Experience. This won't be shown again."
+    });
+    const buttonRow = contentEl.createDiv({ cls: "terminus-confirm-modal-actions" });
+    buttonRow.createEl("button", { text: "Switch to Classic" }).addEventListener("click", () => this.finish("classic"));
+    buttonRow.createEl("button", { text: "Got it", cls: "mod-cta" }).addEventListener("click", () => this.finish("keep"));
+  }
+  onClose() {
+    this.contentEl.empty();
+    this.finish("keep");
+  }
+  finish(choice) {
+    const resolve = this.resolvePromise;
+    if (!resolve)
+      return;
+    this.resolvePromise = null;
+    resolve(choice);
+    this.close();
+  }
+};
+
 // src/main.ts
 var AUTO_REVEAL_MIN_FILES = 3;
 var AUTO_REVEAL_MIN_LINES = 50;
-var TerminusPlugin = class extends import_obsidian30.Plugin {
+var TerminusPlugin = class extends import_obsidian31.Plugin {
   constructor() {
     super(...arguments);
     this.reviewServer = new ReviewServer();
@@ -24934,12 +24975,17 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     this.nextTerminalNumber = 1;
     this.revealPendingChangesTimer = null;
     this.ribbonIconEl = null;
+    /** No saved settings existed when this load began. */
+    this.freshInstall = false;
+    /** This load moved the install to Multi-agent: the notice is still owed. */
+    this.defaultNoticePending = false;
   }
   get isUnloading() {
     return this.unloading;
   }
   async onload() {
     await this.loadSettings();
+    this.defaultNoticePending = await this.applyMultiAgentDefault();
     this.groupStore = new GroupStore(
       this.settings.groups,
       () => this.saveSettings(),
@@ -25109,8 +25155,8 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     this.app.workspace.onLayoutReady(() => {
       void this.revealReviewView();
       void this.showWelcomeIfFirstRun().then((showedWelcome) => {
-        if (!showedWelcome)
-          this.announceMultiAgent();
+        if (this.defaultNoticePending && !showedWelcome)
+          this.announceMultiAgentDefault();
       });
       if (this.experience === "multi-agent")
         void this.startMultiAgentViews();
@@ -25128,19 +25174,6 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     GettingStartedModal.openWelcome(this.app);
     return true;
   }
-  /** The one-time "New: Multi-agent" invite for an existing Classic user,
-   *  a few seconds after the workspace is up so it doesn't land on a half-
-   *  loaded window. Shares its seen-flag with the two-terminals invite, so
-   *  whichever comes first is the only one. */
-  announceMultiAgent() {
-    if (!MULTI_AGENT_AVAILABLE || this.settings.hasSeenMultiAgentInvite || this.experience !== "classic")
-      return;
-    window.setTimeout(() => {
-      if (this.isUnloading || this.settings.hasSeenMultiAgentInvite)
-        return;
-      void this.showMultiAgentInvite("announcement");
-    }, 3e3);
-  }
   onunload() {
     this.unloading = true;
     this.resumeQueue.dispose();
@@ -25152,7 +25185,47 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     void this.reviewServer.stop();
   }
   async loadSettings() {
-    this.settings = resolveSettings(await this.loadData());
+    const saved = await this.loadData();
+    this.freshInstall = saved === null || saved === void 0;
+    this.settings = resolveSettings(saved);
+  }
+  /**
+   * Multi-agent is the default. A new install starts in it. An existing
+   * install that never chose (it hasn't seen the invite to try it, so it was
+   * only ever on Classic by default) is moved to it once, and told how to go
+   * back; one that dismissed the invite or switched itself keeps what it has.
+   * Runs before anything reads `experience`, so hooks and views start in the
+   * right mode. Returns whether the notice should be shown.
+   */
+  async applyMultiAgentDefault() {
+    if (!MULTI_AGENT_AVAILABLE || this.settings.hasSeenMultiAgentDefault)
+      return false;
+    this.settings.hasSeenMultiAgentDefault = true;
+    let moved = false;
+    if (this.freshInstall) {
+      this.settings.hasSeenMultiAgentInvite = true;
+    } else if (this.settings.experience === "classic" && !this.settings.hasSeenMultiAgentInvite) {
+      this.settings.experience = "multi-agent";
+      this.settings.hasSeenMultiAgentInvite = true;
+      moved = true;
+    }
+    await this.saveSettings();
+    return moved;
+  }
+  /** The one-time notice for an install moved to Multi-agent, a few seconds
+   *  after the workspace is up so it doesn't land on a half-loaded window.
+   *  "Switch to Classic" is the way back without opening settings. */
+  announceMultiAgentDefault() {
+    window.setTimeout(() => {
+      if (this.isUnloading)
+        return;
+      void MultiAgentDefaultModal.ask(this.app).then(async (choice) => {
+        if (choice !== "classic")
+          return;
+        await this.setExperience("classic");
+        new import_obsidian31.Notice("Terminus: switched to the Classic experience. Change it any time in settings.");
+      });
+    }, 3e3);
   }
   /** The experience actually in effect: always Classic until Multi-agent
    *  ships (see MULTI_AGENT_AVAILABLE), whatever the saved setting says. */
@@ -25175,6 +25248,8 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     if (experience === this.settings.experience)
       return;
     this.settings.experience = experience;
+    if (experience === "classic")
+      this.settings.hasSeenMultiAgentInvite = true;
     await this.saveSettings();
     await this.provisionHooks();
     await this.swapReviewView();
@@ -25266,7 +25341,7 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
       await provisionClaudeSettings(this.app, this.manifest, { experience: this.experience, trackSubagents: this.tracksSubagents });
     } catch (err) {
       console.error("Terminus: failed to provision .claude/settings.local.json", err);
-      new import_obsidian30.Notice(
+      new import_obsidian31.Notice(
         "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
       );
     }
@@ -25318,12 +25393,12 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
   }
   /** Persisted before the modal opens, like showWelcomeIfFirstRun, so a
    *  crash while it's on screen can't make it come back. */
-  async showMultiAgentInvite(reason = "two-terminals") {
+  async showMultiAgentInvite() {
     this.settings.hasSeenMultiAgentInvite = true;
     await this.saveSettings();
-    if (await MultiAgentInviteModal.ask(this.app, reason)) {
+    if (await MultiAgentInviteModal.ask(this.app)) {
       await this.setExperience("multi-agent");
-      new import_obsidian30.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
+      new import_obsidian31.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
     }
   }
   async saveSettings() {
@@ -25364,7 +25439,7 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     this.settings.ribbonIcon = iconName;
     await this.saveSettings();
     if (this.ribbonIconEl)
-      (0, import_obsidian30.setIcon)(this.ribbonIconEl, iconName);
+      (0, import_obsidian31.setIcon)(this.ribbonIconEl, iconName);
   }
   forEachTerminalView(fn3) {
     for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
@@ -25380,7 +25455,7 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     const changes = this.pendingChangesStore.list();
     const count = changes.length;
     if (count === 0) {
-      new import_obsidian30.Notice("Terminus: no pending changes");
+      new import_obsidian31.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && changes.some(hasCollision)) {
@@ -25400,22 +25475,22 @@ var TerminusPlugin = class extends import_obsidian30.Plugin {
     try {
       await this.pendingChangesStore.resolveAll(accepted);
     } catch (err) {
-      new import_obsidian30.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
+      new import_obsidian31.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
     }
   }
   async resolveOldestPendingChange(accepted) {
     const oldest = this.pendingChangesStore.list()[0];
     if (!oldest) {
-      new import_obsidian30.Notice("Terminus: no pending changes");
+      new import_obsidian31.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && !await confirmCollisionReject(this.app, [oldest]))
       return;
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian30.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge28.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian31.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge28.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian30.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge28.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian31.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge28.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -25614,7 +25689,7 @@ ${result}`))
       return;
     this.delegationStore.remove(childToken);
     await this.focusTerminal(delegation.parentToken);
-    new import_obsidian30.Notice(`Terminus: result added to ${parent.getDisplayText()} \u2014 press Enter to send it`);
+    new import_obsidian31.Notice(`Terminus: result added to ${parent.getDisplayText()} \u2014 press Enter to send it`);
   }
   /**
    * Whether guidance can be typed into a session now. Unlike review
@@ -25648,10 +25723,10 @@ ${result}`))
       return false;
     if (submit) {
       window.setTimeout(() => terminal.submitInput(), 250);
-      new import_obsidian30.Notice(`Terminus: sent to ${terminal.getDisplayText()}`);
+      new import_obsidian31.Notice(`Terminus: sent to ${terminal.getDisplayText()}`);
     } else {
       await this.focusTerminal(token);
-      new import_obsidian30.Notice(`Terminus: added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
+      new import_obsidian31.Notice(`Terminus: added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
     }
     return true;
   }
@@ -25735,7 +25810,7 @@ ${result}`))
       return;
     this.feedbackStore.clear(token);
     await this.focusTerminal(token);
-    new import_obsidian30.Notice(`Terminus: feedback added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
+    new import_obsidian31.Notice(`Terminus: feedback added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
   }
   /** Re-renders open Agent inboxes and Terminus sidebars for changes the
    *  stores don't see, such as a terminal being renamed or recoloured. */
@@ -25771,7 +25846,7 @@ ${result}`))
     var _a8;
     const waiting = this.agentSessionStore.list().filter((s15) => s15.running && s15.status === "needs-attention" && this.findTerminalView(s15.token));
     if (waiting.length === 0) {
-      new import_obsidian30.Notice("Terminus: no session needs attention");
+      new import_obsidian31.Notice("Terminus: no session needs attention");
       return;
     }
     const active = (_a8 = this.app.workspace.getActiveViewOfType(TerminalView)) == null ? void 0 : _a8.hookToken;
@@ -25802,7 +25877,7 @@ ${result}`))
    *  promise: Obsidian hides the menu before it runs an item's click, so
    *  "dismissed" can't be told apart from "picked" by the hide event. */
   askPlacement(evt, onPick, allowed = TERMINAL_OPEN_PLACEMENTS) {
-    const menu = new import_obsidian30.Menu();
+    const menu = new import_obsidian31.Menu();
     for (const placement of allowed) {
       menu.addItem((item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => onPick(placement)));
     }

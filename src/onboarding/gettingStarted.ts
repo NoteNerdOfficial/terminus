@@ -36,7 +36,7 @@ export function buildWelcomeMarkdown(): string {
 
 #### Nothing Claude writes is final
 
-No more hunting for "where did that change happen." Each file it edits shows up in one Pending Changes panel (what changed, where, and by how much), with a real line-numbered diff per file and Accept / Reject / Open right there.
+No more hunting for "where did that change happen." Each file it edits shows up in one Pending Changes panel, or on its session's card in Multi-agent (what changed, where, and by how much), with a real line-numbered diff per file and Accept / Reject / Open right there.
 
 #### Typing shortcuts
 
@@ -60,7 +60,7 @@ ${
     MULTI_AGENT_AVAILABLE
       ? `#### Running Claude in several terminals?
 
-Try the Multi-agent experience in Settings → Terminus → Experience: an Agent inbox with a card per Claude session, and groups for your terminals.
+Terminus opens in the Multi-agent experience: an Agent inbox with a card per Claude session, and groups for your terminals. Prefer one Pending Changes panel? Switch to Classic in Settings → Terminus → Experience.
 
 `
       : ""

@@ -32,7 +32,8 @@ import { ConfirmModal } from "./modals/ConfirmModal";
 import { confirmCollisionReject, hasCollision } from "./modals/collisions";
 import { RescueClosedTerminalModal } from "./modals/RescueClosedTerminalModal";
 import { GettingStartedModal } from "./modals/GettingStartedModal";
-import { MultiAgentInviteModal, type InviteReason } from "./modals/MultiAgentInviteModal";
+import { MultiAgentInviteModal } from "./modals/MultiAgentInviteModal";
+import { MultiAgentDefaultModal } from "./modals/MultiAgentDefaultModal";
 import { computeDiffStats } from "./diff/renderDiff";
 import { inlineDiffDecorations, inlineDiffField } from "./editor/inlineDiff";
 import { errorMessage } from "./util/errors";
@@ -103,9 +104,14 @@ export default class TerminusPlugin extends Plugin {
   private nextTerminalNumber = 1;
   private revealPendingChangesTimer: number | null = null;
   private ribbonIconEl: HTMLElement | null = null;
+  /** No saved settings existed when this load began. */
+  private freshInstall = false;
+  /** This load moved the install to Multi-agent: the notice is still owed. */
+  private defaultNoticePending = false;
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    this.defaultNoticePending = await this.applyMultiAgentDefault();
     this.groupStore = new GroupStore(
       this.settings.groups,
       () => this.saveSettings(),
@@ -299,9 +305,9 @@ export default class TerminusPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       void this.revealReviewView();
       void this.showWelcomeIfFirstRun().then((showedWelcome) => {
-        // A new install already has the welcome to read; the invite waits for
-        // two terminals editing at once. Everyone updating gets it once.
-        if (!showedWelcome) this.announceMultiAgent();
+        // The welcome already says Multi-agent is the default, so an install
+        // that sees it doesn't get a second modal on top.
+        if (this.defaultNoticePending && !showedWelcome) this.announceMultiAgentDefault();
       });
       if (this.experience === "multi-agent") void this.startMultiAgentViews();
     });
@@ -319,18 +325,6 @@ export default class TerminusPlugin extends Plugin {
     return true;
   }
 
-  /** The one-time "New: Multi-agent" invite for an existing Classic user,
-   *  a few seconds after the workspace is up so it doesn't land on a half-
-   *  loaded window. Shares its seen-flag with the two-terminals invite, so
-   *  whichever comes first is the only one. */
-  private announceMultiAgent(): void {
-    if (!MULTI_AGENT_AVAILABLE || this.settings.hasSeenMultiAgentInvite || this.experience !== "classic") return;
-    window.setTimeout(() => {
-      if (this.isUnloading || this.settings.hasSeenMultiAgentInvite) return;
-      void this.showMultiAgentInvite("announcement");
-    }, 3000);
-  }
-
   onunload(): void {
     this.unloading = true;
     this.resumeQueue.dispose();
@@ -341,7 +335,47 @@ export default class TerminusPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = resolveSettings(await this.loadData());
+    const saved: unknown = await this.loadData();
+    this.freshInstall = saved === null || saved === undefined;
+    this.settings = resolveSettings(saved);
+  }
+
+  /**
+   * Multi-agent is the default. A new install starts in it. An existing
+   * install that never chose (it hasn't seen the invite to try it, so it was
+   * only ever on Classic by default) is moved to it once, and told how to go
+   * back; one that dismissed the invite or switched itself keeps what it has.
+   * Runs before anything reads `experience`, so hooks and views start in the
+   * right mode. Returns whether the notice should be shown.
+   */
+  private async applyMultiAgentDefault(): Promise<boolean> {
+    if (!MULTI_AGENT_AVAILABLE || this.settings.hasSeenMultiAgentDefault) return false;
+    this.settings.hasSeenMultiAgentDefault = true;
+    let moved = false;
+    if (this.freshInstall) {
+      // Nothing to invite them to: they're already in it.
+      this.settings.hasSeenMultiAgentInvite = true;
+    } else if (this.settings.experience === "classic" && !this.settings.hasSeenMultiAgentInvite) {
+      this.settings.experience = "multi-agent";
+      this.settings.hasSeenMultiAgentInvite = true;
+      moved = true;
+    }
+    await this.saveSettings();
+    return moved;
+  }
+
+  /** The one-time notice for an install moved to Multi-agent, a few seconds
+   *  after the workspace is up so it doesn't land on a half-loaded window.
+   *  "Switch to Classic" is the way back without opening settings. */
+  private announceMultiAgentDefault(): void {
+    window.setTimeout(() => {
+      if (this.isUnloading) return;
+      void MultiAgentDefaultModal.ask(this.app).then(async (choice) => {
+        if (choice !== "classic") return;
+        await this.setExperience("classic");
+        new Notice("Terminus: switched to the Classic experience. Change it any time in settings.");
+      });
+    }, 3000);
   }
 
   /** The experience actually in effect: always Classic until Multi-agent
@@ -366,6 +400,8 @@ export default class TerminusPlugin extends Plugin {
   async setExperience(experience: Experience): Promise<void> {
     if (experience === this.settings.experience) return;
     this.settings.experience = experience;
+    // Choosing Classic is a decision: don't invite them back to Multi-agent.
+    if (experience === "classic") this.settings.hasSeenMultiAgentInvite = true;
     await this.saveSettings();
     // Adds or removes the Multi-agent-only hooks. Claude Code reads hooks
     // when a session starts, so sessions already running keep the set they
@@ -511,10 +547,10 @@ export default class TerminusPlugin extends Plugin {
 
   /** Persisted before the modal opens, like showWelcomeIfFirstRun, so a
    *  crash while it's on screen can't make it come back. */
-  private async showMultiAgentInvite(reason: InviteReason = "two-terminals"): Promise<void> {
+  private async showMultiAgentInvite(): Promise<void> {
     this.settings.hasSeenMultiAgentInvite = true;
     await this.saveSettings();
-    if (await MultiAgentInviteModal.ask(this.app, reason)) {
+    if (await MultiAgentInviteModal.ask(this.app)) {
       await this.setExperience("multi-agent");
       new Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
     }
