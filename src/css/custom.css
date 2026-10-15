@@ -2866,6 +2866,13 @@
   line-height: 18px;
 }
 
+/* The row wraps so the actions can take a line of their own. A zero basis
+   keeps the name beside the chevron however long it is: with `auto`, a long
+   name's full width would push the whole block onto a new line. */
+.terminus-pending-row.is-inbox .terminus-pending-info {
+  flex: 1 1 0;
+}
+
 .terminus-pending-row.is-inbox .terminus-pending-filename-row {
   display: flex;
   align-items: baseline;
