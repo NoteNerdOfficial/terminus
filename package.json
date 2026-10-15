@@ -1,6 +1,6 @@
 {
   "name": "terminus",
-  "version": "1.0.36",
+  "version": "1.0.37",
   "description": "A real terminal with shell integration and beginner-friendly command help, plus a multi-agent Agent inbox for several Claude Code sessions and a review workflow for their edits: word-level diffs, undo, backlink-breakage warnings, and more.",
   "main": "main.js",
   "scripts": {
