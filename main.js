@@ -20221,6 +20221,14 @@ function modelInfo(model) {
   }
   return best;
 }
+function formatModelName(model) {
+  const parts = model.replace(/^claude-/, "").replace(/-\d{8}$/, "").split("-");
+  const family = parts.find((part) => /^[a-z]+$/.test(part));
+  if (!family)
+    return model;
+  const version = parts.filter((part) => /^\d+$/.test(part)).join(".");
+  return `${family.charAt(0).toUpperCase()}${family.slice(1)}${version ? ` ${version}` : ""}`;
+}
 function totalTokens(usage) {
   return usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
 }
@@ -21315,13 +21323,15 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       iconButton(line, "x", "Remove this comment", () => this.plugin.feedbackStore.remove(item.id));
     }
   }
-  /** Tokens, context % and ≈ cost. `usage` is what's counted (a card's lead
+  /** Model, tokens, context % and ≈ cost. `usage` is what's counted (a card's lead
    *  plus its subagents); `contextOf` is the one conversation whose context
    *  fill is shown. Nothing renders without usage, e.g. when Claude Code
    *  isn't saving transcripts. */
   renderUsage(parent, usage, contextOf) {
     if (!usage)
       return;
+    if (contextOf == null ? void 0 : contextOf.model)
+      parent.createSpan({ text: formatModelName(contextOf.model), attr: { title: contextOf.model } });
     parent.createSpan({ text: `${formatTokens(totalTokens(usage))} tokens`, attr: { title: tokenBreakdown(usage) } });
     if ((contextOf == null ? void 0 : contextOf.contextTokens) != null && contextOf.contextWindow) {
       const percent = Math.round(contextOf.contextTokens / contextOf.contextWindow * 100);

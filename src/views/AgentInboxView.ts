@@ -1,7 +1,7 @@
 import { ItemView, Menu, Platform, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
 import { pathRelative } from "terminus-node-bridge";
 import type { AgentSession, SubagentRun } from "../state/AgentSessionStore";
-import { addUsage, totalTokens, UsageTotals } from "../claude/transcriptUsage";
+import { addUsage, formatModelName, totalTokens, UsageTotals } from "../claude/transcriptUsage";
 import { PendingChange } from "../state/PendingChangesStore";
 import { buildInbox, InboxCard, InboxSubagent, scopeInbox } from "../state/inboxModel";
 import type { InboxUiState } from "../state/InboxUiState";
@@ -843,12 +843,15 @@ export class AgentInboxView extends ItemView {
     }
   }
 
-  /** Tokens, context % and ≈ cost. `usage` is what's counted (a card's lead
+  /** Model, tokens, context % and ≈ cost. `usage` is what's counted (a card's lead
    *  plus its subagents); `contextOf` is the one conversation whose context
    *  fill is shown. Nothing renders without usage, e.g. when Claude Code
    *  isn't saving transcripts. */
   private renderUsage(parent: HTMLElement, usage: UsageTotals | null, contextOf: UsageTotals | null): void {
     if (!usage) return;
+    // The conversation's own model, like its context fill: a card shows the
+    // lead's, each agent row its own.
+    if (contextOf?.model) parent.createSpan({ text: formatModelName(contextOf.model), attr: { title: contextOf.model } });
     parent.createSpan({ text: `${formatTokens(totalTokens(usage))} tokens`, attr: { title: tokenBreakdown(usage) } });
     if (contextOf?.contextTokens != null && contextOf.contextWindow) {
       const percent = Math.round((contextOf.contextTokens / contextOf.contextWindow) * 100);

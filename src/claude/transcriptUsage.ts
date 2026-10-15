@@ -94,6 +94,20 @@ function modelInfo(model: string): ModelInfo | null {
   return best;
 }
 
+/** A model id as a short name: `claude-sonnet-5-5` → "Sonnet 5.5",
+ *  `claude-3-5-haiku-20241022` → "Haiku 3.5". An id with no family name in
+ *  it is returned as is. */
+export function formatModelName(model: string): string {
+  const parts = model
+    .replace(/^claude-/, "")
+    .replace(/-\d{8}$/, "")
+    .split("-");
+  const family = parts.find((part) => /^[a-z]+$/.test(part));
+  if (!family) return model;
+  const version = parts.filter((part) => /^\d+$/.test(part)).join(".");
+  return `${family.charAt(0).toUpperCase()}${family.slice(1)}${version ? ` ${version}` : ""}`;
+}
+
 /** One assistant message's `usage`, as the transcript records it. */
 interface RawUsage {
   input_tokens?: number;
