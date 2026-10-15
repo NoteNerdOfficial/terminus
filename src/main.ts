@@ -675,8 +675,12 @@ export default class TerminusPlugin extends Plugin {
   }
 
   async getClaudeBin(): Promise<string> {
-    if (!this.claudeBin) this.claudeBin = await resolveClaudeBin();
-    return this.claudeBin;
+    if (this.claudeBin) return this.claudeBin;
+    const resolved = await resolveClaudeBin();
+    // The bare name means nothing was found; don't remember that, so a
+    // later install or a faster shell startup gets picked up.
+    if (resolved !== "claude") this.claudeBin = resolved;
+    return resolved;
   }
 
   getVaultBasePath(): string {

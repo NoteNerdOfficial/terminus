@@ -35,29 +35,33 @@ function resolveHeadlessCwd(): string {
   return getEnvVar("TMPDIR") || "/tmp";
 }
 
-// ~/.local/bin/claude is where Claude Code's own official standalone
-// installer (the curl | sh method) puts it for a user-level, non-sudo
-// install -- confirmed missing here by a real ENOENT report where `which
-// claude` in a real terminal resolved to exactly this path.
+// Where Claude Code's own installers and common package managers put the
+// binary. Checked before any shell is spawned: a file-exists check is
+// instant and can't be derailed by slow or noisy shell startup.
 const CLAUDE_BIN_CANDIDATES = ["/usr/local/bin/claude", "/opt/homebrew/bin/claude"];
+// Relative to $HOME: the official standalone installer's user-level path,
+// the local-install path, and a personal bin directory.
+const CLAUDE_HOME_CANDIDATES = [".local/bin/claude", ".claude/local/claude", "bin/claude"];
 
-function localBinCandidate(): string | null {
+function claudeBinCandidates(): string[] {
   const home = getEnvVar("HOME");
-  return home ? pathJoin(home, ".local/bin/claude") : null;
+  const homeCandidates = home ? CLAUDE_HOME_CANDIDATES.map((rel) => pathJoin(home, rel)) : [];
+  return [...homeCandidates, ...CLAUDE_BIN_CANDIDATES];
 }
 
-/** Same login-shell-`which` + fallback-paths pattern as resolvePython3 in
- *  pty/shellDetect.ts -- Electron apps launched from Finder/Dock often
- *  inherit a minimal PATH that doesn't include where `claude` actually is. */
+/** Known install locations first, then the login-shell `which` pattern as
+ *  resolvePython3 in pty/shellDetect.ts -- Electron apps launched from
+ *  Finder/Dock often inherit a minimal PATH that doesn't include where
+ *  `claude` actually is, so the shell lookup covers installs elsewhere
+ *  (nvm, version managers, custom prefixes). Falls back to the bare name
+ *  when nothing is found. */
 export async function resolveClaudeBin(): Promise<string> {
-  const loginShellPath = await tryLoginShellWhich("claude");
-  if (loginShellPath) return loginShellPath;
-
-  const localBin = localBinCandidate();
-  const candidates = localBin ? [...CLAUDE_BIN_CANDIDATES, localBin] : CLAUDE_BIN_CANDIDATES;
-  for (const candidate of candidates) {
+  for (const candidate of claudeBinCandidates()) {
     if (fileExistsSync(candidate)) return candidate;
   }
+
+  const loginShellPath = await tryLoginShellWhich("claude");
+  if (loginShellPath) return loginShellPath;
 
   return "claude";
 }
@@ -94,10 +98,10 @@ function settingsHint(authToken: string | undefined, confident: boolean): string
  *  button, which already has all the context it needs. */
 async function spawnClaude(claudeBin: string, args: string[], authToken: string | undefined, timeoutMs: number): Promise<string> {
   // Obsidian's Electron process doesn't inherit the login shell's env
-  // (proxy vars a corporate network may require, etc.) -- without this,
+  // (proxy vars, certificate settings, etc.) -- without this,
   // claude can silently hang trying to reach the API directly instead of
   // failing fast, indistinguishable from a slow query until the timeout.
-  const env = await resolveSpawnEnv();
+  const { env, loginShellEnvLoaded } = await resolveSpawnEnv();
   // On some machines, Claude Code's normal Keychain-based login can't be
   // read by this freshly-spawned process at all (a differently-signed
   // binary asking for another app's Keychain item can trigger an
@@ -115,13 +119,34 @@ async function spawnClaude(claudeBin: string, args: string[], authToken: string 
     });
     return stdout;
   } catch (err) {
-    const execErr = err as ExecFileError;
+    const execErr = err as ExecFileError & { stdout?: string };
     if (execErr.killed || execErr.signal) {
-      throw new Error(`claude timed out after ${timeoutMs / 1000}s with no response`);
+      const envNote = loginShellEnvLoaded
+        ? ""
+        : " (couldn't read your shell's environment, so proxy or certificate settings may be missing)";
+      throw new Error(`claude timed out after ${timeoutMs / 1000}s with no response${envNote}`);
     }
-    const stderr = execErr.stderr?.trim();
-    throw new Error(`claude exited with code ${execErr.code ?? "unknown"}${stderr ? `: ${stderr.slice(0, 500)}` : ""}`);
+    const detail = failureDetail(execErr);
+    throw new Error(`claude exited with code ${execErr.code ?? "unknown"}${detail ? `: ${detail.slice(0, 500)}` : ""}`);
   }
+}
+
+/** claude reports its own errors (failed auth, API errors) on *stdout* --
+ *  as a JSON result with `is_error` under `--output-format json` -- and
+ *  leaves stderr empty, so stderr alone loses the actual reason. */
+function failureDetail(err: ExecFileError & { stdout?: string }): string {
+  const stdout = err.stdout?.trim();
+  if (stdout) {
+    try {
+      const parsed: unknown = JSON.parse(stdout);
+      if (isClaudeJsonResult(parsed) && typeof parsed.result === "string" && parsed.result.trim()) {
+        return parsed.result.trim();
+      }
+    } catch {
+      return stdout;
+    }
+  }
+  return err.stderr?.trim() ?? "";
 }
 
 /** `--allowedTools ""` (verified empirically) keeps this a pure Q&A turn:
@@ -142,7 +167,7 @@ async function runHeadlessQuery(claudeBin: string, prompt: string, authToken?: s
     // straight from claude itself -- worth a confident pointer at the fix
     // instead of the generic hedge a bare timeout gets, since a hang can't
     // be distinguished from a genuinely slow query until the timeout fires.
-    const isAuthFailure = /not logged in|please run.*login|authentication/i.test(message);
+    const isAuthFailure = /not logged in|please run.*login|authenticat|\b401\b|invalid.*token/i.test(message);
     throw new Error(`${message}${settingsHint(authToken, isAuthFailure)}`);
   }
 

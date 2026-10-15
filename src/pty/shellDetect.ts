@@ -1,6 +1,11 @@
 import { fileExistsSync, execFileText, getEnvVar, getAllEnvVars } from "terminus-node-bridge";
 import { withoutInheritedClaudeSession } from "./claudeSessionEnv";
 
+/** Login-shell startup runs the user's whole rc chain, which can take
+ *  several seconds on machines with heavy shell setup. A probe that gives up
+ *  early silently loses the env it was meant to capture, so this is generous. */
+const LOGIN_SHELL_TIMEOUT_MS = 20_000;
+
 const PYTHON3_CANDIDATES = [
   "/usr/bin/python3",
   "/opt/homebrew/bin/python3",
@@ -32,8 +37,8 @@ export function resolveUserShell(): string {
 export async function tryLoginShellWhich(bin: string): Promise<string | null> {
   const loginShell = resolveUserShell();
   try {
-    const { stdout } = await execFileText(loginShell, ["-lic", `which ${bin}`], { timeout: 5000 });
-    // Login-shell startup/logout hooks (MOTD, corporate session-save
+    const { stdout } = await execFileText(loginShell, ["-lic", `which ${bin}`], { timeout: LOGIN_SHELL_TIMEOUT_MS });
+    // Login-shell startup/logout hooks (MOTD, session-save
     // scripts, etc.) can print extra lines before or after `which`'s own
     // output, so the resolved path isn't reliably the last line -- scan
     // every line for one that actually names and contains this binary.
@@ -45,23 +50,27 @@ export async function tryLoginShellWhich(bin: string): Promise<string | null> {
   }
 }
 
-let cachedLoginShellEnv: Promise<Record<string, string>> | null = null;
+let cachedLoginShellEnv: Promise<Record<string, string> | null> | null = null;
 
-/** Corporate networks often require proxy env vars (HTTPS_PROXY etc.), set
- *  by the login shell's own rc files -- Obsidian's Electron process doesn't
- *  inherit those (same root problem as the PATH lookup above), so a spawned
- *  `claude` can silently hang trying to reach Anthropic's API directly with
- *  no proxy, rather than failing fast. Resolve the login shell's real env
- *  once and merge it into the child's env at spawn time. Cached because
- *  spawning a login shell has real startup cost and this only needs to
- *  reflect the machine's config, not change per-query. */
-export async function resolveLoginShellEnv(): Promise<Record<string, string>> {
+/** Proxy and certificate settings (HTTPS_PROXY, NODE_EXTRA_CA_CERTS, etc.)
+ *  are usually set by the login shell's own rc files -- Obsidian's Electron
+ *  process doesn't inherit those (same root problem as the PATH lookup
+ *  above), so a spawned `claude` can silently hang trying to reach
+ *  Anthropic's API without them, rather than failing fast. Resolve the login
+ *  shell's real env and merge it into the child's env at spawn time.
+ *
+ *  Only a successful probe is cached (spawning a login shell has real
+ *  startup cost, and the result only reflects the machine's config). A
+ *  failed or timed-out probe resolves to `null` and is retried on the next
+ *  call, so one slow startup can't leave every later query without the env
+ *  for the rest of the session. */
+export function resolveLoginShellEnv(): Promise<Record<string, string> | null> {
   if (cachedLoginShellEnv) return cachedLoginShellEnv;
-  cachedLoginShellEnv = (async () => {
+  const probe = (async () => {
     const loginShell = resolveUserShell();
     try {
       const { stdout } = await execFileText(loginShell, ["-lic", "env -0"], {
-        timeout: 5000,
+        timeout: LOGIN_SHELL_TIMEOUT_MS,
         maxBuffer: 10 * 1024 * 1024,
       });
       const env: Record<string, string> = {};
@@ -72,15 +81,29 @@ export async function resolveLoginShellEnv(): Promise<Record<string, string>> {
       }
       return env;
     } catch {
-      return {};
+      return null;
     }
   })();
-  return cachedLoginShellEnv;
+  cachedLoginShellEnv = probe;
+  void probe.then((env) => {
+    if (env === null && cachedLoginShellEnv === probe) cachedLoginShellEnv = null;
+  });
+  return probe;
 }
 
-export async function resolveSpawnEnv(): Promise<Record<string, string | undefined>> {
+export interface SpawnEnv {
+  env: Record<string, string | undefined>;
+  /** False when the login shell's env couldn't be read, so `env` is only
+   *  Obsidian's own (possibly minimal) environment. */
+  loginShellEnvLoaded: boolean;
+}
+
+export async function resolveSpawnEnv(): Promise<SpawnEnv> {
   const loginShellEnv = await resolveLoginShellEnv();
   // The login shell was started from Obsidian's environment, so it echoes
   // back any inherited Claude session variables too: strip after merging.
-  return withoutInheritedClaudeSession({ ...getAllEnvVars(), ...loginShellEnv });
+  return {
+    env: withoutInheritedClaudeSession({ ...getAllEnvVars(), ...loginShellEnv }),
+    loginShellEnvLoaded: loginShellEnv !== null,
+  };
 }

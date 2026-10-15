@@ -182,6 +182,7 @@ var require_process = __commonJS({
             const execErr = new ExecFileError(error.message);
             execErr.killed = errWithFields.killed;
             execErr.signal = errWithFields.signal;
+            execErr.stdout = typeof stdout === "string" ? stdout : void 0;
             execErr.stderr = typeof stderr === "string" ? stderr : void 0;
             execErr.code = errWithFields.code;
             reject(execErr);
@@ -1204,6 +1205,7 @@ function withoutInheritedClaudeSession(env) {
 }
 
 // src/pty/shellDetect.ts
+var LOGIN_SHELL_TIMEOUT_MS = 2e4;
 var PYTHON3_CANDIDATES = [
   "/usr/bin/python3",
   "/opt/homebrew/bin/python3",
@@ -1225,7 +1227,7 @@ function resolveUserShell() {
 async function tryLoginShellWhich(bin) {
   const loginShell = resolveUserShell();
   try {
-    const { stdout } = await (0, import_terminus_node_bridge4.execFileText)(loginShell, ["-lic", `which ${bin}`], { timeout: 5e3 });
+    const { stdout } = await (0, import_terminus_node_bridge4.execFileText)(loginShell, ["-lic", `which ${bin}`], { timeout: LOGIN_SHELL_TIMEOUT_MS });
     const lines = stdout.split("\n").map((line) => line.trim());
     const resolved = lines.find((line) => line.endsWith(`/${bin}`) && (0, import_terminus_node_bridge4.fileExistsSync)(line));
     return resolved != null ? resolved : null;
@@ -1234,14 +1236,14 @@ async function tryLoginShellWhich(bin) {
   }
 }
 var cachedLoginShellEnv = null;
-async function resolveLoginShellEnv() {
+function resolveLoginShellEnv() {
   if (cachedLoginShellEnv)
     return cachedLoginShellEnv;
-  cachedLoginShellEnv = (async () => {
+  const probe = (async () => {
     const loginShell = resolveUserShell();
     try {
       const { stdout } = await (0, import_terminus_node_bridge4.execFileText)(loginShell, ["-lic", "env -0"], {
-        timeout: 5e3,
+        timeout: LOGIN_SHELL_TIMEOUT_MS,
         maxBuffer: 10 * 1024 * 1024
       });
       const env = {};
@@ -1253,14 +1255,22 @@ async function resolveLoginShellEnv() {
       }
       return env;
     } catch (e) {
-      return {};
+      return null;
     }
   })();
-  return cachedLoginShellEnv;
+  cachedLoginShellEnv = probe;
+  void probe.then((env) => {
+    if (env === null && cachedLoginShellEnv === probe)
+      cachedLoginShellEnv = null;
+  });
+  return probe;
 }
 async function resolveSpawnEnv() {
   const loginShellEnv = await resolveLoginShellEnv();
-  return withoutInheritedClaudeSession({ ...(0, import_terminus_node_bridge4.getAllEnvVars)(), ...loginShellEnv });
+  return {
+    env: withoutInheritedClaudeSession({ ...(0, import_terminus_node_bridge4.getAllEnvVars)(), ...loginShellEnv }),
+    loginShellEnvLoaded: loginShellEnv !== null
+  };
 }
 
 // src/claude/headlessAssist.ts
@@ -1279,20 +1289,20 @@ function resolveHeadlessCwd() {
   return (0, import_terminus_node_bridge5.getEnvVar)("TMPDIR") || "/tmp";
 }
 var CLAUDE_BIN_CANDIDATES = ["/usr/local/bin/claude", "/opt/homebrew/bin/claude"];
-function localBinCandidate() {
+var CLAUDE_HOME_CANDIDATES = [".local/bin/claude", ".claude/local/claude", "bin/claude"];
+function claudeBinCandidates() {
   const home = (0, import_terminus_node_bridge5.getEnvVar)("HOME");
-  return home ? (0, import_terminus_node_bridge5.pathJoin)(home, ".local/bin/claude") : null;
+  const homeCandidates = home ? CLAUDE_HOME_CANDIDATES.map((rel) => (0, import_terminus_node_bridge5.pathJoin)(home, rel)) : [];
+  return [...homeCandidates, ...CLAUDE_BIN_CANDIDATES];
 }
 async function resolveClaudeBin() {
-  const loginShellPath = await tryLoginShellWhich("claude");
-  if (loginShellPath)
-    return loginShellPath;
-  const localBin = localBinCandidate();
-  const candidates = localBin ? [...CLAUDE_BIN_CANDIDATES, localBin] : CLAUDE_BIN_CANDIDATES;
-  for (const candidate of candidates) {
+  for (const candidate of claudeBinCandidates()) {
     if ((0, import_terminus_node_bridge5.fileExistsSync)(candidate))
       return candidate;
   }
+  const loginShellPath = await tryLoginShellWhich("claude");
+  if (loginShellPath)
+    return loginShellPath;
   return "claude";
 }
 function isClaudeJsonResult(value) {
@@ -1307,8 +1317,8 @@ function settingsHint(authToken, confident) {
   return ' If this keeps happening, try adding a Claude Code auth token in Terminus settings under Advanced. Run "claude setup-token" in a real terminal and paste the result there.';
 }
 async function spawnClaude(claudeBin, args, authToken, timeoutMs) {
-  var _a8, _b;
-  const env = await resolveSpawnEnv();
+  var _a8;
+  const { env, loginShellEnvLoaded } = await resolveSpawnEnv();
   if (authToken)
     env.CLAUDE_CODE_OAUTH_TOKEN = authToken;
   try {
@@ -1322,11 +1332,27 @@ async function spawnClaude(claudeBin, args, authToken, timeoutMs) {
   } catch (err) {
     const execErr = err;
     if (execErr.killed || execErr.signal) {
-      throw new Error(`claude timed out after ${timeoutMs / 1e3}s with no response`);
+      const envNote = loginShellEnvLoaded ? "" : " (couldn't read your shell's environment, so proxy or certificate settings may be missing)";
+      throw new Error(`claude timed out after ${timeoutMs / 1e3}s with no response${envNote}`);
     }
-    const stderr = (_a8 = execErr.stderr) == null ? void 0 : _a8.trim();
-    throw new Error(`claude exited with code ${(_b = execErr.code) != null ? _b : "unknown"}${stderr ? `: ${stderr.slice(0, 500)}` : ""}`);
+    const detail = failureDetail(execErr);
+    throw new Error(`claude exited with code ${(_a8 = execErr.code) != null ? _a8 : "unknown"}${detail ? `: ${detail.slice(0, 500)}` : ""}`);
   }
+}
+function failureDetail(err) {
+  var _a8, _b, _c2;
+  const stdout = (_a8 = err.stdout) == null ? void 0 : _a8.trim();
+  if (stdout) {
+    try {
+      const parsed = JSON.parse(stdout);
+      if (isClaudeJsonResult(parsed) && typeof parsed.result === "string" && parsed.result.trim()) {
+        return parsed.result.trim();
+      }
+    } catch (e) {
+      return stdout;
+    }
+  }
+  return (_c2 = (_b = err.stderr) == null ? void 0 : _b.trim()) != null ? _c2 : "";
 }
 async function runHeadlessQuery(claudeBin, prompt, authToken) {
   let stdout;
@@ -1339,7 +1365,7 @@ async function runHeadlessQuery(claudeBin, prompt, authToken) {
     );
   } catch (err) {
     const message = errorMessage2(err);
-    const isAuthFailure = /not logged in|please run.*login|authentication/i.test(message);
+    const isAuthFailure = /not logged in|please run.*login|authenticat|\b401\b|invalid.*token/i.test(message);
     throw new Error(`${message}${settingsHint(authToken, isAuthFailure)}`);
   }
   let parsed;
@@ -25617,9 +25643,12 @@ var TerminusPlugin = class extends import_obsidian31.Plugin {
     return this.settings.shellBinOverride.trim() || resolveUserShell();
   }
   async getClaudeBin() {
-    if (!this.claudeBin)
-      this.claudeBin = await resolveClaudeBin();
-    return this.claudeBin;
+    if (this.claudeBin)
+      return this.claudeBin;
+    const resolved = await resolveClaudeBin();
+    if (resolved !== "claude")
+      this.claudeBin = resolved;
+    return resolved;
   }
   getVaultBasePath() {
     return getVaultBasePath(this.app);
