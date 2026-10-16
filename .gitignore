@@ -38,3 +38,6 @@ AI Skills Manager/
 # README screenshots: generic notes, simulated hook events, screenshots.
 # Kept locally for reuse, never committed
 demo-vault/
+
+# Throwaway UI prototypes (open in a browser; kept locally, never committed)
+prototype/
