@@ -2046,6 +2046,13 @@
   text-align: right;
 }
 
+/* The footer's way into a closed "Tell this session…" box. */
+.terminus-inbox-reply {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* Messages queued for a session, above its "Tell this session…" box. */
 .terminus-inbox-queue {
   display: flex;
@@ -3238,6 +3245,11 @@
 .terminus-inbox-foot-note {
   font-size: var(--font-ui-smaller);
   color: var(--text-faint);
+}
+
+/* In a card's footer the note sits among ghost buttons (10.5px): match them. */
+.terminus-inbox-card-foot .terminus-inbox-foot-note {
+  font-size: 10.5px;
 }
 
 /* --- Split Diff comments ------------------------------------------------ */

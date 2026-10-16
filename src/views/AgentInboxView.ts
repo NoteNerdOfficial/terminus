@@ -530,7 +530,8 @@ export class AgentInboxView extends ItemView {
 
     this.renderFeedback(workEl, card.token, name);
     this.renderDelegations(workEl, card.token, name);
-    this.renderSteer(workEl, card, name);
+    const composer = this.composerState(card);
+    this.renderSteer(workEl, card, name, composer);
     if (!workEl.hasChildNodes()) workEl.remove();
 
     const foot = el.createDiv({ cls: "terminus-inbox-card-foot" });
@@ -551,11 +552,41 @@ export class AgentInboxView extends ItemView {
       foot.createSpan({ cls: "terminus-inbox-foot-note", text: "Nothing to review" });
     }
     foot.createDiv({ cls: "terminus-inbox-spacer" });
+    if (composer === "closed") {
+      const reply = foot.createEl("button", { cls: "terminus-btn-ghost terminus-inbox-reply" });
+      setIcon(reply.createSpan({ cls: "terminus-meta-icon" }), "message-square");
+      reply.createSpan({ text: "Reply" });
+      setTooltip(reply, `Tell ${name}…`);
+      reply.addEventListener("click", () => {
+        this.ui.userAction();
+        this.ui.openComposers.add(card.token);
+        this.ui.focusComposer = card.token;
+        this.render();
+      });
+    }
     if (terminal) {
       foot.createEl("button", { cls: "terminus-btn-ghost", text: "Open terminal" }).addEventListener("click", () =>
         void this.plugin.focusTerminal(card.token)
       );
     }
+  }
+
+  /**
+   * Whether a card's "Tell this session…" box is shown:
+   * - `none`: no live session or terminal to tell (the card has ended).
+   * - `hidden`: Claude waits on a prompt, where typed text could answer it;
+   *   the banner's "Answer in terminal" is the action. Queued messages and a
+   *   draft are kept.
+   * - `open`: Claude is working, or Reply opened the box, or it holds a draft.
+   * - `closed`: between turns with nothing typed; the footer offers Reply.
+   */
+  private composerState(card: InboxCard): "none" | "hidden" | "open" | "closed" {
+    const token = card.token;
+    const session = this.plugin.agentSessionStore.get(token);
+    if (card.ended || !session?.running || !this.plugin.findTerminalView(token)) return "none";
+    if (!this.plugin.steerReadiness(token).ready) return "hidden";
+    if (session.status === "working" || this.ui.openComposers.has(token) || this.ui.drafts.has(token)) return "open";
+    return "closed";
   }
 
   /**
@@ -570,13 +601,17 @@ export class AgentInboxView extends ItemView {
    * other. The draft is kept in the plugin's inbox state, so folding the card
    * or re-rendering doesn't lose it.
    */
-  private renderSteer(el: HTMLElement, card: InboxCard, name: string): void {
+  private renderSteer(el: HTMLElement, card: InboxCard, name: string, state: "none" | "hidden" | "open" | "closed"): void {
     const token = card.token;
-    if (card.ended || !this.plugin.agentSessionStore.get(token)?.running || !this.plugin.findTerminalView(token)) return;
+    if (state === "none") return;
     const readiness = this.plugin.steerReadiness(token);
     const defaultBehavior = this.plugin.settings.multiAgent.sendBehavior;
     const section = el.createDiv({ cls: "terminus-inbox-steer" });
     this.renderQueue(section, token);
+    if (state !== "open") {
+      if (!section.hasChildNodes()) section.remove();
+      return;
+    }
 
     const mod = Platform.isMacOS ? "⌘" : "Ctrl";
     const input = section.createEl("textarea", {
@@ -588,7 +623,22 @@ export class AgentInboxView extends ItemView {
       if (input.value) this.ui.drafts.set(token, input.value);
       else this.ui.drafts.delete(token);
     });
-    input.addEventListener("blur", () => this.renderIfSkipped());
+    // Leaving an empty box that Reply opened puts it away again; a click on
+    // its own buttons is not leaving it. Deferred a tick so a blur() call
+    // can't have its render skipped (see renderNow).
+    input.addEventListener("blur", (evt) => {
+      const to = evt.relatedTarget;
+      window.setTimeout(() => {
+        this.renderIfSkipped();
+        if (to instanceof Node && section.contains(to)) return;
+        if (this.plugin.agentSessionStore.get(token)?.status === "working" || this.ui.drafts.has(token) || !this.ui.openComposers.delete(token)) return;
+        this.render();
+      }, 0);
+    });
+    if (this.ui.focusComposer === token) {
+      this.ui.focusComposer = null;
+      input.focus();
+    }
 
     const actions = section.createDiv({ cls: "terminus-inbox-steer-actions" });
     const add = actions.createEl("button", { cls: "terminus-btn-ghost", text: "Add to input" });
@@ -616,6 +666,7 @@ export class AgentInboxView extends ItemView {
       const sent = mode === "queue" ? this.plugin.queueGuidance(token, text) : await this.plugin.sendGuidance(token, text, mode === "steer");
       if (!sent) return;
       this.ui.drafts.delete(token);
+      this.ui.openComposers.delete(token);
       input.value = "";
       input.blur();
       this.render();

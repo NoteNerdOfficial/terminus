@@ -24,6 +24,12 @@ export class InboxUiState {
   /** What's typed in each session's "Tell this session…" box, by token, so a
    *  re-render (or a fold) doesn't lose it. */
   readonly drafts = new Map<string, string>();
+  /** Cards whose "Tell this session…" box was opened with Reply. A working
+   *  card's box is always open and a drafted one stays open, so this only
+   *  matters for a card between turns; an empty box closes on blur. */
+  readonly openComposers = new Set<string>();
+  /** A card whose box to focus on the next render: set when Reply opens it. */
+  focusComposer: string | null = null;
   /** The tokens the last dismissal hid, for Undo. */
   lastDismissed: string[] = [];
   finishedCollapsed = false;

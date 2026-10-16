@@ -21006,7 +21006,8 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
     this.renderFeedback(workEl, card.token, name);
     this.renderDelegations(workEl, card.token, name);
-    this.renderSteer(workEl, card, name);
+    const composer = this.composerState(card);
+    this.renderSteer(workEl, card, name, composer);
     if (!workEl.hasChildNodes())
       workEl.remove();
     const foot = el2.createDiv({ cls: "terminus-inbox-card-foot" });
@@ -21029,12 +21030,44 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       foot.createSpan({ cls: "terminus-inbox-foot-note", text: "Nothing to review" });
     }
     foot.createDiv({ cls: "terminus-inbox-spacer" });
+    if (composer === "closed") {
+      const reply = foot.createEl("button", { cls: "terminus-btn-ghost terminus-inbox-reply" });
+      (0, import_obsidian19.setIcon)(reply.createSpan({ cls: "terminus-meta-icon" }), "message-square");
+      reply.createSpan({ text: "Reply" });
+      (0, import_obsidian19.setTooltip)(reply, `Tell ${name}\u2026`);
+      reply.addEventListener("click", () => {
+        this.ui.userAction();
+        this.ui.openComposers.add(card.token);
+        this.ui.focusComposer = card.token;
+        this.render();
+      });
+    }
     if (terminal) {
       foot.createEl("button", { cls: "terminus-btn-ghost", text: "Open terminal" }).addEventListener(
         "click",
         () => void this.plugin.focusTerminal(card.token)
       );
     }
+  }
+  /**
+   * Whether a card's "Tell this session…" box is shown:
+   * - `none`: no live session or terminal to tell (the card has ended).
+   * - `hidden`: Claude waits on a prompt, where typed text could answer it;
+   *   the banner's "Answer in terminal" is the action. Queued messages and a
+   *   draft are kept.
+   * - `open`: Claude is working, or Reply opened the box, or it holds a draft.
+   * - `closed`: between turns with nothing typed; the footer offers Reply.
+   */
+  composerState(card) {
+    const token = card.token;
+    const session = this.plugin.agentSessionStore.get(token);
+    if (card.ended || !(session == null ? void 0 : session.running) || !this.plugin.findTerminalView(token))
+      return "none";
+    if (!this.plugin.steerReadiness(token).ready)
+      return "hidden";
+    if (session.status === "working" || this.ui.openComposers.has(token) || this.ui.drafts.has(token))
+      return "open";
+    return "closed";
   }
   /**
    * "Tell this session…": a box on a running session's card, with the
@@ -21048,28 +21081,48 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
    * other. The draft is kept in the plugin's inbox state, so folding the card
    * or re-rendering doesn't lose it.
    */
-  renderSteer(el2, card, name) {
-    var _a8, _b;
+  renderSteer(el2, card, name, state) {
+    var _a8;
     const token = card.token;
-    if (card.ended || !((_a8 = this.plugin.agentSessionStore.get(token)) == null ? void 0 : _a8.running) || !this.plugin.findTerminalView(token))
+    if (state === "none")
       return;
     const readiness = this.plugin.steerReadiness(token);
     const defaultBehavior = this.plugin.settings.multiAgent.sendBehavior;
     const section = el2.createDiv({ cls: "terminus-inbox-steer" });
     this.renderQueue(section, token);
+    if (state !== "open") {
+      if (!section.hasChildNodes())
+        section.remove();
+      return;
+    }
     const mod = import_obsidian19.Platform.isMacOS ? "\u2318" : "Ctrl";
     const input = section.createEl("textarea", {
       cls: "terminus-inbox-steer-input",
       attr: { rows: "2", placeholder: `Tell ${name}\u2026  (${mod}\u21B5 ${defaultBehavior}s \xB7 ${mod}\u21E7\u21B5 ${defaultBehavior === "steer" ? "queues" : "steers"})` }
     });
-    input.value = (_b = this.ui.drafts.get(token)) != null ? _b : "";
+    input.value = (_a8 = this.ui.drafts.get(token)) != null ? _a8 : "";
     input.addEventListener("input", () => {
       if (input.value)
         this.ui.drafts.set(token, input.value);
       else
         this.ui.drafts.delete(token);
     });
-    input.addEventListener("blur", () => this.renderIfSkipped());
+    input.addEventListener("blur", (evt) => {
+      const to = evt.relatedTarget;
+      window.setTimeout(() => {
+        var _a9;
+        this.renderIfSkipped();
+        if (to instanceof Node && section.contains(to))
+          return;
+        if (((_a9 = this.plugin.agentSessionStore.get(token)) == null ? void 0 : _a9.status) === "working" || this.ui.drafts.has(token) || !this.ui.openComposers.delete(token))
+          return;
+        this.render();
+      }, 0);
+    });
+    if (this.ui.focusComposer === token) {
+      this.ui.focusComposer = null;
+      input.focus();
+    }
     const actions = section.createDiv({ cls: "terminus-inbox-steer-actions" });
     const add = actions.createEl("button", { cls: "terminus-btn-ghost", text: "Add to input" });
     (0, import_obsidian19.setTooltip)(add, "Types it into the session's input line and takes you to the terminal; you press Enter");
@@ -21097,6 +21150,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       if (!sent)
         return;
       this.ui.drafts.delete(token);
+      this.ui.openComposers.delete(token);
       input.value = "";
       input.blur();
       this.render();
@@ -24057,6 +24111,12 @@ var InboxUiState = class {
     /** What's typed in each session's "Tell this session…" box, by token, so a
      *  re-render (or a fold) doesn't lose it. */
     this.drafts = /* @__PURE__ */ new Map();
+    /** Cards whose "Tell this session…" box was opened with Reply. A working
+     *  card's box is always open and a drafted one stays open, so this only
+     *  matters for a card between turns; an empty box closes on blur. */
+    this.openComposers = /* @__PURE__ */ new Set();
+    /** A card whose box to focus on the next render: set when Reply opens it. */
+    this.focusComposer = null;
     /** The tokens the last dismissal hid, for Undo. */
     this.lastDismissed = [];
     this.finishedCollapsed = false;
