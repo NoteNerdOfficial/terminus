@@ -27,6 +27,8 @@ import { CommandHelpModal } from "../modals/CommandHelpModal";
 import { RenameTerminalModal } from "../modals/RenameTerminalModal";
 import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload, StopHookPayload } from "../hooks/types";
 import { getGitBranch } from "../git/gitBranch";
+import { changedSince, readGitStatus, type GitStatus } from "../git/gitStatus";
+import type { ShellChange } from "../state/AgentSessionStore";
 import { withoutInheritedClaudeSession } from "../pty/claudeSessionEnv";
 import { addDelegateItem, addForkItem, addMoveItems } from "../groups/groupMenus";
 import { isSessionId, resumeCommand } from "../groups/forkSession";
@@ -245,6 +247,16 @@ export class TerminalView extends ItemView {
   // dot the user never focuses is exactly the case it exists to catch)
   // that a timed guess would only risk clearing it too early.
   private isPendingAttention = false;
+
+  // Shell-edit detection (Multi-agent, "Detect shell changes" on; see
+  // git/gitStatus.ts). `turnBaseline` is `git status` as the current turn
+  // began, compared against a fresh read when it ends; `hookedFiles` is
+  // every file an Edit/Write/NotebookEdit hook has accounted for this
+  // session, which is what tells Claude's tool edits apart from the ones it
+  // made through the shell. Both are per Claude session, so both reset at
+  // SessionStart (a /clear included).
+  private turnBaseline: GitStatus | null = null;
+  private readonly hookedFiles = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -542,7 +554,7 @@ export class TerminalView extends ItemView {
    *  past the debounced Pending Changes reveal the chip needs to outlast
    *  (see main.ts), so there's nothing left to stay up for. */
   private onTurnEnd(payload: StopHookPayload | undefined): void {
-    this.endTurn(payload?.last_assistant_message, sessionIdentity(payload), false);
+    this.endTurn(payload?.last_assistant_message, sessionIdentity(payload), false, payload?.prompt_id);
     if (this.plugin.tracksSubagents) {
       this.plugin.agentSessionStore.backgroundTasksReported(this.token, payload?.background_tasks, true);
     }
@@ -550,18 +562,27 @@ export class TerminalView extends ItemView {
 
   /** Stop, or the lead's StopFailure (Multi-agent only): either way the turn
    *  is over and no Stop is coming. */
-  private endTurn(message: string | undefined, identity: ReturnType<typeof sessionIdentity>, failed: boolean): void {
+  private endTurn(message: string | undefined, identity: ReturnType<typeof sessionIdentity>, failed: boolean, promptId?: string): void {
     this.clearActivity();
     this.clearPendingAttention();
-    if (failed) this.plugin.agentSessionStore.turnFailed(this.token, message, identity);
-    else this.plugin.agentSessionStore.turnEnded(this.token, message, identity);
+    if (failed) this.plugin.agentSessionStore.turnFailed(this.token, message, identity, Date.now(), promptId);
+    else this.plugin.agentSessionStore.turnEnded(this.token, message, identity, Date.now(), false, promptId);
     void this.plugin.refreshUsage(this.token);
     // Watching the terminal as the turn ends counts as reading it, or a
     // minute later idle_prompt would flag a turn already being looked at.
     if (this.app.workspace.getActiveViewOfType(TerminalView) === this && document.hasFocus()) {
       this.plugin.agentSessionStore.seen(this.token);
     }
-    void this.readGitBranch();
+    void this.finishTurn(promptId);
+  }
+
+  /** A turn's after-the-fact work, in the order the later steps depend on:
+   *  the branch (a turn can switch it), then the shell-change pass, then the
+   *  session log -- whose entry for the turn records both. */
+  private async finishTurn(promptId: string | undefined): Promise<void> {
+    await this.readGitBranch();
+    const shellChanges = await this.checkShellChanges();
+    await this.plugin.sessionLog.appendTurn(this.token, promptId, shellChanges);
   }
 
   /** A key that answers an open prompt takes the session out of Needs
@@ -584,6 +605,72 @@ export class TerminalView extends ItemView {
     if (branch && this.groupIdValue) this.plugin.groupStore.autoName(this.groupIdValue, titleFromBranch(branch), "branch");
   }
 
+  private get detectsShellChanges(): boolean {
+    return this.plugin.experience === "multi-agent" && this.plugin.settings.multiAgent.detectShellChanges;
+  }
+
+  /** `git status` as this turn begins, to compare against at its end. Taken
+   *  per turn rather than per session because that's what keeps the user's
+   *  own edits out of the result: they happen between turns, while during
+   *  one Claude is the only writer.
+   *
+   *  Best-effort by design: this read isn't awaited before Claude starts
+   *  work, so an edit in the few milliseconds it takes lands in the
+   *  baseline and goes unreported. Under-reporting is the right way to be
+   *  wrong here -- the previous turn's closing snapshot is still in place
+   *  as a fallback, and naming a file the user changed themselves would be
+   *  worse than missing one. */
+  private async takeShellBaseline(): Promise<void> {
+    if (!this.detectsShellChanges) {
+      this.turnBaseline = null;
+      return;
+    }
+    const cwd = this.plugin.agentSessionStore.get(this.token)?.cwd;
+    this.turnBaseline = cwd ? await readGitStatus(cwd) : null;
+  }
+
+  /**
+   * At a turn's end: the files whose git status changed during it that no
+   * Edit/Write/NotebookEdit hook accounted for. Those are the ones Claude
+   * changed through the shell -- `sed -i`, a formatter, a package manager --
+   * which our PreToolUse matcher never sees, so the review panel would
+   * otherwise be silently empty for them.
+   *
+   * The list carries across turns, since nothing here resolves an entry the
+   * way Accept/Reject resolves a pending change; an entry whose file is no
+   * longer dirty at all (the user reverted it, or it got committed) is
+   * dropped on the next pass, so it cleans itself up.
+   */
+  private async checkShellChanges(): Promise<ShellChange[]> {
+    if (!this.detectsShellChanges) return [];
+    const cwd = this.plugin.agentSessionStore.get(this.token)?.cwd;
+    if (!cwd) return [];
+    const after = await readGitStatus(cwd);
+    const baseline = this.turnBaseline;
+    // The next turn measures from here, whatever this one found.
+    this.turnBaseline = after;
+    if (!after) return [];
+
+    const session = this.plugin.agentSessionStore.get(this.token);
+    if (!session) return [];
+    const known = new Set(session.shellChanges.map((change) => change.filePath));
+    const kept = session.shellChanges.filter((change) => after.entries.has(change.filePath));
+    const at = Date.now();
+    // Only this turn's new ones are returned: the session log records what
+    // each turn did, not the running list the card shows.
+    const added: ShellChange[] = [];
+    for (const entry of changedSince(baseline, after)) {
+      if (this.hookedFiles.has(entry.filePath) || known.has(entry.filePath)) continue;
+      // Terminus's own session-log note is a file that appears with no edit
+      // hook behind it, which is this pass's definition of a shell edit; it
+      // must not report the plugin's bookkeeping as Claude's work.
+      if (this.plugin.sessionLog.ownsPath(entry.filePath)) continue;
+      added.push({ filePath: entry.filePath, status: entry.status, at });
+    }
+    this.plugin.agentSessionStore.shellChangesRead(this.token, [...kept, ...added]);
+    return added;
+  }
+
   /** Fires from the Notification hook -- Claude needs this terminal's
    *  permission, or has been sitting idle waiting on input. Either way,
    *  this is the one signal that says "a human needs to look here", so any
@@ -604,6 +691,11 @@ export class TerminalView extends ItemView {
     switch (payload.hook_event_name) {
       case "SessionStart":
         store.sessionStarted(this.token, identity, payload.agent_type);
+        // A new Claude session (a /clear included) starts the shell-change
+        // tracking over, matching the store's own clean slate.
+        this.hookedFiles.clear();
+        this.turnBaseline = null;
+        this.plugin.sessionLog.sessionStarted(this.token, payload.session_id);
         this.rememberClaudeSession(payload.session_id, payload.cwd);
         this.typePendingPrompt();
         void this.readGitBranch();
@@ -611,7 +703,8 @@ export class TerminalView extends ItemView {
         void this.plugin.refreshUsage(this.token);
         break;
       case "UserPromptSubmit":
-        store.promptSubmitted(this.token, identity);
+        store.promptSubmitted(this.token, identity, payload.prompt, payload.prompt_id);
+        void this.takeShellBaseline();
         // The first prompt sent in a group names it, unless something
         // stronger (a linked note, the user) already has.
         if (this.groupIdValue) this.plugin.groupStore.autoName(this.groupIdValue, titleFromPrompt(payload.prompt), "prompt");
@@ -1301,16 +1394,28 @@ export class TerminalView extends ItemView {
   private async onChangeApplied(payload: PreToolUseHookPayload): Promise<void> {
     const diff = await buildDiff(payload);
     this.noteActivity(diff.filePath);
-    this.plugin.agentSessionStore.fileEdited(this.token, diff.filePath, sessionIdentity(payload));
+    // Accounted for by a hook, so the shell-change check must not report it
+    // (see checkShellChanges). Tracked even with that check off: the setting
+    // can be turned on mid-session, and a Set of paths costs nothing.
+    this.hookedFiles.add(diff.filePath);
+    this.plugin.agentSessionStore.fileEdited(this.token, diff.filePath, sessionIdentity(payload), payload.prompt_id);
+    const editAgent = this.plugin.tracksSubagents && payload.agent_id ? { id: payload.agent_id, type: payload.agent_type ?? "" } : null;
+    // Accumulated per turn and written out when the turn ends; a no-op
+    // unless the user turned session logging on.
+    this.plugin.sessionLog.noteEdit(this.token, diff, payload.prompt_id, editAgent);
     this.plugin.pendingChangesStore.recordChange({
       payload,
       diff,
       token: this.token,
       panelLabel: this.getDisplayText(),
       panelColor: this.effectiveColor,
+      // Which user turn asked for this edit. The same id arrives on a
+      // subagent's calls as on the lead's, so an edit lands under the
+      // request the user actually made (see inboxModel's buildTurns).
+      promptId: payload.prompt_id,
       // PreToolUse is a Classic hook, so agent_id arrives either way; it's
       // only kept while subagents are tracked.
-      agent: this.plugin.tracksSubagents && payload.agent_id ? { id: payload.agent_id, type: payload.agent_type ?? "" } : null,
+      agent: editAgent,
     });
     // Doesn't reveal/focus the panel directly here -- Claude may make
     // several edits in one turn, and popping the sidebar open on each one

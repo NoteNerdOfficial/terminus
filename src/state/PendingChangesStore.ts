@@ -42,6 +42,12 @@ export interface PendingChange {
    *  row, in the order they first edited it. Subagents appear only while
    *  they're tracked; otherwise their edits count as the lead's. */
   agents: ChangeAgent[];
+  /** Every user turn whose edits were coalesced into this row, in the order
+   *  they first touched the file. Usually one; a file Claude comes back to
+   *  in a later turn before the row is reviewed has more, which is why this
+   *  is a list rather than the single prompt_id its payload carries. Empty
+   *  when no payload carried one. */
+  promptIds: string[];
   /** Populated separately via setBrokenBacklinks (computation needs the
    *  Obsidian App instance, which this store deliberately doesn't depend
    *  on -- keeps this class's core logic plain and independently testable). */
@@ -63,6 +69,8 @@ export interface RecordChangeInput {
   panelColor: string | null;
   /** The subagent that made the edit; null or absent for the lead session. */
   agent?: { id: string; type: string } | null;
+  /** The user turn the edit belongs to, from the payload's prompt_id. */
+  promptId?: string;
 }
 
 interface PendingEntry {
@@ -131,6 +139,10 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
           agents: existing.change.agents.some((a) => a.token === agent.token && a.agentId === agent.agentId)
             ? existing.change.agents
             : [...existing.change.agents, agent],
+          promptIds:
+            input.promptId && !existing.change.promptIds.includes(input.promptId)
+              ? [...existing.change.promptIds, input.promptId]
+              : existing.change.promptIds,
         }
       : {
           id: key,
@@ -142,6 +154,7 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
           editCount: 1,
           contributors: [{ token: input.token, label: input.panelLabel, color: input.panelColor }],
           agents: [agent],
+          promptIds: input.promptId ? [input.promptId] : [],
           brokenBacklinks: [],
         };
 

@@ -1,9 +1,11 @@
 import { ItemView, Menu, Platform, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
 import { pathRelative } from "terminus-node-bridge";
-import type { AgentSession, SubagentRun } from "../state/AgentSessionStore";
+import { activeTime, type AgentSession, type SubagentRun } from "../state/AgentSessionStore";
+import { describeStatus } from "../git/gitStatus";
+import { openFileAtPath } from "../editor/openWithDiff";
 import { addUsage, formatModelName, totalTokens, UsageTotals } from "../claude/transcriptUsage";
 import { PendingChange } from "../state/PendingChangesStore";
-import { buildInbox, InboxCard, InboxSubagent, scopeInbox } from "../state/inboxModel";
+import { buildInbox, InboxCard, InboxSubagent, InboxTurn, scopeInbox } from "../state/inboxModel";
 import type { InboxUiState } from "../state/InboxUiState";
 import { TerminalView } from "./TerminalView";
 import { computeDiffStats } from "../diff/renderDiff";
@@ -91,7 +93,9 @@ export class AgentInboxView extends ItemView {
 
   private tickElapsed(): void {
     this.contentEl.querySelectorAll<HTMLElement>(".terminus-inbox-live-elapsed").forEach((el) => {
-      el.setText(formatDuration(Date.now() - Number(el.dataset.since)));
+      // `data-base` is time already banked (finished turns, for a session's
+      // running total); 0 for a plain "how long has this been going" timer.
+      el.setText(formatDuration(Number(el.dataset.base ?? 0) + Date.now() - Number(el.dataset.since)));
     });
   }
 
@@ -474,11 +478,7 @@ export class AgentInboxView extends ItemView {
     if (session?.branch && this.plugin.settings.multiAgent.showGitBranch) {
       setTooltip(iconLabel(meta, "git-branch", session.branch, "terminus-inbox-branch"), "Git branch of this session's folder");
     }
-    if (session?.lastTurnMs != null && session.status !== "working") {
-      meta.createSpan({ text: `turn ${formatDuration(session.lastTurnMs)}` });
-    } else if (!card.ended && session?.status === "working" && session.turnStartedAt !== null) {
-      liveElapsed(meta, session.turnStartedAt, "turn so far");
-    }
+    this.renderTurnSummary(meta, card);
     // A folded card has no agent rows, so its agents are counted in a line.
     const agents = collapsed ? summarizeAgents(session?.subagents ?? []) : null;
     if (agents) meta.createSpan({ cls: "terminus-inbox-agents-summary", text: agents });
@@ -487,7 +487,7 @@ export class AgentInboxView extends ItemView {
       const { added, removed } = sumStats(card.changes);
       // One unit, so a narrow card wraps before it rather than inside it.
       const pending = meta.createSpan({ cls: "terminus-inbox-pending" });
-      pending.createSpan({ text: `${card.changes.length} to review` });
+      pending.createSpan({ text: `${fileCount(card.changes.length)} to review` });
       pending.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
       pending.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
     }
@@ -522,11 +522,20 @@ export class AgentInboxView extends ItemView {
     // below a rule and on the alternate surface, as a group card's
     // terminals are in the sidebar.
     const workEl = el.createDiv({ cls: "terminus-inbox-card-body" });
-    if (card.subagents.length === 0) {
+    // Changes from several requests waiting together is where "which of
+    // these did I ask for?" gets hard, so each turn then gets a header with
+    // the prompt that caused it. A single turn needs none: the card is it.
+    if (card.turns.length > 1) {
+      this.renderTurns(workEl, card);
+      // Agents that changed nothing belong to no turn in particular, so
+      // their rows stay on the card, below the turns.
+      this.renderQuietAgents(workEl, card);
+    } else if (card.subagents.length === 0) {
       if (card.leadChanges.length > 0) this.renderChangeList(workEl.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges, card, null);
     } else {
       this.renderAgents(workEl, card);
     }
+    this.renderShellChanges(workEl, card);
 
     this.renderFeedback(workEl, card.token, name);
     this.renderDelegations(workEl, card.token, name);
@@ -935,10 +944,8 @@ export class AgentInboxView extends ItemView {
    * sit between an agent and the next one's files.
    */
   private renderAgents(el: HTMLElement, card: InboxCard): void {
-    const needsRow = (sub: InboxSubagent) => sub.changes.length > 0 || sub.run?.running === true || sub.run?.outcome === "failed";
     const withChanges = card.subagents.filter((sub) => sub.changes.length > 0);
-    const busy = card.subagents.filter((sub) => sub.changes.length === 0 && needsRow(sub));
-    const quiet = card.subagents.filter((sub) => !needsRow(sub));
+    const busy = card.subagents.filter((sub) => sub.changes.length === 0 && needsOwnRow(sub));
 
     if (card.leadChanges.length > 0) {
       this.renderAgent(el, card, {
@@ -951,7 +958,27 @@ export class AgentInboxView extends ItemView {
       });
     }
     for (const sub of [...withChanges, ...busy]) this.renderSubagent(el, card, sub, false);
+    this.renderQuietFold(el, card);
+  }
 
+  /**
+   * The agent rows that belong to the card rather than to any one turn: a
+   * subagent still running or failed with nothing to review yet, then the
+   * fold of finished ones that changed nothing. Only the turn-grouped
+   * layout calls this, since there every agent WITH changes is already
+   * listed under the turn that asked for them.
+   */
+  private renderQuietAgents(el: HTMLElement, card: InboxCard): void {
+    for (const sub of card.subagents.filter((sub) => sub.changes.length === 0 && needsOwnRow(sub))) {
+      this.renderSubagent(el, card, sub, false);
+    }
+    this.renderQuietFold(el, card);
+  }
+
+  /** "3 agents with nothing to review", foldable; nothing when there are
+   *  none. Shared by both layouts. */
+  private renderQuietFold(el: HTMLElement, card: InboxCard): void {
+    const quiet = card.subagents.filter((sub) => !needsOwnRow(sub));
     const quietCount = quiet.length + card.hiddenSubagents;
     if (quietCount === 0) return;
     const expanded = this.ui.expandedQuiet.has(card.token);
@@ -977,7 +1004,7 @@ export class AgentInboxView extends ItemView {
     }
   }
 
-  private renderSubagent(el: HTMLElement, card: InboxCard, sub: InboxSubagent, compact: boolean): void {
+  private renderSubagent(el: HTMLElement, card: InboxCard, sub: InboxSubagent, compact: boolean, scope = ""): void {
     const running = sub.run?.running ?? false;
     const details: string[] = [];
     const time = subagentTime(sub.run);
@@ -999,6 +1026,7 @@ export class AgentInboxView extends ItemView {
       error: failed,
       title: !failed && sub.run?.lastMessage && !running ? sub.run.lastMessage : null,
       compact,
+      scope,
     });
   }
 
@@ -1021,6 +1049,9 @@ export class AgentInboxView extends ItemView {
       compact?: boolean;
       /** A running agent's start, for a timer that ticks in place. */
       liveSince?: number | null;
+      /** Distinguishes this row's change list from the same agent's list
+       *  under another turn, so their folder folds don't share a key. */
+      scope?: string;
     }
   ): void {
     const row = el.createDiv({ cls: "terminus-inbox-agent" });
@@ -1055,13 +1086,161 @@ export class AgentInboxView extends ItemView {
       row.setAttr("title", agent.title);
     }
 
-    if (agent.changes.length > 0) this.renderChangeList(row.createDiv({ cls: "terminus-inbox-agent-changes" }), agent.changes, card, agent.agentId);
+    if (agent.changes.length > 0) {
+      this.renderChangeList(row.createDiv({ cls: "terminus-inbox-agent-changes" }), agent.changes, card, agent.agentId, agent.scope ?? "");
+    }
+  }
+
+  /**
+   * "3 turns · 12m 4s": how many requests this session has had, and how long
+   * it has actually spent working on them -- its turns added up (see
+   * activeTime), not the wall clock, which on a session left open counts
+   * every gap where it sat waiting for the user. A running turn keeps the
+   * total ticking. Per-turn durations aren't here: with the turns listed,
+   * one figure for the session is what the card has room to say.
+   */
+  private renderTurnSummary(meta: HTMLElement, card: InboxCard): void {
+    const session = card.session;
+    // No turns on record: a session that was already running before this
+    // version, or Classic's hooks, which carry no prompt_id to key turns by.
+    // The last turn's own duration is then all there is to show.
+    if (!session || session.turns.length === 0) {
+      if (session?.lastTurnMs != null && session.status !== "working") {
+        meta.createSpan({ text: `turn ${formatDuration(session.lastTurnMs)}` });
+      } else if (!card.ended && session?.status === "working" && session.turnStartedAt !== null) {
+        liveElapsed(meta, session.turnStartedAt, "turn so far");
+      }
+      return;
+    }
+    const count = session.turns.length;
+    const { finishedMs, runningSince } = activeTime(session);
+    const running = runningSince !== null && !card.ended;
+    const summary = meta.createSpan({ cls: "terminus-inbox-turns-summary" });
+    summary.createSpan({ text: `${count} ${count === 1 ? "turn" : "turns"}` });
+    if (running && runningSince !== null) liveElapsed(summary, runningSince, "", finishedMs);
+    else if (finishedMs > 0) summary.createSpan({ text: formatDuration(finishedMs) });
+    const total = finishedMs + (running && runningSince !== null ? Date.now() - runningSince : 0);
+    setTooltip(
+      summary,
+      `${count} ${count === 1 ? "request" : "requests"} this session, ${formatDuration(total)} spent working.\nTime between turns, while Claude waited on you, isn't counted.`
+    );
+  }
+
+  /**
+   * The card's changes under one header per turn, oldest first, each header
+   * carrying the prompt that caused them (see inboxModel's buildTurns). This
+   * is what turns "7 files to review" into "this request changed 4 and that
+   * one changed 3", which is the difference between reviewing a pile and
+   * reviewing a request.
+   */
+  private renderTurns(el: HTMLElement, card: InboxCard): void {
+    const section = el.createDiv({ cls: "terminus-inbox-turns" });
+    card.turns.forEach((turn, index) => {
+      const scope = turn.promptId ?? "unattributed";
+      const key = `${card.token}|${scope}`;
+      const folded = this.ui.collapsedTurns.has(key);
+      const head = section.createDiv({ cls: "terminus-inbox-turn-head" });
+      head.toggleClass("is-failed", turn.record?.failed === true);
+      setIcon(head.createSpan({ cls: "terminus-inbox-chevron" }), folded ? "chevron-right" : "chevron-down");
+      head.createSpan({ cls: "terminus-inbox-turn-index", text: String(index + 1) });
+      const label = turnLabel(turn);
+      // The header shows one line; hovering gives the whole prompt. Obsidian's
+      // own tooltip rather than a title attribute: it appears at once, wraps
+      // over as many lines as the prompt needs and follows the theme, where
+      // the native one waits about a second and renders as one OS-styled
+      // strip. Deliberately no `classes` option -- that is Obsidian 1.8.7+
+      // and this plugin supports 1.7.2.
+      const promptEl = head.createSpan({ cls: "terminus-inbox-turn-prompt", text: label });
+      setTooltip(promptEl, turn.prompt ?? label, { placement: "top" });
+      const { added, removed } = sumStats(turn.changes);
+      const stats = head.createSpan({ cls: "terminus-inbox-turn-stats" });
+      stats.createSpan({ text: fileCount(turn.changes.length) });
+      stats.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
+      stats.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
+      const toggle = () => {
+        this.ui.userAction();
+        if (folded) this.ui.collapsedTurns.delete(key);
+        else this.ui.collapsedTurns.add(key);
+        this.render();
+      };
+      head.addEventListener("click", toggle);
+      makeActivatable(head, toggle, () => undefined);
+      head.setAttr("aria-expanded", String(!folded));
+      if (folded) return;
+
+      const body = section.createDiv({ cls: "terminus-inbox-turn-body" });
+      // A turn with no subagent of its own doesn't need a "Lead" row to
+      // hang its files off: everything in it is the lead's.
+      if (turn.subagents.length === 0) {
+        this.renderChangeList(body.createDiv({ cls: "terminus-inbox-changes" }), turn.leadChanges, card, null, scope);
+        return;
+      }
+      if (turn.leadChanges.length > 0) {
+        this.renderAgent(body, card, {
+          agentId: null,
+          mark: { kind: "lead", icon: "bot", label: "Lead session" },
+          name: "Lead",
+          secondary: "main session",
+          details: [],
+          changes: turn.leadChanges,
+          scope,
+        });
+      }
+      for (const sub of turn.subagents) this.renderSubagent(body, card, sub, false, scope);
+    });
+  }
+
+  /**
+   * Files that changed in the session's folder with no edit hook to account
+   * for them -- Claude working through the shell (see git/gitStatus.ts).
+   * Listed only: there's no pre-edit snapshot of these, so there's no diff
+   * to show and no Reject that could revert them, and claiming otherwise
+   * would be worse than saying nothing. What this buys is that an empty
+   * review list stops meaning "nothing happened".
+   */
+  private renderShellChanges(el: HTMLElement, card: InboxCard): void {
+    const changes = card.session?.shellChanges ?? [];
+    if (changes.length === 0) return;
+    const expanded = this.ui.expandedShellChanges.has(card.token);
+    const section = el.createDiv({ cls: "terminus-inbox-shell" });
+    const head = section.createDiv({ cls: "terminus-inbox-shell-head" });
+    setIcon(head.createSpan({ cls: "terminus-inbox-chevron" }), expanded ? "chevron-down" : "chevron-right");
+    setIcon(head.createSpan({ cls: "terminus-meta-icon" }), "terminal");
+    head.createSpan({ text: `${fileCount(changes.length)} changed outside Claude's edit tools` });
+    setTooltip(
+      head,
+      "Changed by a shell command -- a formatter, sed, a package manager -- which Terminus can't snapshot, diff or revert.\nListed so an empty review list doesn't read as nothing having happened."
+    );
+    const toggle = () => {
+      this.ui.userAction();
+      if (expanded) this.ui.expandedShellChanges.delete(card.token);
+      else this.ui.expandedShellChanges.add(card.token);
+      this.render();
+    };
+    head.addEventListener("click", toggle);
+    makeActivatable(head, toggle, () => undefined);
+    head.setAttr("aria-expanded", String(expanded));
+    if (!expanded) return;
+
+    const list = section.createDiv({ cls: "terminus-inbox-shell-list" });
+    const base = this.plugin.getVaultBasePath();
+    for (const change of changes) {
+      const relative = pathRelative(base, change.filePath);
+      const path = relative.startsWith("..") ? change.filePath : relative;
+      const row = list.createDiv({ cls: "terminus-inbox-shell-row" });
+      row.createSpan({ cls: "terminus-inbox-shell-path", text: path, attr: { title: change.filePath } });
+      row.createSpan({ cls: "terminus-inbox-shell-status", text: describeStatus(change.status) });
+      setTooltip(row, `Open ${path}`);
+      const open = () => void openFileAtPath(this.plugin, change.filePath);
+      row.addEventListener("click", open);
+      makeActivatable(row, open, () => undefined);
+    }
   }
 
   /** `owner` is the agent the rows sit under (null: the lead); a file that
    *  other agents in this session also edited says which. A long list over
    *  several folders is grouped by folder, each foldable. */
-  private renderChangeList(parent: HTMLElement, changes: PendingChange[], card: InboxCard, owner: string | null): void {
+  private renderChangeList(parent: HTMLElement, changes: PendingChange[], card: InboxCard, owner: string | null, scope = ""): void {
     if (changes.length === 0) return;
     const list = parent.createDiv({ cls: "terminus-pending-list" });
     const row = (target: HTMLElement, change: PendingChange, hideFolder: boolean) => {
@@ -1074,7 +1253,7 @@ export class AgentInboxView extends ItemView {
       return;
     }
 
-    const keyOf = (folder: string) => `${card.token}|${owner ?? ""}|${folder}`;
+    const keyOf = (folder: string) => `${card.token}|${scope}|${owner ?? ""}|${folder}`;
     const { added, removed } = sumStats(changes);
     const allFolded = folders.every((f) => this.ui.collapsedFolders.has(keyOf(f.folder)));
     const head = list.createDiv({ cls: "terminus-inbox-tree-head" });
@@ -1243,11 +1422,36 @@ function agentLabel(card: InboxCard, agentId: string | null, agentType: string |
   return run?.description ?? run?.agentType ?? agentType ?? "a subagent";
 }
 
-/** "running 2m 14s", counting up on its own (see tickElapsed). */
-function liveElapsed(parent: HTMLElement, since: number, label: string): void {
+/** "running 2m 14s", counting up on its own (see tickElapsed). `base` is
+ *  added to the elapsed time, for a running total that already has finished
+ *  turns in it; `label` can be empty where the surrounding text says it. */
+function liveElapsed(parent: HTMLElement, since: number, label: string, base = 0): void {
   const el = parent.createSpan();
-  el.appendText(`${label} `);
-  el.createSpan({ cls: "terminus-inbox-live-elapsed", text: formatDuration(Date.now() - since), attr: { "data-since": String(since) } });
+  if (label) el.appendText(`${label} `);
+  el.createSpan({
+    cls: "terminus-inbox-live-elapsed",
+    text: formatDuration(base + Date.now() - since),
+    attr: { "data-since": String(since), "data-base": String(base) },
+  });
+}
+
+/** A subagent row that has to show on its own: it changed something, it's
+ *  still running, or it failed. The rest fold into "nothing to review". */
+function needsOwnRow(sub: InboxSubagent): boolean {
+  return sub.changes.length > 0 || sub.run?.running === true || sub.run?.outcome === "failed";
+}
+
+/** A turn's header text: the prompt it opened with, in one line. */
+function turnLabel(turn: InboxTurn): string {
+  const prompt = turn.prompt ? plainPreview(turn.prompt) : "";
+  if (prompt) return prompt;
+  // A turn Terminus saw only through its edits: Classic installs no
+  // UserPromptSubmit hook, and in Multi-agent they can go in mid-turn.
+  return turn.promptId ? "Request not recorded" : "Not tied to a request";
+}
+
+function fileCount(n: number): string {
+  return `${n} ${n === 1 ? "file" : "files"}`;
 }
 
 /** "3 agents · 2 working · 1 failed" for a folded card; null with none.

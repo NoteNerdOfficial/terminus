@@ -16,6 +16,7 @@ import { ResumeQueue } from "./groups/ResumeQueue";
 import { TERMINAL_COLOR_PALETTE } from "./terminal/colorPalette";
 import { fetchLatestPluginVersion, PluginVersionStatus, versionStatus } from "./pluginVersion";
 import { PendingChangesStore, ResolvedChange } from "./state/PendingChangesStore";
+import { SessionLog } from "./state/SessionLog";
 import { ActionLog } from "./state/ActionLog";
 import { AgentSessionStore } from "./state/AgentSessionStore";
 import { TranscriptUsageReader, subagentTranscriptPath } from "./claude/transcriptUsage";
@@ -60,6 +61,9 @@ export default class TerminusPlugin extends Plugin {
   readonly pendingChangesStore = new PendingChangesStore();
   /** Each terminal's Claude session status, for the Agent inbox. */
   readonly agentSessionStore = new AgentSessionStore();
+  /** Per-session notes in the vault, a section per turn. Off by default;
+   *  see state/SessionLog.ts. */
+  readonly sessionLog = new SessionLog(this);
   /** Review comments queued per session (Multi-agent only). */
   readonly feedbackStore = new FeedbackStore();
   /** Messages queued per session, sent one per turn end (Multi-agent only). */
@@ -136,6 +140,10 @@ export default class TerminusPlugin extends Plugin {
     this.agentSessionStore.on("change", (session) => {
       if (session.status === "working") this.clearQueueSendPending(session.token);
       this.drainSteerQueue(session.token);
+      // SessionEnd, the shell exiting and the terminal closing all land here
+      // as `running: false`, so the log is closed off once from one place
+      // rather than three; endSession itself is idempotent.
+      if (!session.running) void this.sessionLog.endSession(session.token);
     });
     this.pendingChangesStore.on("resolved", (item: ResolvedChange) => {
       const stats = computeDiffStats(item.diff);

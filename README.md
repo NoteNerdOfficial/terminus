@@ -42,6 +42,7 @@ Terminus opens in the **Multi-agent experience**: an Agent inbox with a card per
 - [Multi-agent experience](#multi-agent-experience)
   - [Groups (left sidebar)](#groups-left-sidebar)
   - [Agent inbox (right sidebar)](#agent-inbox-right-sidebar)
+  - [Session logs](#session-logs)
 - [Commands](#commands)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
@@ -179,15 +180,28 @@ Multi-agent is the default: it lets you run several Claude sessions side by side
 
 ### Agent inbox (right sidebar)
 
-- **A card per Claude session**, sorted into Needs attention, Working and Finished, with what it is doing (or its closing message), how long its turn took, its git branch, and tokens, context use and an estimated cost from its transcript.
+- **A card per Claude session**, sorted into Needs attention, Working and Finished, with what it is doing (or its closing message), how many turns it has taken and how long it has spent working on them, its git branch, and tokens, context use and an estimated cost from its transcript. That time is the turns added up, not the clock since the session started, so one left open over lunch doesn't claim four hours of work.
 - **It follows the sidebar.** The inbox shows the selected group; sessions in other groups are listed in one line each under Elsewhere, and a line says how many of them need you. **Show all** lists everything.
 - **Changes sit under whoever made them.** A session's pending changes are listed under the lead or the subagent that made them, with the subagent's task as its name and live timers. A long list over several folders groups under foldable folders.
+- **Grouped by the request that caused them.** When a card's pending changes come from more than one turn, each turn gets a header with the prompt behind it and its own file count, so "7 files to review" becomes "this request changed four, that one changed three". Hover a header to read the whole prompt. A file edited in two turns is listed under the first, since that is the snapshot rejecting it would return the file to; a subagent's edits sit under the turn you actually asked for rather than one of their own.
+- **Files Claude changed another way.** Terminus can only snapshot `Edit`, `Write` and `NotebookEdit`. Anything Claude does through the shell — a formatter, `sed`, a package manager rewriting a lockfile — leaves nothing it can diff, and a review list that is silently empty reads as "nothing happened". When the session's folder is a git repository, Terminus compares `git status` across each turn and lists whatever changed that no edit hook accounted for. Listed only: with no pre-edit snapshot there is no honest diff to show and no revert it could stand behind. Turn it off under Settings → Detect shell changes.
 - **Tell a running session something.** Each card has a box with three ways to deliver a message: *Steer* types it into the session's input line and presses Enter, and Claude folds it into the turn it is working on; *Queue* holds it until the turn ends; *Add to input* types it for you to review and send. Steering works mid-turn and is refused only while Claude waits on a prompt. Cmd/Ctrl+Enter does your default (Settings → Terminus → Default for messages to a running session) and Cmd/Ctrl+Shift+Enter does the other. Drafts survive re-renders.
 - **A queue you can manage.** Queued messages are listed above the box in the order they will go. Drag to reorder, edit in place, remove, or promote one with *Steer* to send it now. When a turn ends, the next queued message is sent, one per turn, unless Claude is waiting on a prompt or the last turn failed (the card says why). The queue is saved with the terminal, so it survives a restart, and comes back paused with a *Resume* button.
 - **Send a task to a new terminal.** Opens a new Claude session beside the sender with your prompt typed in, unsent. Its result shows on the sender's card, and one click types it back into the sender's input line.
 - **Fork a session.** Starts a new terminal in the same group continuing from this session's conversation (`claude --resume <id> --fork-session`), named "(fork)".
 - **Review feedback.** Comment on a hunk in Split Diff, queue comments per session, and type them into that session's input line between turns.
 - **Quiet by default.** An inbox you already have open only comes forward after a meaningful burst of edits (three files or 50 lines), and never while you are rearranging it. Terminus never submits anything for you except when you press Steer (or send a queued message).
+
+### Session logs
+
+Off unless you turn it on. **Settings → Terminus → Log sessions to notes** makes Terminus write one note per Claude session into your vault (`Terminus/Sessions`, or wherever you point it), appending a section as each turn ends.
+
+- **A section per turn**, with the prompt, the files that turn changed and by how much, how long it took, and anything it changed outside Claude's edit tools. Files inside the vault are wiki-linked, so a session joins your graph instead of sitting beside it.
+- **Frontmatter a Bases view can read**: the session's status, terminal, folder and branch, plus its turn and file totals once it ends — so you get a table of your sessions without any UI for it.
+- **Deterministic, and free.** Every line comes from a hook payload or a stored record. Nothing is summarised by a model, so there is no token cost, no waiting, and nothing that can describe a session wrongly.
+- **Append-only.** A session cut short by a crash or a killed Obsidian keeps everything up to its last finished turn. The only rewrite is the frontmatter update when it ends.
+
+It ships off because it is the only part of Terminus that writes your prompts to disk — the action log deliberately keeps filenames and statistics and nothing else. Prompts are recorded up to 2,000 characters.
 
 ## Commands
 
@@ -231,6 +245,10 @@ All of these appear in the command palette under `Terminus:`. None ship with a d
 
 **Multi-agent.** The Multi-agent experience adds hooks for `SessionStart`, `SessionEnd`, `UserPromptSubmit` and `StopFailure` (and, while subagents are tracked, the Agent tool's `PreToolUse`, `SubagentStart` and `SubagentStop`) to the same bundled bridge scripts. Every event carries its terminal's own token, so a session, its subagents and their edits are always attributed to the right terminal. Nothing polls. If your vault path contains a space, the hook commands are written single-quoted so the shell runs them correctly.
 
+**Tying a change to the request behind it.** Every hook payload carries a `prompt_id`, and — checked against Claude Code 2.1.304 — one id covers a whole user turn, across every API request inside it, while a subagent's calls carry their *lead's* id rather than one of their own. `UserPromptSubmit` and `Stop` carry the same id, so the prompt text, the edits it caused and the moment the turn ended all join up without inferring anything from event order. That is what the inbox groups by, and what each session-log entry is built from.
+
+**Noticing shell edits.** The `PreToolUse` matcher is exactly `Edit|Write|NotebookEdit`, and a `Bash` result carries no diff, so a file Claude rewrites with a shell command is invisible to the review panel. With "Detect shell changes" on, Terminus reads `git status` as a turn begins and again as it ends, and reports whatever changed in between that no edit hook accounted for. The baseline is per turn rather than per session because that is what keeps your own edits out of the result: yours happen between turns, whereas during one Claude is the only writer. It asks git for `--show-cdup` rather than `--show-toplevel`, so a vault reached through a symlink is spelled the same way the hook payloads spell it. Outside a git repository it does nothing at all.
+
 All three hooks are added without disturbing anything already in that file, and Claude Code reads hooks at session start — so a `claude` that was already running when the plugin first provisioned them picks them up on its next start.
 
 **Terminal.** There's no native-addon PTY dependency (no `node-pty`, no Electron-ABI rebuild headaches). A small bundled Python script (`resources/pty_helper.py`) allocates a real pseudo-terminal via Python's stdlib and proxies bytes between the PTY and its own stdio; the plugin talks to it with a plain `child_process.spawn`. The terminal UI is `xterm.js`.
@@ -246,7 +264,7 @@ All three hooks are added without disturbing anything already in that file, and 
 - macOS or Linux (Windows isn't supported; shell integration and the PTY helper are Unix-specific).
 - Python 3.9+ (`pty_helper.py` uses `os.waitstatus_to_exitcode`, added in 3.9) and the [`claude` CLI](https://claude.com/product/claude-code) installed and logged in. Both are auto-detected (including a login-shell `PATH` lookup, since Obsidian launched from Finder/Dock often inherits a minimal one); if detection ever picks the wrong binary, Settings has manual overrides for the shell and Python 3 paths.
 - On some machines, Claude Code's normal Keychain-based login can't be read by "Explain this" / "Suggest a fix" (a spawned background process asking for another app's Keychain item can hang indefinitely). If those hang or fail, run `claude setup-token` in a real terminal and paste the result into Settings → Advanced → "Claude Code auth token", then use the Test button next to it to confirm -- takes effect immediately, no restart needed.
-- `git` is optional, only needed for the "vs git HEAD" diff view.
+- `git` is optional. It powers the "vs git HEAD" diff view, the branch shown on each inbox card, and shell-change detection. Without it — or outside a repository — those three simply don't appear, and nothing else changes.
 
 ## Development
 
@@ -290,6 +308,8 @@ The build bundles `src/main.ts` into `main.js` with esbuild, and regenerates `st
 | `src/onboarding/gettingStarted.ts` | Bundled first-run and getting-started copy |
 | `src/backlinks/breakage.ts` | Backlink-breakage detection |
 | `src/git/gitDiff.ts` | Git HEAD baseline diff |
+| `src/git/gitStatus.ts` | Per-turn `git status` snapshots behind shell-change detection |
+| `src/state/SessionLog.ts`, `sessionLogFormat.ts` | Per-session notes in the vault: the vault I/O, and the pure formatters that fix their exact wording |
 | `src/claude/headlessAssist.ts` | Standalone `claude -p` calls for explain/suggest-fix |
 | `src/modals/` | Action log, command-help, confirm, rename, rescue-terminal, and getting-started modals |
 | `resources/pty_helper.py` | PTY allocation helper (spawned by the plugin) |

@@ -16,8 +16,13 @@ export class InboxUiState {
   readonly dismissed = new Set<string>();
   /** Cards whose "nothing to review" agents are unfolded. */
   readonly expandedQuiet = new Set<string>();
-  /** Folders folded in a long change list, by "token|agent|folder". */
+  /** Folders folded in a long change list, by "token|scope|agent|folder". */
   readonly collapsedFolders = new Set<string>();
+  /** Turn sections folded on a card, by "token|promptId". Only cards whose
+   *  pending changes span more than one turn have them. */
+  readonly collapsedTurns = new Set<string>();
+  /** Cards whose "changed outside Claude's edit tools" list is unfolded. */
+  readonly expandedShellChanges = new Set<string>();
   /** A card to bring into view on the next render: set by the sidebar's
    *  "to review" counts, consumed by the inbox. */
   revealToken: string | null = null;

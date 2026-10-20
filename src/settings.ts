@@ -80,6 +80,18 @@ export interface MultiAgentSettings {
   sendBehavior: SendBehavior;
   showEstimatedCost: boolean;
   showGitBranch: boolean;
+  /** Reads `git status` at each turn's start and end to notice files Claude
+   *  changed through the shell, which the Edit/Write/NotebookEdit hooks
+   *  can't see (see git/gitStatus.ts). Two git calls per turn, and nothing
+   *  at all outside a repo. */
+  detectShellChanges: boolean;
+  /** Writes one note per Claude session into the vault, a section per turn
+   *  (see state/SessionLog.ts). Off by default and never turned on by
+   *  anything but the user: it is the only part of Terminus that puts
+   *  prompt text on disk, which ActionLog deliberately does not. */
+  logSessions: boolean;
+  /** Vault folder for those notes; blank falls back to the default. */
+  sessionLogFolder: string;
   /** Asks GitHub for the latest release (the sidebar's update link). Off by
    *  default: with it off, Terminus makes no network requests at all. */
   checkForUpdates: boolean;
@@ -134,6 +146,9 @@ export const DEFAULT_MULTI_AGENT_SETTINGS: MultiAgentSettings = {
   sendBehavior: "steer",
   showEstimatedCost: true,
   showGitBranch: true,
+  detectShellChanges: true,
+  logSessions: false,
+  sessionLogFolder: "Terminus/Sessions",
   checkForUpdates: false,
 };
 
@@ -359,6 +374,44 @@ export class TerminusSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
           this.plugin.refreshTerminusViews();
         })
+      );
+
+    new Setting(containerEl)
+      .setName("Detect shell changes")
+      .setDesc(
+        "Claude's Edit and Write tools are the only ones Terminus can snapshot. This reads git status at the start and end of each turn so files Claude changed another way -- a formatter, sed, a package manager -- are at least listed on its card. Two git calls per turn, and nothing outside a git repository."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(multiAgent.detectShellChanges).onChange(async (value) => {
+          multiAgent.detectShellChanges = value;
+          await this.plugin.saveSettings();
+          this.plugin.refreshTerminusViews();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Log sessions to notes")
+      .setDesc(
+        "Writes one note per Claude session into your vault, a section appended as each turn ends: the prompt, the files that turn changed and by how much, how long it took, and anything it changed outside Claude's edit tools. Entirely deterministic -- every line comes from a hook payload, nothing is summarised by a model, so there is no token cost. Off by default because it is the only part of Terminus that writes your prompts to disk, in full as Claude Code reported them."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(multiAgent.logSessions).onChange(async (value) => {
+          multiAgent.logSessions = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Session log folder")
+      .setDesc("Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_MULTI_AGENT_SETTINGS.sessionLogFolder)
+          .setValue(multiAgent.sessionLogFolder)
+          .onChange(async (value) => {
+            multiAgent.sessionLogFolder = value;
+            await this.plugin.saveSettings();
+          })
       );
 
     new Setting(containerEl)

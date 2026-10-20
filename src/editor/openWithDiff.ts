@@ -118,6 +118,24 @@ function findFirstHunkLine(change: PendingChange): number | null {
  * the terminal does (see TerminalLinks.ts) -- the two entry points shouldn't
  * disagree about what opening a file is.
  */
+/**
+ * Opens a file by absolute path, with no change attached: the same
+ * in-vault-or-else-the-OS routing as openChangedFile, for a file Terminus
+ * knows changed but holds no snapshot of (the Agent inbox's shell changes,
+ * see git/gitStatus.ts). There's nothing to decorate with a diff, so this
+ * just opens it.
+ */
+export async function openFileAtPath(plugin: TerminusPlugin, absolutePath: string): Promise<void> {
+  const { app } = plugin;
+  const relPath = pathRelative(plugin.getVaultBasePath(), absolutePath);
+  const file = relPath.startsWith("..") ? null : app.vault.getAbstractFileByPath(relPath);
+  if (!(file instanceof TFile)) {
+    openOutsideObsidian(absolutePath);
+    return;
+  }
+  await app.workspace.getLeaf(true).openFile(file);
+}
+
 function openOutsideObsidian(absolutePath: string): void {
   if (!fileExistsSync(absolutePath)) {
     // A file the change created and something has since deleted, or a path

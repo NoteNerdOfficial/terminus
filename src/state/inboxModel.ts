@@ -1,4 +1,4 @@
-import type { AgentSession, SubagentRun } from "./AgentSessionStore";
+import type { AgentSession, SubagentRun, TurnRecord } from "./AgentSessionStore";
 import type { PendingChange } from "./PendingChangesStore";
 
 /** A subagent's row on a card, with the pending changes it made. */
@@ -10,6 +10,24 @@ export interface InboxSubagent {
   run: SubagentRun | null;
   agentType: string;
   changes: PendingChange[];
+}
+
+/** One user turn's slice of a card: the request, and what it changed. */
+export interface InboxTurn {
+  /** Null for the one group of changes whose payloads carried no prompt_id
+   *  (hooks installed mid-turn, or a bridge from before they did). */
+  promptId: string | null;
+  /** The session's record of the turn, when it still has one: it can fall
+   *  past the store's cap, or belong to the session that ran before a
+   *  /clear while its changes are still pending. */
+  record: TurnRecord | null;
+  /** The prompt, when known; null for a turn seen only through its edits. */
+  prompt: string | null;
+  changes: PendingChange[];
+  leadChanges: PendingChange[];
+  /** Only the subagents that changed something in this turn: a subagent
+   *  that made no changes belongs to the card, not to any one turn. */
+  subagents: InboxSubagent[];
 }
 
 /** One card: a terminal's Claude session and the changes it left. */
@@ -27,6 +45,11 @@ export interface InboxCard {
   subagents: InboxSubagent[];
   /** Finished subagents with no pending changes left out of `subagents`. */
   hiddenSubagents: number;
+  /** The same changes grouped by the turn that made them, oldest turn
+   *  first; see buildTurns. One entry means everything pending came from a
+   *  single request, which is the common case and the one the card draws
+   *  without turn headers. */
+  turns: InboxTurn[];
 }
 
 export interface Inbox {
@@ -108,24 +131,8 @@ function finishedRank(card: InboxCard): number {
 }
 
 function buildCard(token: string, session: AgentSession | null, changes: PendingChange[]): InboxCard {
-  const leadChanges: PendingChange[] = [];
-  const byAgent = new Map<string, InboxSubagent>();
   const runs = session?.subagents ?? [];
-
-  for (const change of changes) {
-    const author = change.agents.find((a) => a.token === token);
-    if (!author?.agentId) {
-      leadChanges.push(change);
-      continue;
-    }
-    let row = byAgent.get(author.agentId);
-    if (!row) {
-      const run = runs.find((r) => r.agentId === author.agentId) ?? null;
-      row = { agentId: author.agentId, run, agentType: run?.agentType ?? author.agentType ?? "subagent", changes: [] };
-      byAgent.set(author.agentId, row);
-    }
-    row.changes.push(change);
-  }
+  const { leadChanges, byAgent } = splitByAgent(token, changes, runs);
 
   // Failed runs always show, like running ones: a failure shouldn't fold away.
   const finishedQuiet = runs.filter((r) => !r.running && r.outcome !== "failed" && !byAgent.has(r.agentId));
@@ -149,5 +156,90 @@ function buildCard(token: string, session: AgentSession | null, changes: Pending
     leadChanges,
     subagents,
     hiddenSubagents: finishedQuiet.length - shownQuiet.size,
+    turns: buildTurns(token, session, changes),
   };
+}
+
+/**
+ * Splits a set of a card's changes into the lead's and each subagent's.
+ * Used for the whole card and again for each turn's slice of it, so both
+ * attribute an edit the same way: by the agent that FIRST touched the file,
+ * since that's the row's baseline (see PendingChangesStore.recordChange).
+ */
+function splitByAgent(
+  token: string,
+  changes: PendingChange[],
+  runs: readonly SubagentRun[]
+): { leadChanges: PendingChange[]; byAgent: Map<string, InboxSubagent> } {
+  const leadChanges: PendingChange[] = [];
+  const byAgent = new Map<string, InboxSubagent>();
+  for (const change of changes) {
+    const author = change.agents.find((a) => a.token === token);
+    if (!author?.agentId) {
+      leadChanges.push(change);
+      continue;
+    }
+    let row = byAgent.get(author.agentId);
+    if (!row) {
+      const run = runs.find((r) => r.agentId === author.agentId) ?? null;
+      row = { agentId: author.agentId, run, agentType: run?.agentType ?? author.agentType ?? "subagent", changes: [] };
+      byAgent.set(author.agentId, row);
+    }
+    row.changes.push(change);
+  }
+  return { leadChanges, byAgent };
+}
+
+/**
+ * The card's changes grouped by the turn that made them, in the session's
+ * own turn order so they read oldest to newest like the conversation did.
+ *
+ * A row can coalesce edits from more than one turn (see
+ * PendingChange.promptIds); it's listed under the FIRST of them, the turn
+ * whose pre-edit snapshot the row would revert to -- the same rule that
+ * puts a row edited by two terminals on the first one's card. A subagent's
+ * edits carry their lead's prompt_id, so they land in the turn the user
+ * actually asked for rather than in one of their own.
+ */
+function buildTurns(token: string, session: AgentSession | null, changes: PendingChange[]): InboxTurn[] {
+  if (changes.length === 0) return [];
+  const runs = session?.subagents ?? [];
+  const byTurn = new Map<string, PendingChange[]>();
+  const unattributed: PendingChange[] = [];
+  for (const change of changes) {
+    const promptId = change.promptIds[0];
+    if (promptId === undefined) {
+      unattributed.push(change);
+      continue;
+    }
+    const list = byTurn.get(promptId) ?? [];
+    list.push(change);
+    byTurn.set(promptId, list);
+  }
+
+  const turns: InboxTurn[] = [];
+  const add = (promptId: string | null, record: TurnRecord | null, inTurn: PendingChange[]) => {
+    const { leadChanges, byAgent } = splitByAgent(token, inTurn, runs);
+    const subagents: InboxSubagent[] = [];
+    for (const run of runs) {
+      const row = byAgent.get(run.agentId);
+      if (row) subagents.push(row);
+    }
+    // Changes from subagents the session no longer has on record go last,
+    // as they do on the card itself.
+    for (const row of byAgent.values()) if (!row.run) subagents.push(row);
+    turns.push({ promptId, record, prompt: record?.prompt ?? null, changes: inTurn, leadChanges, subagents });
+  };
+
+  for (const record of session?.turns ?? []) {
+    const inTurn = byTurn.get(record.promptId);
+    if (!inTurn) continue;
+    byTurn.delete(record.promptId);
+    add(record.promptId, record, inTurn);
+  }
+  // Any turn the session has no record of (past the store's cap, or from
+  // before a /clear), in the order its changes were made.
+  for (const [promptId, inTurn] of byTurn) add(promptId, null, inTurn);
+  if (unattributed.length > 0) add(null, null, unattributed);
+  return turns;
 }

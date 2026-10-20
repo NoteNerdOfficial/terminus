@@ -3152,6 +3152,144 @@
   color: var(--text-faint);
 }
 
+/* Turn grouping (Multi-agent): a header per user request above the files it
+   changed, shown only when a card's pending changes span more than one. The
+   header reads as a quieter sibling of the folder header it sits beside. */
+.terminus-inbox-turns-summary {
+  display: inline-flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.terminus-inbox-turns {
+  padding: 2px 0;
+}
+
+.terminus-inbox-turn-head {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 5px 10px 5px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.terminus-inbox-turn-head:hover,
+.terminus-inbox-turn-head:focus-visible {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-inbox-turn-head .terminus-inbox-chevron {
+  flex: none;
+  align-self: center;
+}
+
+/* The turn's position in the session, so two similar prompts stay apart. */
+.terminus-inbox-turn-index {
+  flex: none;
+  min-width: 1.1em;
+  padding: 0 3px;
+  border-radius: var(--radius-s);
+  background-color: var(--background-modifier-border);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.terminus-inbox-turn-head.is-failed .terminus-inbox-turn-index {
+  background-color: var(--background-modifier-error);
+  color: var(--text-normal);
+}
+
+/* The prompt takes the room that's left and ends in an ellipsis; the whole
+   of it is on the header's title. */
+.terminus-inbox-turn-prompt {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-normal);
+}
+
+.terminus-inbox-turn-stats {
+  flex: none;
+  display: inline-flex;
+  gap: 5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.terminus-inbox-turn-body {
+  margin: 0 0 4px 10px;
+  border-left: 1px solid var(--background-modifier-border-hover);
+}
+
+.terminus-inbox-turn-body > .terminus-inbox-changes .terminus-pending-list {
+  padding: 0 0 0 6px;
+}
+
+/* Files changed outside Claude's edit tools (see git/gitStatus.ts). Warning
+   colours would overstate it -- these are most often a formatter doing its
+   job -- so it reads as a note, with only the rows clickable. */
+.terminus-inbox-shell {
+  padding: 2px 0 4px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.terminus-inbox-shell-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px 5px 8px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.terminus-inbox-shell-head:hover,
+.terminus-inbox-shell-head:focus-visible {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-inbox-shell-list {
+  margin: 0 0 2px 10px;
+  border-left: 1px solid var(--background-modifier-border-hover);
+}
+
+.terminus-inbox-shell-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 8px 3px 10px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+
+.terminus-inbox-shell-row:hover,
+.terminus-inbox-shell-row:focus-visible {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-inbox-shell-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-monospace);
+  color: var(--text-muted);
+}
+
+.terminus-inbox-shell-status {
+  flex: none;
+  color: var(--text-faint);
+}
+
 .terminus-inbox-feedback {
   padding: 8px 12px 10px 16px;
   border-top: 1px solid var(--background-modifier-border);

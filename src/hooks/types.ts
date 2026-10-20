@@ -6,6 +6,11 @@ export interface PreToolUseHookPayloadBase {
   session_id: string;
   transcript_path: string;
   cwd: string;
+  /** The user turn this call belongs to. Captured from 2.1.304: one id
+   *  covers a whole turn, across every API request inside it, and a
+   *  subagent's call carries its LEAD's id -- so this is what ties a file
+   *  change back to the request that caused it, for the lead and its
+   *  subagents alike. UserPromptSubmit and Stop carry the same id. */
   prompt_id: string;
   permission_mode: string;
   hook_event_name: "PreToolUse";
@@ -75,6 +80,10 @@ export interface SessionEndHookPayload extends SessionHookPayloadBase {
 export interface UserPromptSubmitHookPayload extends SessionHookPayloadBase {
   hook_event_name: "UserPromptSubmit";
   prompt: string;
+  /** The turn this prompt opens, matching the prompt_id on the edits it
+   *  causes and on its Stop (captured from 2.1.304) -- so the prompt text
+   *  can be joined to them without guessing from event order. */
+  prompt_id: string;
 }
 
 // Subagent payloads, captured from a real 2.1.296 run with both background
@@ -139,6 +148,8 @@ export type SessionEventHookPayload =
 
 export interface StopHookPayload extends SessionHookPayloadBase {
   hook_event_name: "Stop";
+  /** The turn that just ended; see PreToolUseHookPayloadBase.prompt_id. */
+  prompt_id: string;
   stop_hook_active: boolean;
   last_assistant_message?: string;
   /** Background tasks still running as the turn ends; see BackgroundTask. */
@@ -150,6 +161,10 @@ export interface StopHookPayload extends SessionHookPayloadBase {
  *  agent_id it's a subagent that failed; without, the lead's turn. */
 export interface StopFailureHookPayload extends SessionHookPayloadBase {
   hook_event_name: "StopFailure";
+  /** The turn that failed. Optional: Stop carries one (captured from
+   *  2.1.304) but no StopFailure has been captured to confirm it does too,
+   *  so callers fall back to closing whichever turn is open. */
+  prompt_id?: string;
   agent_id?: string;
   agent_type?: string;
   /** An error code, e.g. "model_not_found". */

@@ -18,6 +18,39 @@ export type AgentStatus = "working" | "needs-attention" | "finished-unread" | "i
  */
 export type NeedsKind = "permission" | "input" | "unread-turn";
 
+/**
+ * One user turn: the prompt that opened it, and when it ran. Keyed by
+ * Claude Code's `prompt_id`, which (captured from 2.1.304) is stable for a
+ * whole turn across every API request in it, and is carried by the lead's
+ * edits, its subagents' edits and the turn's Stop alike -- so it's what
+ * ties a file change back to the request that caused it.
+ */
+export interface TurnRecord {
+  promptId: string;
+  /** The prompt, truncated. Null for a turn first seen through one of its
+   *  edits rather than its UserPromptSubmit: Classic installs no such hook,
+   *  and in Multi-agent the hooks can be installed mid-turn. */
+  prompt: string | null;
+  startedAt: number;
+  /** Null while the turn runs. */
+  endedAt: number | null;
+  /** Ended in a StopFailure rather than a Stop. */
+  failed: boolean;
+}
+
+/** A file in the session's folder that changed with no Edit/Write/
+ *  NotebookEdit hook to account for it -- Claude working through the shell.
+ *  See git/gitStatus.ts for how these are noticed and why they're only ever
+ *  listed, never diffed or credited to a turn's commands. */
+export interface ShellChange {
+  /** Absolute path. */
+  filePath: string;
+  /** Git's XY status letters, verbatim. */
+  status: string;
+  /** When it was first noticed. */
+  at: number;
+}
+
 export interface AgentSession {
   /** The terminal's hook/review token: one entry per terminal. */
   token: string;
@@ -59,6 +92,14 @@ export interface AgentSession {
   /** Subagents this session started, oldest first. Empty unless subagents
    *  are tracked (Multi-agent, "Track subagents" on). */
   subagents: SubagentRun[];
+  /** The session's turns, oldest first; see TurnRecord. Populated from
+   *  UserPromptSubmit (Multi-agent) and from the prompt_id its edits carry,
+   *  so in Classic there are turns but no prompt text. Capped at MAX_TURNS. */
+  turns: TurnRecord[];
+  /** Files changed outside Claude's edit tools this session, newest last;
+   *  see ShellChange. Empty when the folder isn't a git repo or the setting
+   *  is off. */
+  shellChanges: ShellChange[];
 }
 
 /** One subagent run inside a session. Subagents run in the lead's `claude`
@@ -121,7 +162,17 @@ interface AgentLaunch {
  *  bound. Finished runs go first. */
 const MAX_SUBAGENTS = 50;
 
+/** Ample for any card, and keeps a session left running for days from
+ *  growing without bound. The open turn is never dropped. */
+const MAX_TURNS = 50;
+
 const MAX_MESSAGE_LENGTH = 500;
+
+/** A turn's prompt is kept far longer than a closing message: it is the one
+ *  thing that says what the turn was for, it is what the card's hover shows
+ *  in full, and it is what the session log writes down. 500 characters cut
+ *  a normal multi-paragraph request in half. */
+const MAX_PROMPT_LENGTH = 2000;
 
 type AgentSessionStoreEvents = {
   change: [AgentSession];
@@ -165,17 +216,39 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
     this.update({ ...base, ...this.identityFields(base, identity), running: true, endedAt: null, agentName: agentName?.trim() || base.agentName });
   }
 
-  /** UserPromptSubmit: a turn starts. */
-  promptSubmitted(token: string, identity: SessionIdentity, at = Date.now()): void {
+  /** UserPromptSubmit: a turn starts. `prompt` and `promptId` come straight
+   *  from the payload; without a promptId there's nothing to key the turn
+   *  by, so only the status fields move. */
+  promptSubmitted(token: string, identity: SessionIdentity, prompt?: string, promptId?: string, at = Date.now()): void {
     const s = this.ensure(token, identity);
-    this.update({ ...s, status: "working", needs: null, needsMessage: null, turnStartedAt: at, currentFile: null });
+    this.update({
+      ...s,
+      status: "working",
+      needs: null,
+      needsMessage: null,
+      turnStartedAt: at,
+      currentFile: null,
+      turns: promptId ? openTurn(s.turns, promptId, prompt, at) : s.turns,
+    });
   }
 
   /** PreToolUse on a file edit: Claude is working, so any permission prompt
    *  it was waiting on has been answered. */
-  fileEdited(token: string, filePath: string, identity: SessionIdentity): void {
+  fileEdited(token: string, filePath: string, identity: SessionIdentity, promptId?: string): void {
     const s = this.ensure(token, identity);
-    this.update({ ...s, status: "working", needs: null, needsMessage: null, currentFile: filePath, turnStartedAt: s.turnStartedAt ?? Date.now() });
+    const at = Date.now();
+    this.update({
+      ...s,
+      status: "working",
+      needs: null,
+      needsMessage: null,
+      currentFile: filePath,
+      turnStartedAt: s.turnStartedAt ?? at,
+      // In Classic there's no UserPromptSubmit hook, so an edit is the
+      // first thing that names its turn; in Multi-agent the turn is
+      // already on record and this is a no-op.
+      turns: promptId ? openTurn(s.turns, promptId, undefined, at) : s.turns,
+    });
   }
 
   /** The lead called the Agent tool. SubagentStart doesn't carry the task
@@ -303,12 +376,12 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
   }
 
   /** The lead's StopFailure: the turn ended in an error, with no Stop. */
-  turnFailed(token: string, error: string | undefined, identity: SessionIdentity, at = Date.now()): void {
-    this.turnEnded(token, error ?? "The turn ended with an error.", identity, at, true);
+  turnFailed(token: string, error: string | undefined, identity: SessionIdentity, at = Date.now(), promptId?: string): void {
+    this.turnEnded(token, error ?? "The turn ended with an error.", identity, at, true, promptId);
   }
 
   /** Stop: the turn is over. */
-  turnEnded(token: string, lastMessage: string | undefined, identity: SessionIdentity, at = Date.now(), failed = false): void {
+  turnEnded(token: string, lastMessage: string | undefined, identity: SessionIdentity, at = Date.now(), failed = false, promptId?: string): void {
     // Every launch has had its SubagentStart by now (it follows the Agent
     // call at once); one left over was denied, so it must not be matched to
     // a later turn's subagent.
@@ -325,6 +398,7 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       lastTurnMs: s.turnStartedAt === null ? s.lastTurnMs : at - s.turnStartedAt,
       lastTurnEndedAt: at,
       turnStartedAt: null,
+      turns: closeTurn(s.turns, promptId, at, failed),
     });
   }
 
@@ -377,6 +451,16 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
     this.update({ ...s, subagents: s.subagents.map((r) => (r === run ? { ...r, usage } : r)) });
   }
 
+  /** The shell-changed files for this session, as TerminalView worked them
+   *  out at a turn's end (it holds the git snapshots and the set of files
+   *  the edit hooks accounted for). Replaces the list wholesale: the caller
+   *  has already merged in what's new and dropped what's no longer dirty. */
+  shellChangesRead(token: string, shellChanges: ShellChange[]): void {
+    const s = this.sessions.get(token);
+    if (!s || sameShellChanges(s.shellChanges, shellChanges)) return;
+    this.update({ ...s, shellChanges });
+  }
+
   /** The git branch read for this session's folder; see AgentSession.branch. */
   branchRead(token: string, branch: string | null): void {
     const s = this.sessions.get(token);
@@ -412,6 +496,9 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       endedAt: at,
       // Subagents live in the lead's process, so they've ended with it.
       subagents: s.subagents.map((run) => (run.running ? { ...run, running: false, outcome: "stopped" as const, endedAt: at } : run)),
+      // Likewise an unfinished turn: the session is gone, so it can't still
+      // be running, and leaving it open would have its timer count forever.
+      turns: closeTurn(s.turns, undefined, at, false),
     });
   }
 
@@ -470,6 +557,8 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
       endedAt: null,
       usage: null,
       subagents: [],
+      turns: [],
+      shellChanges: [],
     };
   }
 
@@ -481,6 +570,56 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
 
 function sameUsage(a: UsageTotals | null, b: UsageTotals | null): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function sameShellChanges(a: ShellChange[], b: ShellChange[]): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * How long the session has actually been working: its turns' durations
+ * added up, with the open turn reported separately so the card can tick it
+ * up in place. Deliberately not the wall clock from the first turn to the
+ * last -- that counts every gap where the session sat idle waiting for the
+ * user, which on one left open over lunch is nearly all of it.
+ */
+export function activeTime(session: AgentSession): { finishedMs: number; runningSince: number | null } {
+  let finishedMs = 0;
+  let runningSince: number | null = null;
+  for (const turn of session.turns) {
+    if (turn.endedAt === null) runningSince = turn.startedAt;
+    else finishedMs += turn.endedAt - turn.startedAt;
+  }
+  return { finishedMs, runningSince };
+}
+
+/** Records the turn `promptId` names, keeping turns oldest-first. One
+ *  already on record stays where it is -- its edits keep arriving after it
+ *  was first seen -- and only gains its prompt text if that wasn't known
+ *  yet (an edit names a turn without carrying the prompt). */
+function openTurn(turns: TurnRecord[], promptId: string, prompt: string | undefined, at: number): TurnRecord[] {
+  const text = prompt?.trim() ? truncateTo(prompt, MAX_PROMPT_LENGTH) : null;
+  const existing = turns.find((turn) => turn.promptId === promptId);
+  if (existing) {
+    if (!text || existing.prompt) return turns;
+    return turns.map((turn) => (turn === existing ? { ...turn, prompt: text } : turn));
+  }
+  return capTurns([...turns, { promptId, prompt: text, startedAt: at, endedAt: null, failed: false }]);
+}
+
+/** Closes the turn `promptId` names or, with no id (a StopFailure, which
+ *  hasn't been confirmed to carry one), whichever turn is still open. */
+function closeTurn(turns: TurnRecord[], promptId: string | undefined, at: number, failed: boolean): TurnRecord[] {
+  const open = [...turns].reverse().find((turn) => turn.endedAt === null);
+  const target = promptId ? turns.find((turn) => turn.promptId === promptId) : open;
+  if (!target || target.endedAt !== null) return turns;
+  return turns.map((turn) => (turn === target ? { ...turn, endedAt: at, failed } : turn));
+}
+
+function capTurns(turns: TurnRecord[]): TurnRecord[] {
+  let excess = turns.length - MAX_TURNS;
+  if (excess <= 0) return turns;
+  return turns.filter((turn) => turn.endedAt === null || excess-- <= 0);
 }
 
 function capSubagents(runs: SubagentRun[]): SubagentRun[] {
@@ -496,6 +635,10 @@ function needsKindOf(notificationType: string | undefined): NeedsKind | null {
 }
 
 function truncate(text: string): string {
+  return truncateTo(text, MAX_MESSAGE_LENGTH);
+}
+
+function truncateTo(text: string, max: number): string {
   const trimmed = text.trim();
-  return trimmed.length > MAX_MESSAGE_LENGTH ? `${trimmed.slice(0, MAX_MESSAGE_LENGTH - 1)}…` : trimmed;
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
