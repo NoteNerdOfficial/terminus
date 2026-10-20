@@ -41,3 +41,6 @@ demo-vault/
 
 # Throwaway UI prototypes (open in a browser; kept locally, never committed)
 prototype/
+
+# Bundled test output (see scripts/buildTests.mjs)
+test/.build/

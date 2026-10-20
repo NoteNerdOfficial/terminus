@@ -31,6 +31,9 @@ export interface TurnLogView {
   startedAt: number;
   endedAt: number | null;
   failed: boolean;
+  /** The session ended before this turn's Stop arrived, so its edits are
+   *  written from what was accumulated rather than from a finished turn. */
+  unfinished: boolean;
   /** Claude's closing message, truncated as the store holds it. */
   lastMessage: string | null;
   files: LoggedFileView[];
@@ -77,7 +80,7 @@ export function formatSessionHeader(info: SessionHeaderView): string {
 /** One turn's section, appended when the turn ends. */
 export function formatTurnSection(turn: TurnLogView): string {
   const duration = turn.endedAt === null ? null : formatDuration(turn.endedAt - turn.startedAt);
-  const heading = [`## Turn ${turn.index}`, clock(turn.startedAt, false), duration, turn.failed ? "failed" : null]
+  const heading = [`## Turn ${turn.index}`, clock(turn.startedAt, false), duration, turn.failed ? "failed" : null, turn.unfinished ? "unfinished" : null]
     .filter((part): part is string => part !== null)
     .join(" · ");
   const lines = ["", heading, ""];
@@ -106,6 +109,10 @@ export function formatTurnSection(turn: TurnLogView): string {
       lines.push(`| ${name} | ${detail} |`);
     }
     lines.push("");
+  }
+
+  if (turn.unfinished) {
+    lines.push("_The session ended before this turn finished, so it may have changed more than this._", "");
   }
 
   if (turn.shellChanges.length > 0) {

@@ -403,7 +403,9 @@ export class TerminusSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Session log folder")
-      .setDesc("Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal.")
+      .setDesc(
+        "Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal. Each note records its status in frontmatter -- active, ended, or abandoned when Obsidian was closed before the session finished -- so a Bases view can sort them."
+      )
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_MULTI_AGENT_SETTINGS.sessionLogFolder)

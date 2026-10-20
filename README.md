@@ -272,9 +272,25 @@ All three hooks are added without disturbing anything already in that file, and 
 npm install
 npm run dev    # unminified build with inline sourcemaps
 npm run build  # typecheck + minified production build
+npm test       # typecheck the tests, bundle them, run them
 ```
 
 The build bundles `src/main.ts` into `main.js` with esbuild, and regenerates `styles.css` from `src/css/custom.css` plus xterm.js's own stylesheet. Copy (or symlink) the plugin folder into `<vault>/.obsidian/plugins/terminus/` and enable it in **Settings → Community plugins**.
+
+### Tests
+
+`npm test` runs Node's built-in test runner over `test/*.test.ts`. No test framework and no new dependencies: `scripts/buildTests.mjs` bundles each file with esbuild (already a dev dependency), since Node can't load TypeScript and the plugin's modules import `obsidian`, which only exists inside Obsidian. That import is aliased to a small stub in `test/helpers/`, and `test/tsconfig.json` typechecks the tests, which the production build deliberately doesn't — a release shouldn't fail on a test's types.
+
+They cover the logic that can be exercised without a running vault, which is where the bugs have actually been:
+
+| File | What it pins down |
+| --- | --- |
+| `test/gitStatus.test.ts` | Shell-edit detection against a real git repo: paths with spaces, a rename's trailing source field, deletions, ignored files, and work already dirty before the turn |
+| `test/inboxModel.test.ts` | Turn records, active time, and the two grouping rules worth getting right: a row touched by several turns belongs to the first, and a subagent's edits belong to the lead's turn |
+| `test/sessionLog.test.ts` | The session log's lifecycle against an in-memory vault: one note per session, numbering past the 50-turn cap, `/clear` closing the old note, a restart continuing the same one, an interrupted turn surviving, and the abandoned sweep |
+| `test/sessionLogFormat.test.ts` | The exact text a note is made of, including that a prompt can't break out of its blockquote, forge a turn heading, or inject frontmatter |
+
+Anything that needs Obsidian itself — the inbox's rendering, the terminal, the hook bridges — is still verified by hand in a vault.
 
 ## Layout
 
@@ -312,6 +328,7 @@ The build bundles `src/main.ts` into `main.js` with esbuild, and regenerates `st
 | `src/state/SessionLog.ts`, `sessionLogFormat.ts` | Per-session notes in the vault: the vault I/O, and the pure formatters that fix their exact wording |
 | `src/claude/headlessAssist.ts` | Standalone `claude -p` calls for explain/suggest-fix |
 | `src/modals/` | Action log, command-help, confirm, rename, rescue-terminal, and getting-started modals |
+| `test/`, `scripts/buildTests.mjs` | Node `--test` suite and the esbuild step that makes it runnable (see Development) |
 | `resources/pty_helper.py` | PTY allocation helper (spawned by the plugin) |
 | `resources/hook-bridge.sh` | `PreToolUse` hook → local server bridge |
 | `resources/turn-end-bridge.sh` | `Stop` hook → local server bridge (end of turn) |

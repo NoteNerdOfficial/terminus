@@ -318,6 +318,11 @@ export default class TerminusPlugin extends Plugin {
         if (this.defaultNoticePending && !showedWelcome) this.announceMultiAgentDefault();
       });
       if (this.experience === "multi-agent") void this.startMultiAgentViews();
+      // Notes from a run that was killed rather than closed still say they
+      // are active; nothing else would ever correct them. Safe here because
+      // no session has started yet (see sweepAbandoned), and a session that
+      // turns out to be resuming adopts its note and reopens it.
+      void this.sessionLog.sweepAbandoned();
     });
   }
 

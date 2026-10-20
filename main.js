@@ -24389,7 +24389,7 @@ function formatSessionHeader(info) {
 }
 function formatTurnSection(turn) {
   const duration = turn.endedAt === null ? null : formatDuration2(turn.endedAt - turn.startedAt);
-  const heading = [`## Turn ${turn.index}`, clock(turn.startedAt, false), duration, turn.failed ? "failed" : null].filter((part) => part !== null).join(" \xB7 ");
+  const heading = [`## Turn ${turn.index}`, clock(turn.startedAt, false), duration, turn.failed ? "failed" : null, turn.unfinished ? "unfinished" : null].filter((part) => part !== null).join(" \xB7 ");
   const lines = ["", heading, ""];
   if (turn.prompt)
     lines.push(blockquote(turn.prompt), "");
@@ -24410,6 +24410,9 @@ function formatTurnSection(turn) {
       lines.push(`| ${name} | ${detail} |`);
     }
     lines.push("");
+  }
+  if (turn.unfinished) {
+    lines.push("_The session ended before this turn finished, so it may have changed more than this._", "");
   }
   if (turn.shellChanges.length > 0) {
     lines.push("**Changed outside Claude's edit tools:**");
@@ -24470,6 +24473,7 @@ function formatDuration2(ms3) {
 
 // src/state/SessionLog.ts
 var NO_PROMPT = "";
+var DEFAULT_FOLDER = "Terminus/Sessions";
 var SessionLog = class {
   constructor(plugin) {
     this.plugin = plugin;
@@ -24480,6 +24484,50 @@ var SessionLog = class {
      *  Claude's shell edits, so without this Terminus would report its own
      *  bookkeeping back to the user as something Claude did. */
     this.ownNotes = /* @__PURE__ */ new Set();
+  }
+  /**
+   * Marks notes left `active` by a previous run as `abandoned`.
+   *
+   * A session whose Obsidian was killed never reaches endSession, so its
+   * note would otherwise claim to be active forever, and a Bases view over
+   * these would count it among the live ones. Run once at startup, where
+   * "active" is unambiguous: nothing has started yet, so a note still
+   * saying so belongs to a run that is over.
+   *
+   * Only the frontmatter is touched, deliberately. A session that IS about
+   * to be resumed gets marked here and then adopted moments later (see
+   * noteFor), which flips it back; doing that in the body would leave a
+   * stale "abandoned" line stranded mid-note, and would make this the one
+   * thing that rewrites a note's body. `terminus-ended` stays unset, which
+   * is what tells an abandoned note from one that ended properly.
+   */
+  async sweepAbandoned() {
+    var _a8;
+    if (!this.enabled)
+      return;
+    const folder = (0, import_obsidian24.normalizePath)(this.plugin.settings.multiAgent.sessionLogFolder.trim() || DEFAULT_FOLDER);
+    const dir = this.plugin.app.vault.getAbstractFileByPath(folder);
+    if (!(dir instanceof import_obsidian24.TFolder))
+      return;
+    const live = new Set(this.plugin.agentSessionStore.list().filter((session) => session.running).map((session) => session.sessionId));
+    for (const child of dir.children) {
+      if (!(child instanceof import_obsidian24.TFile) || child.extension !== "md")
+        continue;
+      const frontmatter = (_a8 = this.plugin.app.metadataCache.getFileCache(child)) == null ? void 0 : _a8.frontmatter;
+      if ((frontmatter == null ? void 0 : frontmatter["terminus-session-status"]) !== "active")
+        continue;
+      const sessionId = frontmatter["terminus-session-id"];
+      if (typeof sessionId === "string" && live.has(sessionId))
+        continue;
+      const turns = await this.sectionsIn(child);
+      try {
+        await this.plugin.app.fileManager.processFrontMatter(child, (fm) => {
+          fm["terminus-session-status"] = "abandoned";
+          fm["terminus-turns"] = turns;
+        });
+      } catch (e) {
+      }
+    }
   }
   /** Whether this absolute path is a note this log wrote; see ownNotes. */
   ownsPath(absolutePath) {
@@ -24496,6 +24544,8 @@ var SessionLog = class {
     const existing = this.states.get(token);
     if (existing && existing.sessionId === sessionId)
       return;
+    if (existing)
+      void this.closeState(token, existing);
     this.states.set(token, create(sessionId, Date.now()));
   }
   /**
@@ -24505,25 +24555,29 @@ var SessionLog = class {
    * Claude did, which is not the same question as what is left to review.
    */
   noteEdit(token, diff, promptId, agent) {
-    var _a8, _b, _c2, _d, _e4, _f, _g, _h;
+    var _a8, _b, _c2, _d, _e4, _f, _g, _h, _i3, _j;
     if (!this.enabled)
       return;
     const state = this.ensure(token);
     const key = promptId != null ? promptId : NO_PROMPT;
-    const bucket = (_a8 = state.pending.get(key)) != null ? _a8 : /* @__PURE__ */ new Map();
+    let bucket = state.pending.get(key);
+    if (!bucket) {
+      const record = promptId ? (_a8 = this.plugin.agentSessionStore.get(token)) == null ? void 0 : _a8.turns.find((turn) => turn.promptId === promptId) : void 0;
+      bucket = { prompt: (_b = record == null ? void 0 : record.prompt) != null ? _b : null, startedAt: (_c2 = record == null ? void 0 : record.startedAt) != null ? _c2 : Date.now(), files: /* @__PURE__ */ new Map() };
+      state.pending.set(key, bucket);
+    }
     const stats = computeDiffStats(diff);
-    const existing = bucket.get(diff.filePath);
-    bucket.set(diff.filePath, {
+    const existing = bucket.files.get(diff.filePath);
+    bucket.files.set(diff.filePath, {
       filePath: diff.filePath,
-      editCount: ((_b = existing == null ? void 0 : existing.editCount) != null ? _b : 0) + 1,
-      added: ((_c2 = existing == null ? void 0 : existing.added) != null ? _c2 : 0) + stats.added,
-      removed: ((_d = existing == null ? void 0 : existing.removed) != null ? _d : 0) + stats.removed,
+      editCount: ((_d = existing == null ? void 0 : existing.editCount) != null ? _d : 0) + 1,
+      added: ((_e4 = existing == null ? void 0 : existing.added) != null ? _e4 : 0) + stats.added,
+      removed: ((_f = existing == null ? void 0 : existing.removed) != null ? _f : 0) + stats.removed,
       // The first agent to touch the file owns the row, as it does in the
       // inbox (see PendingChangesStore.recordChange).
-      agentId: (_f = (_e4 = existing == null ? void 0 : existing.agentId) != null ? _e4 : agent == null ? void 0 : agent.id) != null ? _f : null,
-      agentType: (_h = (_g = existing == null ? void 0 : existing.agentType) != null ? _g : agent == null ? void 0 : agent.type) != null ? _h : null
+      agentId: (_h = (_g = existing == null ? void 0 : existing.agentId) != null ? _g : agent == null ? void 0 : agent.id) != null ? _h : null,
+      agentType: (_j = (_i3 = existing == null ? void 0 : existing.agentType) != null ? _i3 : agent == null ? void 0 : agent.type) != null ? _j : null
     });
-    state.pending.set(key, bucket);
   }
   /** Stop or StopFailure: writes the turn's section, creating the note on
    *  the first one. `shellChanges` are the ones this turn introduced. */
@@ -24532,23 +24586,35 @@ var SessionLog = class {
       return Promise.resolve();
     const state = this.ensure(token);
     return this.serialise(state, async () => {
-      var _a8, _b, _c2, _d, _e4;
+      var _a8, _b, _c2, _d, _e4, _f, _g;
       const session = this.plugin.agentSessionStore.get(token);
       if (!session)
         return;
+      const file = await this.noteFor(token, state, session.cwd, session.branch);
+      if (!file)
+        return;
       const key = promptId != null ? promptId : NO_PROMPT;
-      const bucket = (_a8 = state.pending.get(key)) != null ? _a8 : /* @__PURE__ */ new Map();
+      const bucket = state.pending.get(key);
       state.pending.delete(key);
       const record = promptId ? session.turns.find((turn) => turn.promptId === promptId) : null;
-      const index = record ? session.turns.indexOf(record) + 1 : state.turnsWritten + 1;
+      const startedAt = (_b = (_a8 = record == null ? void 0 : record.startedAt) != null ? _a8 : bucket == null ? void 0 : bucket.startedAt) != null ? _b : Date.now();
+      const endedAt = (_c2 = record == null ? void 0 : record.endedAt) != null ? _c2 : null;
+      const edits = [...(_d = bucket == null ? void 0 : bucket.files.values()) != null ? _d : []];
       const view = {
-        index,
-        prompt: (_b = record == null ? void 0 : record.prompt) != null ? _b : null,
-        startedAt: (_c2 = record == null ? void 0 : record.startedAt) != null ? _c2 : Date.now(),
-        endedAt: (_d = record == null ? void 0 : record.endedAt) != null ? _d : null,
-        failed: (_e4 = record == null ? void 0 : record.failed) != null ? _e4 : session.lastTurnFailed,
+        // Numbered by what this note already holds, not by the turn's place
+        // in the agent store's list. That list is capped (MAX_TURNS), so a
+        // long session renumbered its turns once the oldest fell off it, and
+        // it comes back empty on a resumed session, so one picked up after a
+        // restart began again at 1. The count of sections written is what
+        // the heading is actually claiming.
+        index: state.turnsWritten + 1,
+        prompt: (_f = (_e4 = record == null ? void 0 : record.prompt) != null ? _e4 : bucket == null ? void 0 : bucket.prompt) != null ? _f : null,
+        startedAt,
+        endedAt,
+        failed: (_g = record == null ? void 0 : record.failed) != null ? _g : session.lastTurnFailed,
+        unfinished: false,
         lastMessage: session.lastMessage,
-        files: [...bucket.values()].map((edit) => this.fileView(token, edit)),
+        files: edits.map((edit) => this.fileView(token, edit)),
         // Decoded and made vault-relative here: the formatter knows nothing
         // of git's letters or of where the vault is.
         shellChanges: shellChanges.map((change) => ({
@@ -24556,12 +24622,11 @@ var SessionLog = class {
           status: describeStatus(change.status)
         }))
       };
-      const file = await this.noteFor(token, state, session.cwd, session.branch);
-      if (!file)
-        return;
       await this.plugin.app.vault.append(file, formatTurnSection(view));
       state.turnsWritten++;
-      for (const edit of bucket.values())
+      if (endedAt !== null)
+        state.activeMs += Math.max(0, endedAt - startedAt);
+      for (const edit of edits)
         state.filesWritten.add(edit.filePath);
     });
   }
@@ -24569,23 +24634,53 @@ var SessionLog = class {
    *  frontmatter totals. Does nothing for a session that never wrote a turn. */
   endSession(token) {
     const state = this.states.get(token);
-    if (!state || state.closed)
+    if (!state)
+      return Promise.resolve();
+    return this.closeState(token, state).finally(() => {
+      if (this.states.get(token) === state)
+        this.states.delete(token);
+    });
+  }
+  /**
+   * Writes a session's last lines: any turn still being accumulated, then
+   * the closing summary and the frontmatter totals. Takes everything it
+   * needs from the state rather than the agent store, which on a /clear has
+   * already been reset for the session that replaced this one.
+   */
+  closeState(token, state) {
+    if (state.closed)
       return Promise.resolve();
     state.closed = true;
-    if (state.path === null) {
-      this.states.delete(token);
+    if (state.path === null)
       return Promise.resolve();
-    }
     return this.serialise(state, async () => {
       const file = this.fileAt(state.path);
       if (!file)
         return;
-      const session = this.plugin.agentSessionStore.get(token);
-      const activeMs = session ? session.turns.reduce((total, turn) => {
-        var _a8;
-        return total + (((_a8 = turn.endedAt) != null ? _a8 : turn.startedAt) - turn.startedAt);
-      }, 0) : 0;
-      const totals = { turns: state.turnsWritten, files: state.filesWritten.size, activeMs, endedAt: Date.now() };
+      for (const bucket of state.pending.values()) {
+        const edits = [...bucket.files.values()];
+        if (edits.length === 0)
+          continue;
+        await this.plugin.app.vault.append(
+          file,
+          formatTurnSection({
+            index: state.turnsWritten + 1,
+            prompt: bucket.prompt,
+            startedAt: bucket.startedAt,
+            endedAt: null,
+            failed: false,
+            unfinished: true,
+            lastMessage: null,
+            files: edits.map((edit) => this.fileView(token, edit)),
+            shellChanges: []
+          })
+        );
+        state.turnsWritten++;
+        for (const edit of edits)
+          state.filesWritten.add(edit.filePath);
+      }
+      state.pending.clear();
+      const totals = { turns: state.turnsWritten, files: state.filesWritten.size, activeMs: state.activeMs, endedAt: Date.now() };
       await this.plugin.app.vault.append(file, formatSessionClosing(totals));
       try {
         await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
@@ -24596,7 +24691,7 @@ var SessionLog = class {
         });
       } catch (e) {
       }
-    }).finally(() => this.states.delete(token));
+    });
   }
   /** The session's state, created on demand -- which happens when logging
    *  was switched on partway through a session, or in Classic-to-Multi-agent
@@ -24643,46 +24738,90 @@ var SessionLog = class {
     const folder = await this.ensureFolder();
     if (folder === null)
       return null;
+    const adopted = state.sessionId ? this.findNoteForSession(folder, state.sessionId) : null;
+    if (adopted) {
+      state.path = adopted.path;
+      this.ownNotes.add(this.absolute(adopted.path));
+      state.turnsWritten = await this.sectionsIn(adopted);
+      await this.reopen(adopted);
+      return adopted;
+    }
     const terminalName = (_b = (_a8 = this.plugin.findTerminalView(token)) == null ? void 0 : _a8.getDisplayText()) != null ? _b : "Terminus";
     const header = { sessionId: state.sessionId, terminalName, startedAt: state.startedAt, cwd, branch };
-    const path = await this.claimPath(folder, state, terminalName);
+    const path = this.claimPath(folder, state, terminalName);
     if (path === null)
       return null;
-    const found = this.fileAt(path);
-    if (found) {
-      state.path = path;
-      this.ownNotes.add(this.absolute(path));
-      return found;
-    }
     const file = await this.plugin.app.vault.create(path, formatSessionHeader(header));
     state.path = path;
     this.ownNotes.add(this.absolute(path));
     return file;
   }
   /**
-   * Where this session's note goes: "<folder>/<date> <time> <terminal>.md".
-   * An existing note for the same session id is reused (a restart mid-
-   * session); one for a different session gets a counter, so two sessions
-   * that start in the same minute in the same terminal can't collide.
+   * A free name for a new session's note: "<folder>/<date> <time>
+   * <terminal>.md", with a counter if two sessions start in the same minute
+   * in the same terminal. Reuse of an existing session's note is settled
+   * before this, by frontmatter (see noteFor).
    */
-  async claimPath(folder, state, terminalName) {
-    var _a8, _b;
+  claimPath(folder, state, terminalName) {
     const base = `${stamp(state.startedAt)} ${safeFileName(terminalName)}`.trim();
     for (let n = 1; n <= 20; n++) {
       const path = (0, import_obsidian24.normalizePath)(`${folder}/${base}${n === 1 ? "" : ` ${n}`}.md`);
-      const file = this.fileAt(path);
-      if (!file)
-        return path;
-      const recorded = (_b = (_a8 = this.plugin.app.metadataCache.getFileCache(file)) == null ? void 0 : _a8.frontmatter) == null ? void 0 : _b["terminus-session-id"];
-      if (state.sessionId !== null && recorded === state.sessionId)
+      if (!this.fileAt(path))
         return path;
     }
     return null;
   }
+  /** The note in `folder` whose frontmatter records this session id. Null
+   *  when there is none, or while the metadata cache is still indexing the
+   *  vault, in which case the session simply starts a new note. */
+  findNoteForSession(folder, sessionId) {
+    var _a8, _b;
+    const dir = this.plugin.app.vault.getAbstractFileByPath(folder);
+    if (!(dir instanceof import_obsidian24.TFolder))
+      return null;
+    for (const child of dir.children) {
+      if (!(child instanceof import_obsidian24.TFile) || child.extension !== "md")
+        continue;
+      if (((_b = (_a8 = this.plugin.app.metadataCache.getFileCache(child)) == null ? void 0 : _a8.frontmatter) == null ? void 0 : _b["terminus-session-id"]) === sessionId)
+        return child;
+    }
+    return null;
+  }
+  /** How many turn sections a note already holds. Read off its headings,
+   *  which is safe precisely because a prompt is written as a blockquote: a
+   *  line can only begin "## Turn " if this wrote it. */
+  async sectionsIn(file) {
+    try {
+      const text = await this.plugin.app.vault.cachedRead(file);
+      let highest = 0;
+      for (const match of text.matchAll(/^## Turn (\d+)/gm))
+        highest = Math.max(highest, Number(match[1]));
+      return highest;
+    } catch (e) {
+      return 0;
+    }
+  }
+  /** Marks an adopted note active again: one that ended cleanly and was then
+   *  resumed (`claude --resume` keeps its id), or one the startup sweep had
+   *  just written off as abandoned when the session was in fact coming
+   *  back. Either way it would otherwise keep appending turns under a header
+   *  saying it had finished. */
+  async reopen(file) {
+    var _a8, _b;
+    const status = (_b = (_a8 = this.plugin.app.metadataCache.getFileCache(file)) == null ? void 0 : _a8.frontmatter) == null ? void 0 : _b["terminus-session-status"];
+    if (status !== "ended" && status !== "abandoned")
+      return;
+    try {
+      await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter) => {
+        frontmatter["terminus-session-status"] = "active";
+      });
+    } catch (e) {
+    }
+  }
   /** Creates the configured folder if it isn't there, one level at a time;
    *  null when it can't be made or the setting is empty. */
   async ensureFolder() {
-    const configured = (0, import_obsidian24.normalizePath)(this.plugin.settings.multiAgent.sessionLogFolder.trim() || "Terminus/Sessions");
+    const configured = (0, import_obsidian24.normalizePath)(this.plugin.settings.multiAgent.sessionLogFolder.trim() || DEFAULT_FOLDER);
     const segments = configured.split("/").filter((segment2) => segment2.length > 0);
     if (segments.length === 0)
       return null;
@@ -24726,6 +24865,7 @@ function create(sessionId, startedAt) {
     path: null,
     pending: /* @__PURE__ */ new Map(),
     turnsWritten: 0,
+    activeMs: 0,
     filesWritten: /* @__PURE__ */ new Set(),
     queue: Promise.resolve(),
     startedAt,
@@ -25449,7 +25589,9 @@ var TerminusSettingTab = class extends import_obsidian27.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian27.Setting(containerEl).setName("Session log folder").setDesc("Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal.").addText(
+    new import_obsidian27.Setting(containerEl).setName("Session log folder").setDesc(
+      "Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal. Each note records its status in frontmatter -- active, ended, or abandoned when Obsidian was closed before the session finished -- so a Bases view can sort them."
+    ).addText(
       (text) => text.setPlaceholder(DEFAULT_MULTI_AGENT_SETTINGS.sessionLogFolder).setValue(multiAgent.sessionLogFolder).onChange(async (value) => {
         multiAgent.sessionLogFolder = value;
         await this.plugin.saveSettings();
@@ -26243,6 +26385,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
       });
       if (this.experience === "multi-agent")
         void this.startMultiAgentViews();
+      void this.sessionLog.sweepAbandoned();
     });
   }
   /** Fires at most once per install. The flag is persisted before the modal
