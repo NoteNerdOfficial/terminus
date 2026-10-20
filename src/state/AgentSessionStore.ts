@@ -375,6 +375,20 @@ export class AgentSessionStore extends TypedEmitter<AgentSessionStoreEvents> {
     if (changed) this.update({ ...s, subagents });
   }
 
+  /** The turn still waiting on its Stop, if there is one.
+   *
+   *  A StopFailure has not been confirmed to carry a prompt_id (see
+   *  hooks/types.ts), and everything downstream of it -- which turn to close,
+   *  which turn's edits to write into the session log -- needs to know which
+   *  turn it ended. Asked here, while the turn is still open, rather than
+   *  guessed separately by each of them afterwards. Same rule as closeTurn's
+   *  own fallback: the newest turn that has not ended. */
+  openTurnId(token: string): string | undefined {
+    const turns = this.sessions.get(token)?.turns;
+    if (!turns) return undefined;
+    return [...turns].reverse().find((turn) => turn.endedAt === null)?.promptId;
+  }
+
   /** The lead's StopFailure: the turn ended in an error, with no Stop. */
   turnFailed(token: string, error: string | undefined, identity: SessionIdentity, at = Date.now(), promptId?: string): void {
     this.turnEnded(token, error ?? "The turn ended with an error.", identity, at, true, promptId);

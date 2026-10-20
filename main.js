@@ -17874,7 +17874,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
    *  installed. Subagent events are dropped once tracking is off, since
    *  a session started earlier keeps sending them. */
   onSessionEvent(payload) {
-    var _a8, _b, _c2;
+    var _a8, _b, _c2, _d;
     const store = this.plugin.agentSessionStore;
     const identity = sessionIdentity(payload);
     switch (payload.hook_event_name) {
@@ -17929,13 +17929,14 @@ var TerminalView = class extends import_obsidian10.ItemView {
         break;
       case "StopFailure":
         if (!payload.agent_id) {
-          this.endTurn(payload.last_assistant_message || payload.error, identity, true);
+          const promptId = (_c2 = payload.prompt_id) != null ? _c2 : store.openTurnId(this.token);
+          this.endTurn(payload.last_assistant_message || payload.error, identity, true, promptId);
         } else if (this.plugin.tracksSubagents) {
           store.subagentEnded(
             this.token,
             {
               agentId: payload.agent_id,
-              agentType: (_c2 = payload.agent_type) != null ? _c2 : "",
+              agentType: (_d = payload.agent_type) != null ? _d : "",
               outcome: "failed",
               error: payload.last_assistant_message || payload.error
             },
@@ -20498,6 +20499,21 @@ var AgentSessionStore = class extends TypedEmitter {
     });
     if (changed)
       this.update({ ...s15, subagents });
+  }
+  /** The turn still waiting on its Stop, if there is one.
+   *
+   *  A StopFailure has not been confirmed to carry a prompt_id (see
+   *  hooks/types.ts), and everything downstream of it -- which turn to close,
+   *  which turn's edits to write into the session log -- needs to know which
+   *  turn it ended. Asked here, while the turn is still open, rather than
+   *  guessed separately by each of them afterwards. Same rule as closeTurn's
+   *  own fallback: the newest turn that has not ended. */
+  openTurnId(token) {
+    var _a8, _b;
+    const turns = (_a8 = this.sessions.get(token)) == null ? void 0 : _a8.turns;
+    if (!turns)
+      return void 0;
+    return (_b = [...turns].reverse().find((turn) => turn.endedAt === null)) == null ? void 0 : _b.promptId;
   }
   /** The lead's StopFailure: the turn ended in an error, with no Stop. */
   turnFailed(token, error, identity, at3 = Date.now(), promptId) {

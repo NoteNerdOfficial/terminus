@@ -742,8 +742,13 @@ export class TerminalView extends ItemView {
       case "StopFailure":
         if (!payload.agent_id) {
           // Prefer the readable message; the code ("model_not_found") is
-          // the fallback.
-          this.endTurn(payload.last_assistant_message || payload.error, identity, true);
+          // the fallback. The turn's id is asked for here, before the store
+          // closes it: a StopFailure has not been confirmed to carry one,
+          // and without it the session log cannot tell which turn's edits
+          // to write out -- they went unclaimed and were flushed at the end
+          // of the note as a phantom unfinished turn.
+          const promptId = payload.prompt_id ?? store.openTurnId(this.token);
+          this.endTurn(payload.last_assistant_message || payload.error, identity, true, promptId);
         } else if (this.plugin.tracksSubagents) {
           store.subagentEnded(
             this.token,

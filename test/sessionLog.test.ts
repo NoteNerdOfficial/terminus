@@ -208,3 +208,43 @@ describe("session log: abandoned notes", () => {
     assert.equal(vault.frontmatter.get(vault.onlyNote().path)!["terminus-session-status"], "active");
   });
 });
+
+describe("session log: a turn that fails", () => {
+  it("writes the failed turn's own edits under it, not as a phantom turn at the end", async () => {
+    const { vault, store, log } = setup();
+    start(log, store, "S1");
+    await runTurn(log, store, "S1", "p1", "A finished turn", "/vault/a.md", 1000);
+
+    // A turn that rewrites one file and then hits an API error. StopFailure
+    // is not known to carry a prompt_id, so TerminalView asks the store
+    // which turn is open before closing it; this is that order.
+    store.promptSubmitted("tok", identity("S1"), "The turn that failed", "p2", 300_000);
+    log.noteEdit("tok", fakeDiff("/vault/half-written.md"), "p2", null);
+    const promptId = store.openTurnId("tok");
+    assert.equal(promptId, "p2", "the open turn is the one the failure ends");
+    store.turnFailed("tok", "API Error: 500 Internal Server Error", identity("S1"), 360_000, promptId);
+    await log.appendTurn("tok", promptId, []);
+
+    await runTurn(log, store, "S1", "p3", "The retry", "/vault/c.md", 500_000);
+    await log.endSession("tok");
+    await settle();
+
+    const note = vault.onlyNote();
+    assert.deepEqual(vault.turnNumbers(), [1, 2, 3], "three turns, and no phantom fourth");
+
+    const failed = note.data.slice(note.data.indexOf("## Turn 2"), note.data.indexOf("## Turn 3"));
+    assert.ok(failed.includes("The turn that failed"), "the failed turn keeps its prompt");
+    assert.ok(failed.includes("· failed"), "and is marked failed in its heading");
+    assert.ok(failed.includes("API Error: 500 Internal Server Error"), "with the error it ended on");
+    assert.ok(failed.includes("half-written.md"), "its edits are written under it");
+    assert.ok(!note.data.includes("unfinished"), "and nothing is left to flush at the end");
+  });
+
+  it("has no open turn to offer once every turn has ended", async () => {
+    const { store, log } = setup();
+    start(log, store, "S1");
+    await runTurn(log, store, "S1", "p1", "A finished turn", "/vault/a.md", 1000);
+    assert.equal(store.openTurnId("tok"), undefined);
+    assert.equal(store.openTurnId("no-such-terminal"), undefined);
+  });
+});
