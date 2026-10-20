@@ -24,8 +24,16 @@ export interface LoggedFileView {
 
 /** Everything one appended turn section is built from. */
 export interface TurnLogView {
-  /** The turn's place in the session, counted from its own turn list so the
-   *  numbering matches the Agent inbox's headers. */
+  /** The turn's place in the session: the number of sections the note
+   *  already holds, plus one (see SessionLog.appendTurn for why it is
+   *  counted that way and not from the agent store's turn list).
+   *
+   *  Deliberately NOT the same number as the Agent inbox's turn headers.
+   *  The inbox numbers the turns it can still show -- the ones with changes
+   *  left to review -- so a turn that only answered a question, or that
+   *  failed before it edited anything, has no header there at all, and
+   *  accepting a turn's changes renumbers the rest. The note is a record of
+   *  the session, so it numbers every turn and never renumbers one. */
   index: number;
   prompt: string | null;
   startedAt: number;
