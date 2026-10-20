@@ -31,8 +31,12 @@ export interface FakeVault {
   app: unknown;
   files: Map<string, FakeFile>;
   frontmatter: Map<string, Record<string, unknown>>;
+  /** Just the .md files: the folder also holds the Bases view. */
+  notes(): FakeFile[];
   /** The single note a test wrote, when it expects exactly one. */
   onlyNote(): FakeFile;
+  /** The Bases view, if one was written. */
+  base(): FakeFile | null;
   /** The turn numbers a note's headings claim, in order. */
   turnNumbers(file?: FakeFile): number[];
 }
@@ -82,9 +86,16 @@ export function makeVault(): FakeVault {
     app,
     files,
     frontmatter,
+    notes() {
+      return [...files.values()].filter((file) => file.extension === "md");
+    },
     onlyNote() {
-      if (files.size !== 1) throw new Error(`expected exactly one note, found ${files.size}`);
-      return [...files.values()][0] as FakeFile;
+      const notes = this.notes();
+      if (notes.length !== 1) throw new Error(`expected exactly one note, found ${notes.length}`);
+      return notes[0] as FakeFile;
+    },
+    base() {
+      return [...files.values()].find((file) => file.extension === "base") ?? null;
     },
     turnNumbers(file?: FakeFile) {
       const target = file ?? this.onlyNote();
@@ -115,7 +126,11 @@ export function makePlugin(store: AgentSessionStore, app: unknown, overrides: Re
   return {
     app,
     experience: "multi-agent",
-    settings: { multiAgent: { logSessions: true, sessionLogFolder: "Terminus/Sessions" } },
+    settings: { multiAgent: { logSessions: true, sessionLogFolder: "Terminus/Sessions", sessionBaseCreated: false } },
+    // On, so the base is written by default in tests; a test that cares
+    // about an older Obsidian overrides it.
+    supportsBases: true,
+    saveSettings: async () => undefined,
     agentSessionStore: store,
     pendingChangesStore: { get: () => undefined },
     findTerminalView: () => ({ getDisplayText: () => "Terminus 1" }),

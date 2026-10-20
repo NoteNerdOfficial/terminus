@@ -62,6 +62,11 @@ export interface SessionHeaderView {
   startedAt: number;
   cwd: string | null;
   branch: string | null;
+  /** What the session was for: the first prompt reduced to a title the same
+   *  way a group's name is (groupNaming.titleFromPrompt). Null when the
+   *  session's first turn had no usable prompt -- a bare slash command, or
+   *  logging switched on partway through. */
+  goal: string | null;
 }
 
 
@@ -70,6 +75,7 @@ export function formatSessionHeader(info: SessionHeaderView): string {
   const lines = ["---", 'terminus-session-status: active'];
   if (info.sessionId) lines.push(`terminus-session-id: ${yaml(info.sessionId)}`);
   lines.push(`terminus-terminal: ${yaml(info.terminalName)}`);
+  if (info.goal) lines.push(`terminus-goal: ${yaml(plainTitle(info.goal))}`);
   lines.push(`terminus-started: ${localIso(info.startedAt)}`);
   if (info.cwd) lines.push(`terminus-folder: ${yaml(info.cwd)}`);
   if (info.branch) lines.push(`terminus-branch: ${yaml(info.branch)}`);
@@ -78,6 +84,7 @@ export function formatSessionHeader(info: SessionHeaderView): string {
   lines.push("> [!info] Written by Terminus, one entry per turn");
   lines.push("> Prompts, files and timings exactly as Claude Code's hooks reported them.");
   lines.push("> Nothing here is written by a model, and nothing is inferred.", "");
+  if (info.goal) lines.push(`- **Goal** ${plainTitle(info.goal)}`);
   lines.push(`- **Started** ${clock(info.startedAt, true)}`);
   if (info.cwd) lines.push(`- **Folder** \`${info.cwd}\``);
   if (info.branch) lines.push(`- **Branch** \`${info.branch}\``);
@@ -133,6 +140,90 @@ export function formatTurnSection(turn: TurnLogView): string {
   return lines.join("\n");
 }
 
+/**
+ * The Bases view written beside the notes, so the folder is something you
+ * open rather than something you scroll. Static: its one global filter is
+ * the session id every note carries, so the view keeps working if the user
+ * moves or renames it.
+ *
+ * Note the two different ways a property is named. In `order` and
+ * `properties` a dotted path is fine, but inside a filter expression
+ * `note.terminus-session-status` parses as arithmetic on three names and
+ * matches nothing -- silently, with no error shown -- so filters index the
+ * property instead. Verified in Obsidian; don't "tidy" the brackets away.
+ */
+export function formatSessionBase(): string {
+  return `filters:
+  and:
+    - file.hasProperty("terminus-session-id")
+
+properties:
+  note.terminus-goal:
+    displayName: Goal
+  note.terminus-terminal:
+    displayName: Terminal
+  note.terminus-branch:
+    displayName: Branch
+  note.terminus-turns:
+    displayName: Turns
+  note.terminus-files:
+    displayName: Files
+  note.terminus-session-status:
+    displayName: Status
+  note.terminus-started:
+    displayName: Started
+
+views:
+  - type: table
+    name: Recent
+    filters:
+      and:
+        - file.mtime > now() - "30d"
+    sort:
+      - property: note.terminus-started
+        direction: DESC
+    order:
+      - note.terminus-goal
+      - note.terminus-terminal
+      - note.terminus-branch
+      - note.terminus-turns
+      - note.terminus-files
+      - note.terminus-session-status
+      - note.terminus-started
+
+  - type: table
+    name: Unfinished
+    filters:
+      or:
+        - note["terminus-session-status"] == "active"
+        - note["terminus-session-status"] == "abandoned"
+    sort:
+      - property: note.terminus-started
+        direction: DESC
+    order:
+      - note.terminus-goal
+      - note.terminus-terminal
+      - note.terminus-branch
+      - note.terminus-turns
+      - note.terminus-session-status
+
+  - type: table
+    name: By branch
+    groupBy:
+      property: note.terminus-branch
+      direction: ASC
+    sort:
+      - property: note.terminus-started
+        direction: DESC
+    order:
+      - note.terminus-goal
+      - note.terminus-terminal
+      - note.terminus-turns
+      - note.terminus-files
+      - note.terminus-started
+`;
+}
+
 /** The closing line, appended when the session ends. */
 export function formatSessionClosing(totals: { turns: number; files: number; activeMs: number; endedAt: number }): string {
   const parts = [
@@ -159,6 +250,15 @@ function blockquote(text: string, marker = ">"): string {
  *  the code span the path sits in. */
 function escapeCell(text: string): string {
   return text.replace(/\|/g, "\\|").replace(/`/g, "'");
+}
+
+/** A title as plain text. The brackets that would make it a wikilink are
+ *  dropped: a prompt that mentions [[a note]] must not give the log note a
+ *  link to it, which would show up in that note's backlinks as though the
+ *  log were about it. Obsidian resolves links in frontmatter as well as in
+ *  the body, so this matters for the property and the summary line alike. */
+function plainTitle(text: string): string {
+  return text.replace(/[[\]]/g, "").trim();
 }
 
 /** A double-quoted YAML scalar, safe for a path or a name with a colon, a

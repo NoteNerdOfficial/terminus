@@ -23,6 +23,9 @@ export function outranks(next: NameSource, current: NameSource): boolean {
 }
 
 export const PLACEHOLDER_NAME = "New group";
+/** A joining word a title must not end on; see finish(). */
+const DANGLING = /\s+(and|or|but|with|for|to|in|on|of|from|at|by|into|onto|using|via|the|a|an)$/i;
+const TRAILING_PUNCTUATION = /[\s,;:.!?-]+$/;
 const MAX_WORDS = 5;
 const MAX_LENGTH = 40;
 
@@ -139,6 +142,15 @@ export function titleFromFolder(relativeFolder: string | null): string | null {
 function finish(title: string, capitalise = true): string | null {
   let t = title.replace(/\s+/g, " ").trim();
   if (t.length > MAX_LENGTH) t = t.slice(0, MAX_LENGTH).replace(/\s+\S*$/, "") || t.slice(0, MAX_LENGTH);
+  // Both cuts above -- five words, then forty characters -- can land mid
+  // sentence, on the comma or the conjunction that was about to introduce
+  // the rest of it. "Refresh the glossary and the checklist," reads as a
+  // truncation rather than a name. Looped to a fixed point, because each
+  // trim can expose another ("... and the" -> "... and" -> "...").
+  for (let before = ""; before !== t; ) {
+    before = t;
+    t = t.replace(TRAILING_PUNCTUATION, "").replace(DANGLING, "");
+  }
   if (t.length < 2) return null;
   return capitalise ? t.charAt(0).toUpperCase() + t.slice(1) : t;
 }

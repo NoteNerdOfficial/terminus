@@ -3,7 +3,9 @@ import { computeDiffStats } from "../diff/renderDiff";
 import { describeStatus } from "../git/gitStatus";
 import type { DiffResult } from "../server/diff";
 import type { ShellChange } from "./AgentSessionStore";
+import { titleFromPrompt } from "../groups/groupNaming";
 import {
+  formatSessionBase,
   formatSessionClosing,
   formatSessionHeader,
   formatTurnSection,
@@ -109,6 +111,10 @@ const NO_PROMPT = "";
 
 /** Used when the folder setting is blank. */
 const DEFAULT_FOLDER = "Terminus/Sessions";
+
+/** The Bases view dropped in beside the notes. Named for what it holds
+ *  rather than after the folder, which the user chooses and may rename. */
+const BASE_NAME = "Terminus sessions.base";
 
 export class SessionLog {
   private states = new Map<string, LogState>();
@@ -402,8 +408,16 @@ export class SessionLog {
       return adopted;
     }
 
+    await this.ensureBase(folder);
     const terminalName = this.plugin.findTerminalView(token)?.getDisplayText() ?? "Terminus";
-    const header: SessionHeaderView = { sessionId: state.sessionId, terminalName, startedAt: state.startedAt, cwd, branch };
+    const header: SessionHeaderView = {
+      sessionId: state.sessionId,
+      terminalName,
+      startedAt: state.startedAt,
+      cwd,
+      branch,
+      goal: this.goalFor(token, state),
+    };
     const path = this.claimPath(folder, state, terminalName);
     if (path === null) return null;
     const file = await this.plugin.app.vault.create(path, formatSessionHeader(header));
@@ -468,6 +482,52 @@ export class SessionLog {
       });
     } catch {
       // Cosmetic; the closing write at the end sets it correctly anyway.
+    }
+  }
+
+  /**
+   * What the session set out to do: its first prompt, reduced to a title the
+   * same way a terminal group's name is, so the two agree on what a session
+   * is called. Read once, when the note's header is written.
+   *
+   * The agent store is asked first and the turn being accumulated second:
+   * the store has the prompt for an ordinary session, but it has been reset
+   * by a /clear, and comes back empty on one resumed after a restart, in
+   * which cases the bucket is the only place the text survives. Null when
+   * neither has one -- a session whose first prompt was a bare slash
+   * command, which titleFromPrompt declines to name.
+   */
+  private goalFor(token: string, state: LogState): string | null {
+    const first =
+      this.plugin.agentSessionStore.get(token)?.turns.find((turn) => turn.prompt)?.prompt ??
+      [...state.pending.values()].find((bucket) => bucket.prompt)?.prompt ??
+      null;
+    return first ? titleFromPrompt(first) : null;
+  }
+
+  /**
+   * Writes the Bases view into the log folder, once ever.
+   *
+   * Once is tracked in settings rather than by the file's absence, because
+   * those two differ in the case that matters: a user who deleted it has
+   * said they don't want it, and recreating it at the next session would be
+   * the plugin overruling them. A vault that refuses the write leaves the
+   * flag unsaved, so it is tried again next launch rather than every turn.
+   */
+  private async ensureBase(folder: string): Promise<void> {
+    const settings = this.plugin.settings.multiAgent;
+    if (settings.sessionBaseCreated || !this.plugin.supportsBases) return;
+    // Set before the await: two terminals starting together must not both
+    // get as far as creating it.
+    settings.sessionBaseCreated = true;
+    try {
+      const path = normalizePath(`${folder}/${BASE_NAME}`);
+      if (!this.plugin.app.vault.getAbstractFileByPath(path)) {
+        await this.plugin.app.vault.create(path, formatSessionBase());
+      }
+      await this.plugin.saveSettings();
+    } catch {
+      settings.sessionBaseCreated = false;
     }
   }
 

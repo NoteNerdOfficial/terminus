@@ -92,6 +92,10 @@ export interface MultiAgentSettings {
   logSessions: boolean;
   /** Vault folder for those notes; blank falls back to the default. */
   sessionLogFolder: string;
+  /** Whether the Bases view has been written into that folder. Tracked here
+   *  rather than by looking for the file, so that deleting it is a decision
+   *  that sticks instead of something the next session undoes. */
+  sessionBaseCreated: boolean;
   /** Asks GitHub for the latest release (the sidebar's update link). Off by
    *  default: with it off, Terminus makes no network requests at all. */
   checkForUpdates: boolean;
@@ -149,6 +153,7 @@ export const DEFAULT_MULTI_AGENT_SETTINGS: MultiAgentSettings = {
   detectShellChanges: true,
   logSessions: false,
   sessionLogFolder: "Terminus/Sessions",
+  sessionBaseCreated: false,
   checkForUpdates: false,
 };
 
@@ -404,7 +409,7 @@ export class TerminusSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Session log folder")
       .setDesc(
-        "Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal. Each note records its status in frontmatter -- active, ended, or abandoned when Obsidian was closed before the session finished -- so a Bases view can sort them."
+        "Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal. Each note records its goal, status, branch and totals in frontmatter -- so a Bases view is dropped in alongside them the first time, with Recent, Unfinished and By branch views. Delete it if you'd rather not have it; it won't come back."
       )
       .addText((text) =>
         text

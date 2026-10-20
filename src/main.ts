@@ -1,4 +1,4 @@
-import { Menu, Notice, Plugin, WorkspaceLeaf, setIcon } from "obsidian";
+import { Menu, Notice, Plugin, WorkspaceLeaf, requireApiVersion, setIcon } from "obsidian";
 import { pathBasename, pathJoin, pathRelative } from "terminus-node-bridge";
 import { ReviewServer } from "./server/ReviewServer";
 import { provisionClaudeSettings, getVaultBasePath, getHookBridgePath } from "./hooks/provisionSettings";
@@ -399,6 +399,13 @@ export default class TerminusPlugin extends Plugin {
    *  ships (see MULTI_AGENT_AVAILABLE), whatever the saved setting says. */
   get experience(): Experience {
     return MULTI_AGENT_AVAILABLE ? this.settings.experience : "classic";
+  }
+
+  /** Whether this Obsidian can open a .base file. Bases has been a core
+   *  plugin since 1.9.10, and manifest.json still accepts 1.7.2, where one
+   *  would sit in the vault as a file nothing can read. */
+  get supportsBases(): boolean {
+    return requireApiVersion("1.9.10");
   }
 
   /** Whether subagents get their own record and their edits their own

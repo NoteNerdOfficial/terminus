@@ -16657,6 +16657,8 @@ function outranks(next, current) {
   return current !== "user" && STRENGTH[next] > STRENGTH[current];
 }
 var PLACEHOLDER_NAME = "New group";
+var DANGLING = /\s+(and|or|but|with|for|to|in|on|of|from|at|by|into|onto|using|via|the|a|an)$/i;
+var TRAILING_PUNCTUATION = /[\s,;:.!?-]+$/;
 var MAX_WORDS = 5;
 var MAX_LENGTH = 40;
 var FILLER = [
@@ -16746,6 +16748,10 @@ function finish(title, capitalise = true) {
   let t = title.replace(/\s+/g, " ").trim();
   if (t.length > MAX_LENGTH)
     t = t.slice(0, MAX_LENGTH).replace(/\s+\S*$/, "") || t.slice(0, MAX_LENGTH);
+  for (let before = ""; before !== t; ) {
+    before = t;
+    t = t.replace(TRAILING_PUNCTUATION, "").replace(DANGLING, "");
+  }
   if (t.length < 2)
     return null;
   return capitalise ? t.charAt(0).toUpperCase() + t.slice(1) : t;
@@ -24385,6 +24391,8 @@ function formatSessionHeader(info) {
   if (info.sessionId)
     lines.push(`terminus-session-id: ${yaml(info.sessionId)}`);
   lines.push(`terminus-terminal: ${yaml(info.terminalName)}`);
+  if (info.goal)
+    lines.push(`terminus-goal: ${yaml(plainTitle(info.goal))}`);
   lines.push(`terminus-started: ${localIso(info.startedAt)}`);
   if (info.cwd)
     lines.push(`terminus-folder: ${yaml(info.cwd)}`);
@@ -24395,6 +24403,8 @@ function formatSessionHeader(info) {
   lines.push("> [!info] Written by Terminus, one entry per turn");
   lines.push("> Prompts, files and timings exactly as Claude Code's hooks reported them.");
   lines.push("> Nothing here is written by a model, and nothing is inferred.", "");
+  if (info.goal)
+    lines.push(`- **Goal** ${plainTitle(info.goal)}`);
   lines.push(`- **Started** ${clock(info.startedAt, true)}`);
   if (info.cwd)
     lines.push(`- **Folder** \`${info.cwd}\``);
@@ -24439,6 +24449,77 @@ function formatTurnSection(turn) {
   }
   return lines.join("\n");
 }
+function formatSessionBase() {
+  return `filters:
+  and:
+    - file.hasProperty("terminus-session-id")
+
+properties:
+  note.terminus-goal:
+    displayName: Goal
+  note.terminus-terminal:
+    displayName: Terminal
+  note.terminus-branch:
+    displayName: Branch
+  note.terminus-turns:
+    displayName: Turns
+  note.terminus-files:
+    displayName: Files
+  note.terminus-session-status:
+    displayName: Status
+  note.terminus-started:
+    displayName: Started
+
+views:
+  - type: table
+    name: Recent
+    filters:
+      and:
+        - file.mtime > now() - "30d"
+    sort:
+      - property: note.terminus-started
+        direction: DESC
+    order:
+      - note.terminus-goal
+      - note.terminus-terminal
+      - note.terminus-branch
+      - note.terminus-turns
+      - note.terminus-files
+      - note.terminus-session-status
+      - note.terminus-started
+
+  - type: table
+    name: Unfinished
+    filters:
+      or:
+        - note["terminus-session-status"] == "active"
+        - note["terminus-session-status"] == "abandoned"
+    sort:
+      - property: note.terminus-started
+        direction: DESC
+    order:
+      - note.terminus-goal
+      - note.terminus-terminal
+      - note.terminus-branch
+      - note.terminus-turns
+      - note.terminus-session-status
+
+  - type: table
+    name: By branch
+    groupBy:
+      property: note.terminus-branch
+      direction: ASC
+    sort:
+      - property: note.terminus-started
+        direction: DESC
+    order:
+      - note.terminus-goal
+      - note.terminus-terminal
+      - note.terminus-turns
+      - note.terminus-files
+      - note.terminus-started
+`;
+}
 function formatSessionClosing(totals) {
   const parts = [
     `**Session ended** ${clock(totals.endedAt, true)}`,
@@ -24457,6 +24538,9 @@ function blockquote(text, marker = ">") {
 }
 function escapeCell(text) {
   return text.replace(/\|/g, "\\|").replace(/`/g, "'");
+}
+function plainTitle(text) {
+  return text.replace(/[[\]]/g, "").trim();
 }
 function yaml(value) {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, "\\n").replace(/\t/g, "\\t")}"`;
@@ -24490,6 +24574,7 @@ function formatDuration2(ms3) {
 // src/state/SessionLog.ts
 var NO_PROMPT = "";
 var DEFAULT_FOLDER = "Terminus/Sessions";
+var BASE_NAME = "Terminus sessions.base";
 var SessionLog = class {
   constructor(plugin) {
     this.plugin = plugin;
@@ -24762,8 +24847,16 @@ var SessionLog = class {
       await this.reopen(adopted);
       return adopted;
     }
+    await this.ensureBase(folder);
     const terminalName = (_b = (_a8 = this.plugin.findTerminalView(token)) == null ? void 0 : _a8.getDisplayText()) != null ? _b : "Terminus";
-    const header = { sessionId: state.sessionId, terminalName, startedAt: state.startedAt, cwd, branch };
+    const header = {
+      sessionId: state.sessionId,
+      terminalName,
+      startedAt: state.startedAt,
+      cwd,
+      branch,
+      goal: this.goalFor(token, state)
+    };
     const path = this.claimPath(folder, state, terminalName);
     if (path === null)
       return null;
@@ -24832,6 +24925,47 @@ var SessionLog = class {
         frontmatter["terminus-session-status"] = "active";
       });
     } catch (e) {
+    }
+  }
+  /**
+   * What the session set out to do: its first prompt, reduced to a title the
+   * same way a terminal group's name is, so the two agree on what a session
+   * is called. Read once, when the note's header is written.
+   *
+   * The agent store is asked first and the turn being accumulated second:
+   * the store has the prompt for an ordinary session, but it has been reset
+   * by a /clear, and comes back empty on one resumed after a restart, in
+   * which cases the bucket is the only place the text survives. Null when
+   * neither has one -- a session whose first prompt was a bare slash
+   * command, which titleFromPrompt declines to name.
+   */
+  goalFor(token, state) {
+    var _a8, _b, _c2, _d, _e4;
+    const first = (_e4 = (_d = (_b = (_a8 = this.plugin.agentSessionStore.get(token)) == null ? void 0 : _a8.turns.find((turn) => turn.prompt)) == null ? void 0 : _b.prompt) != null ? _d : (_c2 = [...state.pending.values()].find((bucket) => bucket.prompt)) == null ? void 0 : _c2.prompt) != null ? _e4 : null;
+    return first ? titleFromPrompt(first) : null;
+  }
+  /**
+   * Writes the Bases view into the log folder, once ever.
+   *
+   * Once is tracked in settings rather than by the file's absence, because
+   * those two differ in the case that matters: a user who deleted it has
+   * said they don't want it, and recreating it at the next session would be
+   * the plugin overruling them. A vault that refuses the write leaves the
+   * flag unsaved, so it is tried again next launch rather than every turn.
+   */
+  async ensureBase(folder) {
+    const settings = this.plugin.settings.multiAgent;
+    if (settings.sessionBaseCreated || !this.plugin.supportsBases)
+      return;
+    settings.sessionBaseCreated = true;
+    try {
+      const path = (0, import_obsidian24.normalizePath)(`${folder}/${BASE_NAME}`);
+      if (!this.plugin.app.vault.getAbstractFileByPath(path)) {
+        await this.plugin.app.vault.create(path, formatSessionBase());
+      }
+      await this.plugin.saveSettings();
+    } catch (e) {
+      settings.sessionBaseCreated = false;
     }
   }
   /** Creates the configured folder if it isn't there, one level at a time;
@@ -25432,6 +25566,7 @@ var DEFAULT_MULTI_AGENT_SETTINGS = {
   detectShellChanges: true,
   logSessions: false,
   sessionLogFolder: "Terminus/Sessions",
+  sessionBaseCreated: false,
   checkForUpdates: false
 };
 var DEFAULT_SETTINGS = {
@@ -25606,7 +25741,7 @@ var TerminusSettingTab = class extends import_obsidian27.PluginSettingTab {
       })
     );
     new import_obsidian27.Setting(containerEl).setName("Session log folder").setDesc(
-      "Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal. Each note records its status in frontmatter -- active, ended, or abandoned when Obsidian was closed before the session finished -- so a Bases view can sort them."
+      "Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal. Each note records its goal, status, branch and totals in frontmatter -- so a Bases view is dropped in alongside them the first time, with Recent, Unfinished and By branch views. Delete it if you'd rather not have it; it won't come back."
     ).addText(
       (text) => text.setPlaceholder(DEFAULT_MULTI_AGENT_SETTINGS.sessionLogFolder).setValue(multiAgent.sessionLogFolder).onChange(async (value) => {
         multiAgent.sessionLogFolder = value;
@@ -26476,6 +26611,12 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
    *  ships (see MULTI_AGENT_AVAILABLE), whatever the saved setting says. */
   get experience() {
     return MULTI_AGENT_AVAILABLE ? this.settings.experience : "classic";
+  }
+  /** Whether this Obsidian can open a .base file. Bases has been a core
+   *  plugin since 1.9.10, and manifest.json still accepts 1.7.2, where one
+   *  would sit in the vault as a file nothing can read. */
+  get supportsBases() {
+    return (0, import_obsidian32.requireApiVersion)("1.9.10");
   }
   /** Whether subagents get their own record and their edits their own
    *  attribution: Multi-agent with "Track subagents" on. */

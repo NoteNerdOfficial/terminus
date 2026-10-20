@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
+  formatSessionBase,
   formatSessionHeader,
   formatTurnSection,
   formatSessionClosing,
@@ -64,8 +65,11 @@ describe("session log format: header", () => {
       startedAt: AT,
       cwd: "/repo",
       branch: "main",
+      goal: "Rewrite the pricing page",
     });
     assert.ok(header.startsWith("---\n"), "frontmatter opens the note");
+    assert.ok(header.includes('terminus-goal: "Rewrite the pricing page"'), "the goal is queryable");
+    assert.ok(header.includes("- **Goal** Rewrite the pricing page"), "and readable in the note");
     assert.ok(header.includes("terminus-session-status: active"));
     assert.ok(header.includes("terminus-started: 2026-10-20T14:05:12"), "local time, not UTC-shifted");
     assert.ok(header.includes("# Session log — Terminus 1"));
@@ -73,10 +77,12 @@ describe("session log format: header", () => {
   });
 
   it("omits facts it does not have rather than writing them blank", () => {
-    const header = formatSessionHeader({ sessionId: null, terminalName: "T", startedAt: AT, cwd: null, branch: null });
+    const header = formatSessionHeader({ sessionId: null, terminalName: "T", startedAt: AT, cwd: null, branch: null, goal: null });
     assert.ok(!header.includes("terminus-folder"));
     assert.ok(!header.includes("terminus-branch"));
     assert.ok(!header.includes("terminus-session-id"));
+    assert.ok(!header.includes("terminus-goal"));
+    assert.ok(!header.includes("**Goal**"));
   });
 
   it("stops a terminal name from injecting its own frontmatter keys", () => {
@@ -86,6 +92,7 @@ describe("session log format: header", () => {
       startedAt: AT,
       cwd: null,
       branch: null,
+      goal: null,
     });
     const lines = header.split("---")[1]!.split("\n");
     const keys = lines.filter((line) => /^[a-zA-Z0-9_-]+:/.test(line)).map((line) => line.split(":")[0]);
@@ -187,5 +194,46 @@ describe("session log format: closing line and names", () => {
   it("stamps and formats dates in local time", () => {
     assert.equal(stamp(AT), "2026-10-20 1405");
     assert.equal(localIso(AT), "2026-10-20T14:05:12", "a late session does not slip to the next day");
+  });
+});
+
+describe("session log format: the goal line", () => {
+  const withGoal = (goal: string) =>
+    formatSessionHeader({ sessionId: null, terminalName: "T", startedAt: AT, cwd: null, branch: null, goal });
+
+  it("never lets a prompt turn the log into a link to the note it mentioned", () => {
+    const header = withGoal("Rewrite [[Pricing page]] and [[Navigation]]");
+    assert.ok(!header.includes("[["), "no wikilink survives, in the property or the summary line");
+    assert.ok(header.includes("Rewrite Pricing page and Navigation"), "the words are kept");
+  });
+
+  it("keeps a goal with a colon inside its property", () => {
+    const header = withGoal("Fix: the pricing page");
+    const line = header.split("\n").find((l) => l.startsWith("terminus-goal:"))!;
+    assert.equal(line, 'terminus-goal: "Fix: the pricing page"');
+  });
+});
+
+describe("session log format: the Bases view", () => {
+  it("offers the three views over the properties the notes actually write", () => {
+    const base = formatSessionBase();
+    for (const name of ["Recent", "Unfinished", "By branch"]) {
+      assert.ok(base.includes(`name: ${name}`), `${name} view`);
+    }
+    for (const property of ["terminus-goal", "terminus-terminal", "terminus-branch", "terminus-turns", "terminus-session-status"]) {
+      assert.ok(base.includes(property), `${property} is shown`);
+    }
+    assert.ok(base.includes('file.hasProperty("terminus-session-id")'), "scoped to this log's own notes");
+  });
+
+  it("indexes hyphenated properties inside filter expressions, never dots them", () => {
+    // `note.terminus-session-status == "active"` is read as arithmetic on
+    // three names: it matches nothing and reports no error, so the view just
+    // comes up empty. Verified in Obsidian 1.14; this guards the fix.
+    for (const line of formatSessionBase().split("\n")) {
+      if (!line.includes("==")) continue;
+      assert.ok(!/note\.[a-z]+-/.test(line), `filter must index, not dot: ${line.trim()}`);
+    }
+    assert.ok(formatSessionBase().includes('note["terminus-session-status"] == "active"'));
   });
 });
