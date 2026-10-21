@@ -474,7 +474,9 @@ export class SessionLog {
    *  back. Either way it would otherwise keep appending turns under a header
    *  saying it had finished. */
   private async reopen(file: TFile): Promise<void> {
-    const status = this.plugin.app.metadataCache.getFileCache(file)?.frontmatter?.["terminus-session-status"];
+    // `unknown`, not inferred: Obsidian types a note's frontmatter values as
+    // `any`, and this one is whatever the user last left in the property.
+    const status: unknown = this.plugin.app.metadataCache.getFileCache(file)?.frontmatter?.["terminus-session-status"];
     if (status !== "ended" && status !== "abandoned") return;
     try {
       await this.plugin.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {

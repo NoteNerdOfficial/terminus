@@ -310,7 +310,7 @@ export function stamp(at: number): string {
 export function safeFileName(name: string): string {
   return name
     .replace(/[\\/:*?"<>|[\]#^]/g, "-")
-    // eslint-disable-next-line no-control-regex
+    // eslint-disable-next-line no-control-regex -- control characters are the thing being stripped: a terminal's name can carry them, and Obsidian will not take one in a file name.
     .replace(/[\u0000-\u001f]/g, "")
     .replace(/\s+/g, " ")
     .replace(/^[.\s-]+|[.\s-]+$/g, "")
