@@ -126,7 +126,7 @@ export function makePlugin(store: AgentSessionStore, app: unknown, overrides: Re
   return {
     app,
     experience: "multi-agent",
-    settings: { multiAgent: { logSessions: true, sessionLogFolder: "Terminus/Sessions", sessionBaseCreated: false } },
+    settings: { multiAgent: { logSessions: true, sessionLogFolder: "Terminus/Sessions", sessionBaseFolder: "" } },
     // On, so the base is written by default in tests; a test that cares
     // about an older Obsidian overrides it.
     supportsBases: true,

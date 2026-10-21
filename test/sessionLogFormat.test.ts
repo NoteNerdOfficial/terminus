@@ -207,6 +207,17 @@ describe("session log format: the goal line", () => {
     assert.ok(header.includes("Rewrite Pricing page and Navigation"), "the words are kept");
   });
 
+  it("never lets a prompt file the log under a tag", () => {
+    const header = withGoal("Update the #onboarding guide");
+    assert.ok(!header.includes("#onboarding"), "no tag survives, in the property or the summary line");
+    assert.ok(header.includes("Update the onboarding guide"), "the words are kept");
+  });
+
+  it("leaves a # that Obsidian would not read as a tag", () => {
+    assert.ok(withGoal("Fix the C# parser").includes("C# parser"), "not a tag: no space before it");
+    assert.ok(withGoal("Fix issue #4 in the parser").includes("issue #4 in"), "not a tag: all digits");
+  });
+
   it("keeps a goal with a colon inside its property", () => {
     const header = withGoal("Fix: the pricing page");
     const line = header.split("\n").find((l) => l.startsWith("terminus-goal:"))!;

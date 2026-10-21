@@ -506,20 +506,26 @@ export class SessionLog {
   }
 
   /**
-   * Writes the Bases view into the log folder, once ever.
+   * Writes the Bases view into the log folder, once per folder.
    *
-   * Once is tracked in settings rather than by the file's absence, because
-   * those two differ in the case that matters: a user who deleted it has
-   * said they don't want it, and recreating it at the next session would be
-   * the plugin overruling them. A vault that refuses the write leaves the
-   * flag unsaved, so it is tried again next launch rather than every turn.
+   * What has been done is remembered in settings rather than read off the
+   * file's absence, because those two differ in the case that matters: a
+   * user who deleted the view has said they don't want it, and recreating
+   * it at the next session would be the plugin overruling them. Comparing
+   * the folder rather than holding a flag keeps that true while still
+   * giving a view to a folder the setting is later pointed at -- and,
+   * unlike resetting a flag when the setting changes, it cannot resurrect a
+   * deleted view when the field is edited back to the same folder. A vault
+   * that refuses the write puts the old value back, so it is tried again
+   * next launch rather than every turn.
    */
   private async ensureBase(folder: string): Promise<void> {
     const settings = this.plugin.settings.multiAgent;
-    if (settings.sessionBaseCreated || !this.plugin.supportsBases) return;
+    if (settings.sessionBaseFolder === folder || !this.plugin.supportsBases) return;
     // Set before the await: two terminals starting together must not both
     // get as far as creating it.
-    settings.sessionBaseCreated = true;
+    const previous = settings.sessionBaseFolder;
+    settings.sessionBaseFolder = folder;
     try {
       const path = normalizePath(`${folder}/${BASE_NAME}`);
       if (!this.plugin.app.vault.getAbstractFileByPath(path)) {
@@ -527,7 +533,7 @@ export class SessionLog {
       }
       await this.plugin.saveSettings();
     } catch {
-      settings.sessionBaseCreated = false;
+      settings.sessionBaseFolder = previous;
     }
   }
 

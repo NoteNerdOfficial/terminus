@@ -21,6 +21,13 @@ function setup(vault?: FakeVault) {
   return { vault: v, store, log };
 }
 
+/** The settings a log is reading, to stand in for a user changing them.
+ *  Cast because makePlugin's object is narrower than TerminusPlugin. */
+function settingsOf(log: SessionLog): Record<string, unknown> {
+  return (log as unknown as { plugin: { settings: { multiAgent: Record<string, unknown> } } }).plugin.settings
+    .multiAgent;
+}
+
 /** One complete turn: prompt, a single edit, Stop, and its log section. */
 async function runTurn(
   log: SessionLog,
@@ -299,13 +306,58 @@ describe("session log: the Bases view", () => {
 
     // A later session, carrying the settings the first one saved.
     const after = setup(vault);
-    (after.log as unknown as { plugin: { settings: { multiAgent: Record<string, unknown> } } }).plugin.settings.multiAgent.sessionBaseCreated = true;
+    settingsOf(after.log).sessionBaseFolder = "Terminus/Sessions";
     start(after.log, after.store, "S2");
     await runTurn(after.log, after.store, "S2", "p2", "Second request", "/vault/b.md", 900_000);
     await settle();
 
     assert.equal(vault.base(), null, "deleting it is a decision that sticks");
     assert.equal(vault.notes().length, 2, "the notes are still written");
+  });
+
+  it("gives a view to a folder the setting is later pointed at", async () => {
+    const vault = makeVault();
+    const first = setup(vault);
+    start(first.log, first.store, "S1");
+    await runTurn(first.log, first.store, "S1", "p1", "First request", "/vault/a.md", 1000);
+    await settle();
+    assert.equal(vault.base()!.path, "Terminus/Sessions/Terminus sessions.base");
+
+    // The user moves the folder; the settings the first session saved come
+    // with them.
+    const after = setup(vault);
+    const settings = settingsOf(after.log);
+    settings.sessionBaseFolder = "Terminus/Sessions";
+    settings.sessionLogFolder = "Logs/Claude";
+    start(after.log, after.store, "S2");
+    await runTurn(after.log, after.store, "S2", "p2", "Second request", "/vault/b.md", 900_000);
+    await settle();
+
+    const paths = [...vault.files.values()].filter((f) => f.extension === "base").map((f) => f.path).sort();
+    assert.deepEqual(
+      paths,
+      ["Logs/Claude/Terminus sessions.base", "Terminus/Sessions/Terminus sessions.base"],
+      "the new folder gets its own; the old one keeps the view already there"
+    );
+  });
+
+  it("does not write a second one when the field is edited back to the same folder", async () => {
+    const vault = makeVault();
+    const first = setup(vault);
+    start(first.log, first.store, "S1");
+    await runTurn(first.log, first.store, "S1", "p1", "First request", "/vault/a.md", 1000);
+    await settle();
+    vault.files.delete(vault.base()!.path);
+
+    // Retyping the folder leaves the setting at the value it already had:
+    // a flag reset on change would bring the deleted view back here.
+    const after = setup(vault);
+    settingsOf(after.log).sessionBaseFolder = "Terminus/Sessions";
+    start(after.log, after.store, "S2");
+    await runTurn(after.log, after.store, "S2", "p2", "Second request", "/vault/b.md", 900_000);
+    await settle();
+
+    assert.equal(vault.base(), null, "still deleted");
   });
 
   it("writes none on an Obsidian too old for Bases", async () => {

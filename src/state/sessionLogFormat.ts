@@ -252,13 +252,24 @@ function escapeCell(text: string): string {
   return text.replace(/\|/g, "\\|").replace(/`/g, "'");
 }
 
-/** A title as plain text. The brackets that would make it a wikilink are
- *  dropped: a prompt that mentions [[a note]] must not give the log note a
- *  link to it, which would show up in that note's backlinks as though the
- *  log were about it. Obsidian resolves links in frontmatter as well as in
- *  the body, so this matters for the property and the summary line alike. */
+/**
+ * A `#` that Obsidian would read as a tag: at the start or after a space,
+ * and followed by a token with at least one character that isn't a digit --
+ * its rule, which is why `#1` is left alone and `#1a` is not. Matching the
+ * rule rather than every `#` keeps "C#" and "issue #4" as the user wrote
+ * them.
+ */
+const TAG = /(^|\s)#(?=[^\s#]*[^\s\d#])/g;
+
+/** A title as plain text. The markup that would file the log note under
+ *  something else is dropped: the brackets that would make a mentioned
+ *  [[a note]] a link, showing the log in that note's backlinks as though it
+ *  were about it, and a #tag that would list the log under someone's topic.
+ *  Obsidian resolves links in frontmatter as well as in the body, and reads
+ *  the body's text for tags, so this matters for the property and the
+ *  summary line alike. */
 function plainTitle(text: string): string {
-  return text.replace(/[[\]]/g, "").trim();
+  return text.replace(/[[\]]/g, "").replace(TAG, "$1").trim();
 }
 
 /** A double-quoted YAML scalar, safe for a path or a name with a colon, a

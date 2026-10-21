@@ -24539,8 +24539,9 @@ function blockquote(text, marker = ">") {
 function escapeCell(text) {
   return text.replace(/\|/g, "\\|").replace(/`/g, "'");
 }
+var TAG = /(^|\s)#(?=[^\s#]*[^\s\d#])/g;
 function plainTitle(text) {
-  return text.replace(/[[\]]/g, "").trim();
+  return text.replace(/[[\]]/g, "").replace(TAG, "$1").trim();
 }
 function yaml(value) {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r?\n/g, "\\n").replace(/\t/g, "\\t")}"`;
@@ -24945,19 +24946,25 @@ var SessionLog = class {
     return first ? titleFromPrompt(first) : null;
   }
   /**
-   * Writes the Bases view into the log folder, once ever.
+   * Writes the Bases view into the log folder, once per folder.
    *
-   * Once is tracked in settings rather than by the file's absence, because
-   * those two differ in the case that matters: a user who deleted it has
-   * said they don't want it, and recreating it at the next session would be
-   * the plugin overruling them. A vault that refuses the write leaves the
-   * flag unsaved, so it is tried again next launch rather than every turn.
+   * What has been done is remembered in settings rather than read off the
+   * file's absence, because those two differ in the case that matters: a
+   * user who deleted the view has said they don't want it, and recreating
+   * it at the next session would be the plugin overruling them. Comparing
+   * the folder rather than holding a flag keeps that true while still
+   * giving a view to a folder the setting is later pointed at -- and,
+   * unlike resetting a flag when the setting changes, it cannot resurrect a
+   * deleted view when the field is edited back to the same folder. A vault
+   * that refuses the write puts the old value back, so it is tried again
+   * next launch rather than every turn.
    */
   async ensureBase(folder) {
     const settings = this.plugin.settings.multiAgent;
-    if (settings.sessionBaseCreated || !this.plugin.supportsBases)
+    if (settings.sessionBaseFolder === folder || !this.plugin.supportsBases)
       return;
-    settings.sessionBaseCreated = true;
+    const previous = settings.sessionBaseFolder;
+    settings.sessionBaseFolder = folder;
     try {
       const path = (0, import_obsidian24.normalizePath)(`${folder}/${BASE_NAME}`);
       if (!this.plugin.app.vault.getAbstractFileByPath(path)) {
@@ -24965,7 +24972,7 @@ var SessionLog = class {
       }
       await this.plugin.saveSettings();
     } catch (e) {
-      settings.sessionBaseCreated = false;
+      settings.sessionBaseFolder = previous;
     }
   }
   /** Creates the configured folder if it isn't there, one level at a time;
@@ -25566,7 +25573,7 @@ var DEFAULT_MULTI_AGENT_SETTINGS = {
   detectShellChanges: true,
   logSessions: false,
   sessionLogFolder: "Terminus/Sessions",
-  sessionBaseCreated: false,
+  sessionBaseFolder: "",
   checkForUpdates: false
 };
 var DEFAULT_SETTINGS = {
@@ -25738,16 +25745,18 @@ var TerminusSettingTab = class extends import_obsidian27.PluginSettingTab {
       (toggle) => toggle.setValue(multiAgent.logSessions).onChange(async (value) => {
         multiAgent.logSessions = value;
         await this.plugin.saveSettings();
+        folderSetting == null ? void 0 : folderSetting.settingEl.toggle(value);
       })
     );
-    new import_obsidian27.Setting(containerEl).setName("Session log folder").setDesc(
-      "Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal. Each note records its goal, status, branch and totals in frontmatter -- so a Bases view is dropped in alongside them the first time, with Recent, Unfinished and By branch views. Delete it if you'd rather not have it; it won't come back."
+    const folderSetting = new import_obsidian27.Setting(containerEl).setName("Session log folder").setDesc(
+      "Where those notes go. Created if it isn't there; one note per session, named by date, time and terminal. Each note records its goal, status, branch and totals in frontmatter -- so a Bases view is dropped in alongside them, with Recent, Unfinished and By branch views. Delete the view if you'd rather not have it and it won't come back; point this at another folder and that one gets its own."
     ).addText(
       (text) => text.setPlaceholder(DEFAULT_MULTI_AGENT_SETTINGS.sessionLogFolder).setValue(multiAgent.sessionLogFolder).onChange(async (value) => {
         multiAgent.sessionLogFolder = value;
         await this.plugin.saveSettings();
       })
     );
+    folderSetting.settingEl.toggle(multiAgent.logSessions);
     new import_obsidian27.Setting(containerEl).setName("Check for updates").setDesc(
       "Ask GitHub for the latest release at startup and twice a day, and show an update link next to the version in the sidebar. While this is off, the plugin makes no network requests."
     ).addToggle(
