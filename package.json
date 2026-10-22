@@ -1,6 +1,6 @@
 {
   "name": "terminus",
-  "version": "1.0.43",
+  "version": "1.0.44",
   "description": "A real terminal with shell integration and beginner-friendly command help, plus a multi-agent Agent inbox for several Claude Code sessions and a review workflow for their edits: word-level diffs, undo, backlink-breakage warnings, and more.",
   "main": "main.js",
   "scripts": {
@@ -14,6 +14,9 @@
   "keywords": [],
   "author": "NoteNerd",
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "@types/node": "^22.10.0",
     "@xterm/addon-fit": "^0.11.0",
@@ -27,7 +30,7 @@
   "devDependencies": {
     "@codemirror/state": "^6.0.0",
     "@codemirror/view": "^6.0.0",
-    "esbuild": "^0.17.19",
+    "esbuild": "^0.28.2",
     "tslib": "2.4.0",
     "typescript": "^5.7.2"
   }
