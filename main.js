@@ -84,12 +84,12 @@ var require_fs = __commonJS({
       };
     }();
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.pathJoin = pathJoin12;
+    exports.pathJoin = pathJoin13;
     exports.pathBasename = pathBasename13;
     exports.pathDirname = pathDirname4;
-    exports.pathRelative = pathRelative10;
+    exports.pathRelative = pathRelative11;
     exports.fileExistsSync = fileExistsSync6;
-    exports.readTextFileIfExists = readTextFileIfExists5;
+    exports.readTextFileIfExists = readTextFileIfExists6;
     exports.writeTextFile = writeTextFile5;
     exports.appendTextFile = appendTextFile2;
     exports.makeDirRecursive = makeDirRecursive4;
@@ -100,7 +100,7 @@ var require_fs = __commonJS({
     var fsPromises = __importStar(require("fs/promises"));
     var nodePath = __importStar(require("path"));
     var crypto_1 = require("crypto");
-    function pathJoin12(...segments) {
+    function pathJoin13(...segments) {
       return nodePath.join(...segments);
     }
     function pathBasename13(filePath, ext) {
@@ -109,7 +109,7 @@ var require_fs = __commonJS({
     function pathDirname4(filePath) {
       return nodePath.dirname(filePath);
     }
-    function pathRelative10(from, to) {
+    function pathRelative11(from, to) {
       return nodePath.relative(from, to);
     }
     function fileExistsSync6(filePath) {
@@ -118,7 +118,7 @@ var require_fs = __commonJS({
     function isEnoent(err) {
       return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
     }
-    async function readTextFileIfExists5(filePath) {
+    async function readTextFileIfExists6(filePath) {
       try {
         return await fsPromises.readFile(filePath, "utf8");
       } catch (err) {
@@ -159,12 +159,12 @@ var require_process = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ExecFileError = void 0;
-    exports.getEnvVar = getEnvVar5;
+    exports.getEnvVar = getEnvVar6;
     exports.getAllEnvVars = getAllEnvVars3;
     exports.execFileText = execFileText6;
     exports.spawnWithControlChannel = spawnWithControlChannel2;
     var child_process_1 = require("child_process");
-    function getEnvVar5(name) {
+    function getEnvVar6(name) {
       return process.env[name];
     }
     function getAllEnvVars3() {
@@ -393,10 +393,17 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian32 = require("obsidian");
-var import_terminus_node_bridge29 = __toESM(require_dist());
+var import_terminus_node_bridge30 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
 var import_terminus_node_bridge = __toESM(require_dist());
+
+// src/hooks/types.ts
+function isBashPayload(payload) {
+  return payload.tool_name === "Bash";
+}
+
+// src/server/ReviewServer.ts
 var MAX_BODY_BYTES = 5 * 1024 * 1024;
 var STATUS_BODY_MAX_BYTES = 1024 * 1024;
 var SESSION_EVENTS = /* @__PURE__ */ new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "StopFailure"]);
@@ -501,7 +508,10 @@ var ReviewServer = class {
       res.end("invalid JSON payload");
       return;
     }
-    await panel.onChangeApplied(payload);
+    if (isBashPayload(payload))
+      await panel.onShellCommand(payload);
+    else
+      await panel.onChangeApplied(payload);
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("");
   }
@@ -565,9 +575,11 @@ function quoteLegacyCommands(hooks, paths) {
 function isClaudeSettingsFile(value) {
   return typeof value === "object" && value !== null;
 }
-var MULTI_AGENT_ONLY_EVENTS = ["SessionStart", "SessionEnd", "UserPromptSubmit", "StopFailure"];
+var MULTI_AGENT_ONLY_EVENTS = ["SessionEnd", "StopFailure"];
+var SHARED_SESSION_EVENTS = ["SessionStart", "UserPromptSubmit"];
 var SUBAGENT_EVENTS2 = ["SubagentStart", "SubagentStop"];
 var MATCHER = "Edit|Write|NotebookEdit";
+var BASH_MATCHER = "Bash";
 var AGENT_MATCHER = "Agent|Task";
 var DEFAULT_TIMEOUT_SECONDS = 15;
 var TURN_END_TIMEOUT_SECONDS = 10;
@@ -632,6 +644,19 @@ async function provisionClaudeSettings(app, manifest, options) {
     command: hookCommand(getNotificationBridgePath(app, manifest)),
     timeout: NOTIFICATION_TIMEOUT_SECONDS
   });
+  const bridge = hookCommand(getHookBridgePath(app, manifest));
+  const bashPreChanged = ensureHook(hooks, "PreToolUse", {
+    matcher: BASH_MATCHER,
+    command: bridge,
+    timeout: DEFAULT_TIMEOUT_SECONDS,
+    distinctMatcher: true
+  });
+  const bashPostChanged = ensureHook(hooks, "PostToolUse", {
+    matcher: BASH_MATCHER,
+    command: bridge,
+    timeout: DEFAULT_TIMEOUT_SECONDS,
+    distinctMatcher: true
+  });
   const sessionEventBridge = hookCommand(getSessionEventBridgePath(app, manifest));
   const sessionHook = { command: sessionEventBridge, timeout: SESSION_EVENT_TIMEOUT_SECONDS };
   let sessionHooksChanged = false;
@@ -639,13 +664,16 @@ async function provisionClaudeSettings(app, manifest, options) {
     const changed = multiAgent ? ensureHook(hooks, event, sessionHook) : removeHook(hooks, event, sessionEventBridge);
     sessionHooksChanged || (sessionHooksChanged = changed);
   }
+  for (const event of SHARED_SESSION_EVENTS) {
+    sessionHooksChanged || (sessionHooksChanged = ensureHook(hooks, event, sessionHook));
+  }
   for (const event of SUBAGENT_EVENTS2) {
     const changed = trackSubagents ? ensureHook(hooks, event, sessionHook) : removeHook(hooks, event, sessionEventBridge);
     sessionHooksChanged || (sessionHooksChanged = changed);
   }
   const agentToolChanged = trackSubagents ? ensureHook(hooks, "PreToolUse", { ...sessionHook, matcher: AGENT_MATCHER }) : removeHook(hooks, "PreToolUse", sessionEventBridge);
   sessionHooksChanged || (sessionHooksChanged = agentToolChanged);
-  if (quotedLegacy || preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged) {
+  if (quotedLegacy || preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged || bashPreChanged || bashPostChanged) {
     await (0, import_terminus_node_bridge2.writeTextFile)(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
   await ensureGitignoreEntry(basePath);
@@ -653,7 +681,7 @@ async function provisionClaudeSettings(app, manifest, options) {
 function ensureHook(hooks, event, spec) {
   var _a8;
   const entries = (_a8 = hooks[event]) != null ? _a8 : hooks[event] = [];
-  const existing = entries.flatMap((entry) => {
+  const existing = entries.filter((entry) => !spec.distinctMatcher || entry.matcher === spec.matcher).flatMap((entry) => {
     var _a9;
     return (_a9 = entry.hooks) != null ? _a9 : [];
   }).find((h2) => h2.command === spec.command);
@@ -15495,7 +15523,7 @@ var xr2 = class extends B3 {
 };
 
 // src/views/TerminalView.ts
-var import_terminus_node_bridge15 = __toESM(require_dist());
+var import_terminus_node_bridge16 = __toESM(require_dist());
 
 // src/node/emitter.ts
 var TypedEmitter = class {
@@ -16583,11 +16611,192 @@ var RenameTerminalModal = class extends import_obsidian6.Modal {
   }
 };
 
-// src/git/gitBranch.ts
+// src/server/shellWrites.ts
 var import_terminus_node_bridge12 = __toESM(require_dist());
+var WRITING_COMMANDS = /* @__PURE__ */ new Set(["tee", "cp", "mv", "touch", "rm", "sed", "perl", "truncate", "install", "dd"]);
+var WRITE_REDIRECT = /^(?:[0-9]*|&)>>?\|?$/;
+var NOT_A_FILE = /^\/(?:dev|proc|sys)\//;
+var UNRESOLVED = /[$`*?[\]{}]/;
+var MAX_TARGETS = 64;
+function stripHeredocs(command) {
+  var _a8, _b;
+  const lines = command.split("\n");
+  const kept = [];
+  let i8 = 0;
+  while (i8 < lines.length) {
+    const line = (_a8 = lines[i8]) != null ? _a8 : "";
+    i8 += 1;
+    const delimiters = [];
+    const cleaned = line.replace(
+      /<<(-?)\s*(?:'([^']*)'|"([^"]*)"|([A-Za-z_][\w]*))/g,
+      (_match, dash, single, double, bare) => {
+        var _a9;
+        const word = (_a9 = single != null ? single : double) != null ? _a9 : bare;
+        if (word)
+          delimiters.push({ word, stripTabs: dash === "-" });
+        return " ";
+      }
+    );
+    kept.push(cleaned);
+    for (const { word, stripTabs } of delimiters) {
+      while (i8 < lines.length) {
+        const body = (_b = lines[i8]) != null ? _b : "";
+        i8 += 1;
+        if ((stripTabs ? body.replace(/^\t+/, "") : body) === word)
+          break;
+      }
+    }
+  }
+  return kept.join("\n");
+}
+function tokenize(command) {
+  const tokens = [];
+  let current = "";
+  let has = false;
+  const flush = () => {
+    if (has)
+      tokens.push({ text: current, op: false });
+    current = "";
+    has = false;
+  };
+  for (let i8 = 0; i8 < command.length; i8 += 1) {
+    const c = command[i8];
+    if (c === "\\" && i8 + 1 < command.length) {
+      current += command[i8 + 1];
+      has = true;
+      i8 += 1;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      const end = command.indexOf(c, i8 + 1);
+      const body = end === -1 ? command.slice(i8 + 1) : command.slice(i8 + 1, end);
+      current += body;
+      has = true;
+      i8 = end === -1 ? command.length : end;
+      continue;
+    }
+    if (c === " " || c === "	" || c === "\n") {
+      flush();
+      if (c === "\n")
+        tokens.push({ text: "\n", op: true });
+      continue;
+    }
+    if (c === ">" || c === "<" || c === "|" || c === "&" || c === ";" || c === "(" || c === ")") {
+      let op = c;
+      const fd = /^[0-9]+$|^&$/.test(current) ? current : "";
+      if (!fd)
+        flush();
+      else {
+        current = "";
+        has = false;
+      }
+      while (i8 + 1 < command.length && (command[i8 + 1] === c || c !== ";" && (command[i8 + 1] === ">" || command[i8 + 1] === "|"))) {
+        if (op.length >= 3)
+          break;
+        op += command[i8 + 1];
+        i8 += 1;
+      }
+      tokens.push({ text: fd + op, op: true });
+      continue;
+    }
+    current += c;
+    has = true;
+  }
+  flush();
+  return tokens;
+}
+var ABSOLUTE = /^(?:\/|[A-Za-z]:[\\/]|\\\\)/;
+function resolveTarget(word, cwd, home) {
+  if (!word || word.startsWith("-") || UNRESOLVED.test(word))
+    return null;
+  let path = word;
+  if (path === "~" || path.startsWith("~/")) {
+    if (!home)
+      return null;
+    path = path === "~" ? home : (0, import_terminus_node_bridge12.pathJoin)(home, path.slice(2));
+  }
+  const absolute = ABSOLUTE.test(path) ? (0, import_terminus_node_bridge12.pathJoin)(path) : (0, import_terminus_node_bridge12.pathJoin)(cwd, path);
+  if (NOT_A_FILE.test(absolute))
+    return null;
+  return absolute;
+}
+function editsInPlace(words) {
+  return words.some((w2) => w2 === "-i" || /^-i[^-]*$/.test(w2) || w2 === "--in-place" || /^--in-place=/.test(w2));
+}
+function parseShellWriteTargets(command, cwd, home) {
+  const tokens = tokenize(stripHeredocs(command));
+  const targets = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (word, at4) => {
+    const path = resolveTarget(word, at4, home);
+    if (!path || seen.has(path))
+      return;
+    seen.add(path);
+    targets.push(path);
+  };
+  let at3 = cwd;
+  let words = [];
+  let pendingRedirect = false;
+  const endSegment = () => {
+    var _a8, _b;
+    if (words.length === 0)
+      return;
+    const start = words.findIndex((w2) => !/^[A-Za-z_][\w]*=/.test(w2));
+    const argv = start === -1 ? [] : words.slice(start);
+    const name = (_b = (_a8 = argv[0]) == null ? void 0 : _a8.split("/").pop()) != null ? _b : "";
+    if (name === "cd" && argv[1]) {
+      const next = resolveTarget(argv[1], at3, home);
+      if (next)
+        at3 = next;
+    } else if (WRITING_COMMANDS.has(name)) {
+      const args = argv.slice(1);
+      const files = args.filter((w2) => w2 !== "" && !w2.startsWith("-"));
+      if (name === "sed" || name === "perl") {
+        const scriptIsPositional = !args.some((w2) => /^--(?:expression|file)\b/.test(w2) || /^-[^-]*[ef]/.test(w2));
+        if (editsInPlace(args))
+          for (const f of scriptIsPositional ? files.slice(1) : files)
+            add(f, at3);
+      } else if (name === "cp" || name === "mv" || name === "install") {
+        const destination = files.length === 2 ? files[1] : void 0;
+        if (destination)
+          add(destination, at3);
+      } else if (name === "dd") {
+        for (const w2 of args)
+          if (w2.startsWith("of="))
+            add(w2.slice(3), at3);
+      } else {
+        for (const f of files)
+          add(f, at3);
+      }
+    }
+    words = [];
+  };
+  for (const token of tokens) {
+    if (token.op) {
+      if (WRITE_REDIRECT.test(token.text)) {
+        pendingRedirect = true;
+        continue;
+      }
+      pendingRedirect = false;
+      endSegment();
+      continue;
+    }
+    if (pendingRedirect) {
+      pendingRedirect = false;
+      add(token.text, at3);
+      continue;
+    }
+    words.push(token.text);
+  }
+  endSegment();
+  return targets.slice(0, MAX_TARGETS);
+}
+
+// src/git/gitBranch.ts
+var import_terminus_node_bridge13 = __toESM(require_dist());
 async function getGitBranch(cwd) {
   try {
-    const { stdout } = await (0, import_terminus_node_bridge12.execFileText)("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, maxBuffer: 64 * 1024 });
+    const { stdout } = await (0, import_terminus_node_bridge13.execFileText)("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, maxBuffer: 64 * 1024 });
     const branch = stdout.trim();
     return branch && branch !== "HEAD" ? branch : null;
   } catch (e) {
@@ -16596,12 +16805,12 @@ async function getGitBranch(cwd) {
 }
 
 // src/git/gitStatus.ts
-var import_terminus_node_bridge13 = __toESM(require_dist());
+var import_terminus_node_bridge14 = __toESM(require_dist());
 async function readGitStatus(cwd) {
   try {
-    const { stdout: cdup } = await (0, import_terminus_node_bridge13.execFileText)("git", ["rev-parse", "--show-cdup"], { cwd, maxBuffer: 64 * 1024 });
-    const root = (0, import_terminus_node_bridge13.pathJoin)(cwd, cdup.trim());
-    const { stdout } = await (0, import_terminus_node_bridge13.execFileText)("git", ["status", "--porcelain", "-z", "-uall"], { cwd, maxBuffer: 4 * 1024 * 1024 });
+    const { stdout: cdup } = await (0, import_terminus_node_bridge14.execFileText)("git", ["rev-parse", "--show-cdup"], { cwd, maxBuffer: 64 * 1024 });
+    const root = (0, import_terminus_node_bridge14.pathJoin)(cwd, cdup.trim());
+    const { stdout } = await (0, import_terminus_node_bridge14.execFileText)("git", ["status", "--porcelain", "-z", "-uall"], { cwd, maxBuffer: 4 * 1024 * 1024 });
     return { root, entries: parsePorcelainZ(stdout, root) };
   } catch (e) {
     return null;
@@ -16617,6 +16826,26 @@ function changedSince(before, after) {
     changed.push({ filePath, status });
   }
   return changed;
+}
+var MAX_BASELINE_CHARS = 2 * 1024 * 1024;
+async function readGitFileAtHead(root, filePath) {
+  const relative = (0, import_terminus_node_bridge14.pathRelative)(root, filePath).split("\\").join("/");
+  if (!relative || relative.startsWith(".."))
+    return null;
+  try {
+    const { stdout } = await (0, import_terminus_node_bridge14.execFileText)("git", ["show", `HEAD:${relative}`], { cwd: root, maxBuffer: 8 * 1024 * 1024 });
+    if (stdout.includes("\0") || stdout.length > MAX_BASELINE_CHARS)
+      return null;
+    return stdout;
+  } catch (e) {
+    return null;
+  }
+}
+function isNewFile(status) {
+  return status.includes("?") || status.includes("A");
+}
+function isRenameOrCopy(status) {
+  return status.includes("R") || status.includes("C");
 }
 function describeStatus(status) {
   if (status.includes("?"))
@@ -16640,7 +16869,7 @@ function parsePorcelainZ(stdout, root) {
     const path = field.slice(3);
     if (!path)
       continue;
-    entries.set((0, import_terminus_node_bridge13.pathJoin)(root, path), status);
+    entries.set((0, import_terminus_node_bridge14.pathJoin)(root, path), status);
     if (status.includes("R") || status.includes("C"))
       i8++;
   }
@@ -16649,7 +16878,7 @@ function parsePorcelainZ(stdout, root) {
 
 // src/groups/groupMenus.ts
 var import_obsidian9 = require("obsidian");
-var import_terminus_node_bridge14 = __toESM(require_dist());
+var import_terminus_node_bridge15 = __toESM(require_dist());
 
 // src/groups/groupNaming.ts
 var STRENGTH = { placeholder: 0, folder: 1, branch: 2, prompt: 3, claude: 4, note: 5, user: 6 };
@@ -17338,7 +17567,7 @@ var SnoozeModal = class extends import_obsidian9.SuggestModal {
 };
 function setGroupFolder(plugin, groupId, folder) {
   plugin.groupStore.setFolder(groupId, folder);
-  const relative = folder ? (0, import_terminus_node_bridge14.pathRelative)(plugin.getVaultBasePath(), folder) : null;
+  const relative = folder ? (0, import_terminus_node_bridge15.pathRelative)(plugin.getVaultBasePath(), folder) : null;
   plugin.groupStore.autoName(groupId, titleFromFolder(relative), "folder");
 }
 function moveTabCommand(plugin, leaf) {
@@ -17385,7 +17614,7 @@ var FolderSuggestModal = class extends import_obsidian9.FuzzySuggestModal {
     return folder.isRoot() ? "/ (vault)" : folder.path;
   }
   onChooseItem(folder) {
-    this.onPick(folder.isRoot() ? null : (0, import_terminus_node_bridge14.pathJoin)(this.plugin.getVaultBasePath(), folder.path));
+    this.onPick(folder.isRoot() ? null : (0, import_terminus_node_bridge15.pathJoin)(this.plugin.getVaultBasePath(), folder.path));
   }
 };
 
@@ -17528,16 +17757,26 @@ var TerminalView = class extends import_obsidian10.ItemView {
     // dot the user never focuses is exactly the case it exists to catch)
     // that a timed guess would only risk clearing it too early.
     this.isPendingAttention = false;
-    // Shell-edit detection (Multi-agent, "Detect shell changes" on; see
-    // git/gitStatus.ts). `turnBaseline` is `git status` as the current turn
-    // began, compared against a fresh read when it ends; `hookedFiles` is
-    // every file an Edit/Write/NotebookEdit hook has accounted for this
-    // session, which is what tells Claude's tool edits apart from the ones it
-    // made through the shell. Both are per Claude session, so both reset at
-    // SessionStart (a /clear included).
-    this.turnBaseline = null;
+    // Indirect-write detection (both experiences, "Detect shell changes" on;
+    // see git/gitStatus.ts). `turnBaselines` is `git status` as the current
+    // turn began, compared against a fresh read when it ends; `hookedFiles`
+    // is every file a hook or a Bash snapshot has already accounted for this
+    // session, which is what leaves only the writes nothing saw directly.
+    // Both are per Claude session, so both reset at SessionStart (a /clear
+    // included).
+    /** `git status` per repository root as the current turn began. More than
+     *  one because Claude's own folder and the vault are often different
+     *  repositories -- scanning only the session's cwd missed every change it
+     *  made in the vault, and vice versa. */
+    this.turnBaselines = /* @__PURE__ */ new Map();
     this.hookedFiles = /* @__PURE__ */ new Set();
-    this.token = (0, import_terminus_node_bridge15.randomHex)(16);
+    /** Pre-command content of the files each in-flight Bash call looks like it
+     *  will write, keyed by tool_use_id so PostToolUse can pair with its own
+     *  PreToolUse. Entries are consumed by that post call, and cleared when a
+     *  turn or session ends in case one never arrives (an interrupted command,
+     *  or a hook that timed out). */
+    this.shellSnapshots = /* @__PURE__ */ new Map();
+    this.token = (0, import_terminus_node_bridge16.randomHex)(16);
     this.terminalNumber = plugin.allocateTerminalNumber();
   }
   getViewType() {
@@ -17613,6 +17852,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
     });
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload),
+      onShellCommand: (payload) => this.onShellCommand(payload),
       onTurnEnd: (payload) => this.onTurnEnd(payload),
       onNeedsAttention: (payload) => this.onNeedsAttention(payload),
       onSessionEvent: (payload) => this.onSessionEvent(payload)
@@ -17737,7 +17977,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
     this.activityFiles.add(filePath);
     const names = [...this.activityFiles];
     const only = names.length === 1 ? names[0] : void 0;
-    const label = only ? middleTruncate((0, import_terminus_node_bridge15.pathBasename)(only)) : `${names.length} files`;
+    const label = only ? middleTruncate((0, import_terminus_node_bridge16.pathBasename)(only)) : `${names.length} files`;
     this.activityLabelEl.setText(label);
     this.activityEl.setAttribute("aria-label", names.join("\n"));
     this.activityEl.addClass("is-active");
@@ -17761,6 +18001,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
   endTurn(message, identity, failed, promptId) {
     this.clearActivity();
     this.clearPendingAttention();
+    this.shellSnapshots.clear();
     if (failed)
       this.plugin.agentSessionStore.turnFailed(this.token, message, identity, Date.now(), promptId);
     else
@@ -17803,7 +18044,33 @@ var TerminalView = class extends import_obsidian10.ItemView {
       this.plugin.groupStore.autoName(this.groupIdValue, titleFromBranch(branch), "branch");
   }
   get detectsShellChanges() {
-    return this.plugin.experience === "multi-agent" && this.plugin.settings.multiAgent.detectShellChanges;
+    return this.plugin.settings.detectShellChanges;
+  }
+  /** The folders to ask git about: Claude's own working directory and the
+   *  vault. Either can be outside the other -- a session run in `~/code/api`
+   *  writes there and in the vault -- and a repository reached from both is
+   *  scanned once, since readGitStatus resolves each to its root. */
+  shellScanDirs() {
+    var _a8;
+    const dirs = [];
+    const cwd = (_a8 = this.plugin.agentSessionStore.get(this.token)) == null ? void 0 : _a8.cwd;
+    if (cwd)
+      dirs.push(cwd);
+    const vault = this.plugin.getVaultBasePath();
+    if (!dirs.includes(vault))
+      dirs.push(vault);
+    return dirs;
+  }
+  /** `git status` for each of those, keyed by the repository root so two
+   *  folders in one repository collapse to a single entry. */
+  async readShellStatuses() {
+    const byRoot = /* @__PURE__ */ new Map();
+    for (const dir of this.shellScanDirs()) {
+      const status = await readGitStatus(dir);
+      if (status && !byRoot.has(status.root))
+        byRoot.set(status.root, status);
+    }
+    return byRoot;
   }
   /** `git status` as this turn begins, to compare against at its end. Taken
    *  per turn rather than per session because that's what keeps the user's
@@ -17817,54 +18084,109 @@ var TerminalView = class extends import_obsidian10.ItemView {
    *  as a fallback, and naming a file the user changed themselves would be
    *  worse than missing one. */
   async takeShellBaseline() {
-    var _a8;
-    if (!this.detectsShellChanges) {
-      this.turnBaseline = null;
-      return;
-    }
-    const cwd = (_a8 = this.plugin.agentSessionStore.get(this.token)) == null ? void 0 : _a8.cwd;
-    this.turnBaseline = cwd ? await readGitStatus(cwd) : null;
+    this.turnBaselines = this.detectsShellChanges ? await this.readShellStatuses() : /* @__PURE__ */ new Map();
   }
   /**
    * At a turn's end: the files whose git status changed during it that no
-   * Edit/Write/NotebookEdit hook accounted for. Those are the ones Claude
-   * changed through the shell -- `sed -i`, a formatter, a package manager --
-   * which our PreToolUse matcher never sees, so the review panel would
-   * otherwise be silently empty for them.
+   * Edit/Write/NotebookEdit hook and no Bash snapshot accounted for. Those
+   * are the ones written indirectly -- by a script, a formatter, a package
+   * manager -- where the path never appears in the command, so there was
+   * nothing for shellWrites.ts to snapshot ahead of time.
    *
-   * The list carries across turns, since nothing here resolves an entry the
-   * way Accept/Reject resolves a pending change; an entry whose file is no
-   * longer dirty at all (the user reverted it, or it got committed) is
-   * dropped on the next pass, so it cleans itself up.
+   * Each one git can still supply a pre-turn baseline for becomes an
+   * ordinary reviewable change, with a diff and Keep/Reject (see
+   * changeFromShellEntry). The remainder -- a rename, a binary, a file
+   * already dirty when the turn began -- is returned as a ShellChange: named
+   * and openable, but honestly marked as having no reviewable before-state.
+   *
+   * That list carries across turns, since nothing resolves an entry the way
+   * Accept/Reject resolves a pending change; an entry whose file is no
+   * longer dirty at all (reverted, or committed) is dropped on the next
+   * pass, so it cleans itself up.
    */
   async checkShellChanges() {
-    var _a8;
-    if (!this.detectsShellChanges)
+    var _a8, _b;
+    if (!this.detectsShellChanges) {
+      if ((_a8 = this.plugin.agentSessionStore.get(this.token)) == null ? void 0 : _a8.shellChanges.length) {
+        this.plugin.agentSessionStore.shellChangesRead(this.token, []);
+      }
       return [];
-    const cwd = (_a8 = this.plugin.agentSessionStore.get(this.token)) == null ? void 0 : _a8.cwd;
-    if (!cwd)
-      return [];
-    const after = await readGitStatus(cwd);
-    const baseline = this.turnBaseline;
-    this.turnBaseline = after;
-    if (!after)
+    }
+    const after = await this.readShellStatuses();
+    const baselines = this.turnBaselines;
+    this.turnBaselines = after;
+    if (after.size === 0)
       return [];
     const session = this.plugin.agentSessionStore.get(this.token);
     if (!session)
       return [];
+    const stillDirty = (filePath) => [...after.values()].some((status) => status.entries.has(filePath));
     const known = new Set(session.shellChanges.map((change) => change.filePath));
-    const kept = session.shellChanges.filter((change) => after.entries.has(change.filePath));
+    const kept = session.shellChanges.filter((change) => stillDirty(change.filePath));
     const at3 = Date.now();
     const added = [];
-    for (const entry of changedSince(baseline, after)) {
-      if (this.hookedFiles.has(entry.filePath) || known.has(entry.filePath))
-        continue;
-      if (this.plugin.sessionLog.ownsPath(entry.filePath))
-        continue;
-      added.push({ filePath: entry.filePath, status: entry.status, at: at3 });
+    for (const [root, status] of after) {
+      const baseline = (_b = baselines.get(root)) != null ? _b : null;
+      for (const entry of changedSince(baseline, status)) {
+        if (this.hookedFiles.has(entry.filePath) || known.has(entry.filePath))
+          continue;
+        if (this.plugin.sessionLog.ownsPath(entry.filePath))
+          continue;
+        const wasClean = !(baseline == null ? void 0 : baseline.entries.has(entry.filePath));
+        const diff = wasClean ? await this.changeFromShellEntry(root, entry) : null;
+        if (diff) {
+          this.recordFileChange(diff, this.shellPayload(), false);
+          continue;
+        }
+        added.push({ filePath: entry.filePath, status: entry.status, at: at3 });
+      }
     }
     this.plugin.agentSessionStore.shellChangesRead(this.token, [...kept, ...added]);
     return added;
+  }
+  /**
+   * A reviewable diff for one git-reported file, or null when its pre-turn
+   * content can't be established exactly. Only ever called for a file that
+   * was clean at the turn's baseline, which is what makes HEAD the right
+   * before-state (see readGitFileAtHead).
+   */
+  async changeFromShellEntry(root, entry) {
+    if (isRenameOrCopy(entry.status))
+      return null;
+    const current = await readReviewableText(entry.filePath);
+    if (current === void 0)
+      return null;
+    if (isNewFile(entry.status)) {
+      if (current === null)
+        return null;
+      return { filePath: entry.filePath, oldText: "", newText: current, existedBefore: false, revertText: "" };
+    }
+    const before = await readGitFileAtHead(root, entry.filePath);
+    if (before === null)
+      return null;
+    const newText = current != null ? current : "";
+    if (before === newText)
+      return null;
+    return { filePath: entry.filePath, oldText: before, newText, existedBefore: true, revertText: before };
+  }
+  /** The payload a git-detected change is recorded under. There is no hook
+   *  behind one, so it carries the session's own fields and an empty command
+   *  -- enough for the store, the action log and the session log, all of
+   *  which only read the tool name and the session identity. */
+  shellPayload() {
+    var _a8, _b, _c2, _d, _e4;
+    const session = this.plugin.agentSessionStore.get(this.token);
+    return {
+      session_id: (_a8 = session == null ? void 0 : session.sessionId) != null ? _a8 : "",
+      transcript_path: (_b = session == null ? void 0 : session.transcriptPath) != null ? _b : "",
+      cwd: (_c2 = session == null ? void 0 : session.cwd) != null ? _c2 : this.plugin.getVaultBasePath(),
+      prompt_id: (_e4 = (_d = session == null ? void 0 : session.turns[session.turns.length - 1]) == null ? void 0 : _d.promptId) != null ? _e4 : "",
+      permission_mode: "",
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_use_id: "",
+      tool_input: { command: "" }
+    };
   }
   /** Fires from the Notification hook -- Claude needs this terminal's
    *  permission, or has been sitting idle waiting on input. Either way,
@@ -17875,10 +18197,12 @@ var TerminalView = class extends import_obsidian10.ItemView {
     this.refreshPendingDot();
     this.plugin.agentSessionStore.needsAttention(this.token, payload == null ? void 0 : payload.notification_type, payload == null ? void 0 : payload.message, sessionIdentity(payload));
   }
-  /** SessionStart / SessionEnd / UserPromptSubmit, and the subagent
-   *  events -- only sent while the Multi-agent experience has those hooks
-   *  installed. Subagent events are dropped once tracking is off, since
-   *  a session started earlier keeps sending them. */
+  /** SessionStart / SessionEnd / UserPromptSubmit, and the subagent events.
+   *  SessionStart and UserPromptSubmit are installed in both experiences
+   *  (indirect-write detection needs its reset and its turn-start signal);
+   *  the rest arrive only while Multi-agent has those hooks installed.
+   *  Subagent events are dropped once tracking is off, since a session
+   *  started earlier keeps sending them. */
   onSessionEvent(payload) {
     var _a8, _b, _c2, _d;
     const store = this.plugin.agentSessionStore;
@@ -17887,7 +18211,8 @@ var TerminalView = class extends import_obsidian10.ItemView {
       case "SessionStart":
         store.sessionStarted(this.token, identity, payload.agent_type);
         this.hookedFiles.clear();
-        this.turnBaseline = null;
+        this.shellSnapshots.clear();
+        this.turnBaselines.clear();
         this.plugin.sessionLog.sessionStarted(this.token, payload.session_id);
         this.rememberClaudeSession(payload.session_id, payload.cwd);
         this.typePendingPrompt();
@@ -18098,7 +18423,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
     const vaultPath = uriPath != null ? uriPath : text;
     const resolved = (_b = this.app.vault.getAbstractFileByPath(vaultPath)) != null ? _b : this.app.metadataCache.getFirstLinkpathDest(vaultPath, "");
     if (resolved) {
-      (_c2 = this.pty) == null ? void 0 : _c2.write(shellQuoteIfNeeded((0, import_terminus_node_bridge15.pathJoin)(this.plugin.getVaultBasePath(), resolved.path)));
+      (_c2 = this.pty) == null ? void 0 : _c2.write(shellQuoteIfNeeded((0, import_terminus_node_bridge16.pathJoin)(this.plugin.getVaultBasePath(), resolved.path)));
       return;
     }
     if (uriPath) {
@@ -18319,10 +18644,10 @@ var TerminalView = class extends import_obsidian10.ItemView {
     var _a8, _b, _c2, _d;
     const pythonBin = await this.plugin.getPython3Bin();
     const shell2 = this.plugin.getUserShell();
-    const resourcesDir = (0, import_terminus_node_bridge15.pathJoin)(this.plugin.getPluginDir(), "resources");
-    const helperPath = (0, import_terminus_node_bridge15.pathJoin)(resourcesDir, "pty_helper.py");
+    const resourcesDir = (0, import_terminus_node_bridge16.pathJoin)(this.plugin.getPluginDir(), "resources");
+    const helperPath = (0, import_terminus_node_bridge16.pathJoin)(resourcesDir, "pty_helper.py");
     const port = this.plugin.reviewServer.getPort();
-    const restoredCwdStillExists = this.restoredCwd && (0, import_terminus_node_bridge15.fileExistsSync)(this.restoredCwd);
+    const restoredCwdStillExists = this.restoredCwd && (0, import_terminus_node_bridge16.fileExistsSync)(this.restoredCwd);
     const cwd = restoredCwdStillExists ? this.restoredCwd : this.plugin.getVaultBasePath();
     this.spawnCwd = cwd;
     this.pty = new PtyProcess({
@@ -18333,14 +18658,14 @@ var TerminalView = class extends import_obsidian10.ItemView {
       cols: (_b = (_a8 = this.term) == null ? void 0 : _a8.cols) != null ? _b : 80,
       rows: (_d = (_c2 = this.term) == null ? void 0 : _c2.rows) != null ? _d : 24,
       env: {
-        ...withoutInheritedClaudeSession((0, import_terminus_node_bridge15.getAllEnvVars)()),
+        ...withoutInheritedClaudeSession((0, import_terminus_node_bridge16.getAllEnvVars)()),
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
         ...getShellIntegrationEnv(shell2, resourcesDir)
       }
     });
-    this.pty.on("data", (chunk) => this.writeToTerminal((0, import_terminus_node_bridge15.bufferToBytes)(chunk)));
+    this.pty.on("data", (chunk) => this.writeToTerminal((0, import_terminus_node_bridge16.bufferToBytes)(chunk)));
     this.pty.on("stderr", (text) => new import_obsidian10.Notice(`Terminus: ${text.trim()}`));
     this.pty.on("error", (err) => new import_obsidian10.Notice(`Terminus: PTY error: ${errorMessage2(err)}`));
     this.pty.on("exit", ({ code }) => {
@@ -18374,7 +18699,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
     this.resumeOnStart = false;
     const resume = resumeCommand(this.claudeSession.id);
     const { cwd } = this.claudeSession;
-    if (!resume || !(0, import_terminus_node_bridge15.fileExistsSync)(cwd))
+    if (!resume || !(0, import_terminus_node_bridge16.fileExistsSync)(cwd))
       return false;
     const command = cwd === this.spawnCwd ? resume : `cd ${shellQuoteIfNeeded(cwd)} && ${resume}`;
     const group = this.groupIdValue ? this.plugin.groupStore.get(this.groupIdValue) : void 0;
@@ -18491,11 +18816,76 @@ var TerminalView = class extends import_obsidian10.ItemView {
    * just records the pre-edit snapshot for later review/revert.
    */
   async onChangeApplied(payload) {
+    this.recordFileChange(await buildDiff(payload), payload);
+  }
+  /**
+   * The Bash pair, which is how a shell write becomes reviewable. PreToolUse
+   * snapshots the content of every file the command looks like it will write
+   * (see server/shellWrites.ts); PostToolUse re-reads them and records the
+   * ones that really changed, as a diff indistinguishable from a Write's --
+   * same row, same Split Diff, same Keep/Reject.
+   *
+   * A path the parse guessed wrong costs nothing: its content still matches
+   * the snapshot, so the comparison below drops it and no row appears. That
+   * is what lets the parse be generous.
+   */
+  async onShellCommand(payload) {
     var _a8;
-    const diff = await buildDiff(payload);
-    this.noteActivity(diff.filePath);
+    if (payload.hook_event_name === "PreToolUse") {
+      const targets = parseShellWriteTargets(payload.tool_input.command, payload.cwd, (0, import_terminus_node_bridge16.getEnvVar)("HOME"));
+      if (targets.length === 0)
+        return;
+      const snapshots2 = await Promise.all(
+        targets.map(async (filePath) => ({ filePath, text: await readReviewableText(filePath) }))
+      );
+      const reviewable = snapshots2.filter((s15) => s15.text !== void 0);
+      if (reviewable.length > 0)
+        this.shellSnapshots.set(payload.tool_use_id, reviewable);
+      return;
+    }
+    const snapshots = this.shellSnapshots.get(payload.tool_use_id);
+    if (!snapshots)
+      return;
+    this.shellSnapshots.delete(payload.tool_use_id);
+    for (const snapshot of snapshots) {
+      const after = await readReviewableText(snapshot.filePath);
+      if (after === void 0 || after === snapshot.text)
+        continue;
+      const before = (_a8 = snapshot.text) != null ? _a8 : "";
+      this.recordFileChange(
+        {
+          filePath: snapshot.filePath,
+          oldText: before,
+          newText: after != null ? after : "",
+          existedBefore: snapshot.text !== null,
+          // Exact pre-command bytes, so Reject restores a modified file and
+          // deletes one the command created (see PendingChangesStore).
+          revertText: before
+        },
+        payload
+      );
+    }
+  }
+  /**
+   * Shared by the file tools, the Bash pair and the turn-end git pass:
+   * everything that happens once a change has a diff.
+   *
+   * `live` says whether Claude is still mid-turn. It is false for the git
+   * pass alone, which runs from finishTurn -- after the Stop hook has
+   * already closed the turn and cleared the activity chip. Reporting those
+   * changes as live work would put a finished session back into "working"
+   * with an elapsed timer nothing will stop again, and raise the "Claude is
+   * editing X" chip over a turn that is already over. The change itself is
+   * still recorded in full; only the two signals that mean "work is
+   * happening right now" are skipped.
+   */
+  recordFileChange(diff, payload, live = true) {
+    var _a8;
+    if (live) {
+      this.noteActivity(diff.filePath);
+      this.plugin.agentSessionStore.fileEdited(this.token, diff.filePath, sessionIdentity(payload), payload.prompt_id);
+    }
     this.hookedFiles.add(diff.filePath);
-    this.plugin.agentSessionStore.fileEdited(this.token, diff.filePath, sessionIdentity(payload), payload.prompt_id);
     const editAgent = this.plugin.tracksSubagents && payload.agent_id ? { id: payload.agent_id, type: (_a8 = payload.agent_type) != null ? _a8 : "" } : null;
     this.plugin.sessionLog.noteEdit(this.token, diff, payload.prompt_id, editAgent);
     this.plugin.pendingChangesStore.recordChange({
@@ -18519,7 +18909,7 @@ var TerminalView = class extends import_obsidian10.ItemView {
    *  (first oldText vs latest newText) so a multi-edit turn is checked as a
    *  whole, not edit-by-edit. */
   async checkBacklinkBreakage(absoluteFilePath) {
-    const relPath = (0, import_terminus_node_bridge15.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
+    const relPath = (0, import_terminus_node_bridge16.pathRelative)(this.plugin.getVaultBasePath(), absoluteFilePath);
     const file = this.app.vault.getAbstractFileByPath(relPath);
     if (!(file instanceof import_obsidian10.TFile))
       return;
@@ -18530,6 +18920,22 @@ var TerminalView = class extends import_obsidian10.ItemView {
     this.plugin.pendingChangesStore.setBrokenBacklinks(absoluteFilePath, broken);
   }
 };
+var MAX_REVIEWABLE_CHARS = 2 * 1024 * 1024;
+async function readReviewableText(filePath) {
+  let text;
+  try {
+    text = await (0, import_terminus_node_bridge16.readTextFileIfExists)(filePath);
+  } catch (e) {
+    return void 0;
+  }
+  if (text === null)
+    return null;
+  if (text.includes("\0"))
+    return void 0;
+  if (text.length > MAX_REVIEWABLE_CHARS)
+    return void 0;
+  return text;
+}
 function sessionIdentity(payload) {
   if (!payload)
     return {};
@@ -18537,7 +18943,7 @@ function sessionIdentity(payload) {
 }
 
 // src/views/PendingChangesView.ts
-var import_obsidian17 = require("obsidian");
+var import_obsidian18 = require("obsidian");
 
 // node_modules/diff/libesm/diff/base.js
 var Diff = class {
@@ -19010,7 +19416,7 @@ function diffWordsWithSpace(oldStr, newStr, options) {
 var LineDiff = class extends Diff {
   constructor() {
     super(...arguments);
-    this.tokenize = tokenize;
+    this.tokenize = tokenize2;
   }
   equals(left, right, options) {
     if (options.ignoreWhitespace) {
@@ -19035,7 +19441,7 @@ var lineDiff = new LineDiff();
 function diffLines(oldStr, newStr, options) {
   return lineDiff.diff(oldStr, newStr, options);
 }
-function tokenize(value, options) {
+function tokenize2(value, options) {
   if (options.stripTrailingCr) {
     value = value.replace(/\r\n/g, "\n");
   }
@@ -19199,12 +19605,12 @@ function renderDiffLine(container, line) {
 }
 
 // src/views/changeRows.ts
-var import_obsidian16 = require("obsidian");
-var import_terminus_node_bridge22 = __toESM(require_dist());
+var import_obsidian17 = require("obsidian");
+var import_terminus_node_bridge23 = __toESM(require_dist());
 
 // src/editor/openWithDiff.ts
 var import_obsidian12 = require("obsidian");
-var import_terminus_node_bridge17 = __toESM(require_dist());
+var import_terminus_node_bridge18 = __toESM(require_dist());
 
 // src/editor/inlineDiff.ts
 var import_state = require("@codemirror/state");
@@ -19390,7 +19796,7 @@ function computeHunks(oldText, newText) {
 }
 
 // src/modals/collisions.ts
-var import_terminus_node_bridge16 = __toESM(require_dist());
+var import_terminus_node_bridge17 = __toESM(require_dist());
 
 // src/modals/ConfirmModal.ts
 var import_obsidian11 = require("obsidian");
@@ -19460,12 +19866,12 @@ async function confirmCollisionReject(app, changes, scope = "file") {
     const change = collided[0];
     const first = (_b = (_a8 = change.contributors[0]) == null ? void 0 : _a8.label) != null ? _b : change.panelLabel;
     const others = joinNames(laterContributors(change));
-    const file = (0, import_terminus_node_bridge16.pathBasename)(change.diff.filePath);
+    const file = (0, import_terminus_node_bridge17.pathBasename)(change.diff.filePath);
     const message = scope === "hunk" ? `${others} also edited ${file} after ${first}. Rejecting this change restores its lines to how they were before ${first}'s first edit, which may undo ${others}'s edits too.` : `${others} also edited this file after ${first}. Rejecting restores it to how it was before ${first}'s first edit, which undoes ${others}'s edits too.`;
     return ConfirmModal.confirm(app, scope === "hunk" ? "Reject this change?" : `Reject ${file}?`, message, "Reject");
   }
   const SHOWN = 3;
-  const listed = collided.slice(0, SHOWN).map((c) => `${(0, import_terminus_node_bridge16.pathBasename)(c.diff.filePath)} (${joinNames(laterContributors(c))})`).join(", ");
+  const listed = collided.slice(0, SHOWN).map((c) => `${(0, import_terminus_node_bridge17.pathBasename)(c.diff.filePath)} (${joinNames(laterContributors(c))})`).join(", ");
   const more = collided.length > SHOWN ? ` and ${collided.length - SHOWN} more` : "";
   const count = changes.length;
   return ConfirmModal.confirm(
@@ -19480,7 +19886,7 @@ async function confirmCollisionReject(app, changes, scope = "file") {
 async function openChangedFile(plugin, change) {
   var _a8, _b, _c2;
   const { app } = plugin;
-  const relPath = (0, import_terminus_node_bridge17.pathRelative)(plugin.getVaultBasePath(), change.diff.filePath);
+  const relPath = (0, import_terminus_node_bridge18.pathRelative)(plugin.getVaultBasePath(), change.diff.filePath);
   const file = relPath.startsWith("..") ? null : app.vault.getAbstractFileByPath(relPath);
   if (!(file instanceof import_obsidian12.TFile)) {
     openOutsideObsidian(change.diff.filePath);
@@ -19507,7 +19913,7 @@ async function openChangedFile(plugin, change) {
     if (!accepted && !await confirmCollisionReject(plugin.app, [current]))
       return;
     store.resolveItem(change.id, accepted).catch((err) => {
-      new import_obsidian12.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge17.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian12.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge18.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   cm.dispatch({
@@ -19535,7 +19941,7 @@ function findFirstHunkLine(change) {
 }
 async function openFileAtPath(plugin, absolutePath) {
   const { app } = plugin;
-  const relPath = (0, import_terminus_node_bridge17.pathRelative)(plugin.getVaultBasePath(), absolutePath);
+  const relPath = (0, import_terminus_node_bridge18.pathRelative)(plugin.getVaultBasePath(), absolutePath);
   const file = relPath.startsWith("..") ? null : app.vault.getAbstractFileByPath(relPath);
   if (!(file instanceof import_obsidian12.TFile)) {
     openOutsideObsidian(absolutePath);
@@ -19544,8 +19950,8 @@ async function openFileAtPath(plugin, absolutePath) {
   await app.workspace.getLeaf(true).openFile(file);
 }
 function openOutsideObsidian(absolutePath) {
-  if (!(0, import_terminus_node_bridge17.fileExistsSync)(absolutePath)) {
-    new import_obsidian12.Notice(`Terminus: couldn't find ${(0, import_terminus_node_bridge17.pathBasename)(absolutePath)} on disk.`);
+  if (!(0, import_terminus_node_bridge18.fileExistsSync)(absolutePath)) {
+    new import_obsidian12.Notice(`Terminus: couldn't find ${(0, import_terminus_node_bridge18.pathBasename)(absolutePath)} on disk.`);
     return;
   }
   openWithSystemDefaultApp(absolutePath);
@@ -19553,11 +19959,11 @@ function openOutsideObsidian(absolutePath) {
 
 // src/views/DiffSplitView.ts
 var import_obsidian14 = require("obsidian");
-var import_terminus_node_bridge19 = __toESM(require_dist());
+var import_terminus_node_bridge20 = __toESM(require_dist());
 
 // src/diff/renderSplitDiff.ts
 var import_obsidian13 = require("obsidian");
-var import_terminus_node_bridge18 = __toESM(require_dist());
+var import_terminus_node_bridge19 = __toESM(require_dist());
 var EDGE = 4;
 var MIN_HIDDEN_TO_TRUNCATE = 4;
 function renderSplitDiffBody(container, app, store, change, comments) {
@@ -19666,7 +20072,7 @@ function renderHunkControls(container, hunk, change, app, store, comments, lines
       await store.resolveHunk(change.id, hunk.index, accepted);
       return true;
     } catch (err) {
-      new import_obsidian13.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge18.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian13.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge19.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
       return false;
     }
   };
@@ -19799,7 +20205,7 @@ var DiffSplitView = class extends import_obsidian14.ItemView {
         return;
       }
       const header = container.createDiv({ cls: "terminus-split-diff-header" });
-      header.createSpan({ cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge19.pathBasename)(change.diff.filePath) });
+      header.createSpan({ cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge20.pathBasename)(change.diff.filePath) });
       if (change.editCount > 1) {
         header.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
       }
@@ -19845,7 +20251,7 @@ var DiffSplitView = class extends import_obsidian14.ItemView {
     return (_c2 = (_b = (_a8 = this.plugin.pendingChangesStore.get(this.changeId)) == null ? void 0 : _a8.contributors[0]) == null ? void 0 : _b.token) != null ? _c2 : null;
   }
   getDisplayText() {
-    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge19.pathBasename)(this.changeId)}` : "Split Diff";
+    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge20.pathBasename)(this.changeId)}` : "Split Diff";
   }
   getIcon() {
     return "diff";
@@ -19880,7 +20286,7 @@ async function openDiffSplitView(plugin, changeId) {
 
 // src/modals/ActionLogModal.ts
 var import_obsidian15 = require("obsidian");
-var import_terminus_node_bridge20 = __toESM(require_dist());
+var import_terminus_node_bridge21 = __toESM(require_dist());
 var ActionLogModal = class extends import_obsidian15.Modal {
   constructor(app, actionLog) {
     super(app);
@@ -19920,7 +20326,7 @@ var ActionLogModal = class extends import_obsidian15.Modal {
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted"
     });
-    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge20.pathBasename)(entry.filePath) });
+    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge21.pathBasename)(entry.filePath) });
     row.createSpan({
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` \xB7 ${entry.editCount} edits` : ""}`
@@ -19930,13 +20336,13 @@ var ActionLogModal = class extends import_obsidian15.Modal {
 };
 
 // src/git/gitDiff.ts
-var import_terminus_node_bridge21 = __toESM(require_dist());
+var import_terminus_node_bridge22 = __toESM(require_dist());
 async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
-  const relPath = (0, import_terminus_node_bridge21.pathRelative)(vaultBasePath, absoluteFilePath);
+  const relPath = (0, import_terminus_node_bridge22.pathRelative)(vaultBasePath, absoluteFilePath);
   if (relPath.startsWith(".."))
     return null;
   try {
-    const { stdout } = await (0, import_terminus_node_bridge21.execFileText)("git", ["show", `HEAD:${relPath}`], {
+    const { stdout } = await (0, import_terminus_node_bridge22.execFileText)("git", ["show", `HEAD:${relPath}`], {
       cwd: vaultBasePath,
       maxBuffer: 10 * 1024 * 1024
     });
@@ -19944,6 +20350,47 @@ async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
   } catch (e) {
     return null;
   }
+}
+
+// src/views/uiHelpers.ts
+var import_obsidian16 = require("obsidian");
+function iconButton(parent, icon, label, onClick) {
+  const button = parent.createEl("button", { cls: "clickable-icon terminus-icon-button", attr: { "aria-label": label } });
+  (0, import_obsidian16.setIcon)(button, icon);
+  button.addEventListener("click", (evt) => {
+    evt.stopPropagation();
+    onClick(evt);
+  });
+  return button;
+}
+function groupIcon(parent, color) {
+  const el2 = parent.createSpan({ cls: "terminus-group-icon" });
+  if (color)
+    el2.style.setProperty("--terminus-group-color", color);
+  (0, import_obsidian16.setIcon)(el2, "folder");
+  return el2;
+}
+function iconLabel(parent, icon, text, cls) {
+  const el2 = parent.createSpan({ cls });
+  (0, import_obsidian16.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), icon);
+  el2.createSpan({ text });
+  return el2;
+}
+function makeActivatable(row, activate, menu) {
+  row.setAttr("role", "button");
+  row.setAttr("tabindex", "0");
+  row.addEventListener("keydown", (evt) => {
+    if (evt.target !== row)
+      return;
+    if (evt.key === "Enter" || evt.key === " ") {
+      evt.preventDefault();
+      activate();
+    } else if (evt.key === "ContextMenu" || evt.key === "F10" && evt.shiftKey) {
+      evt.preventDefault();
+      const rect = row.getBoundingClientRect();
+      menu(new MouseEvent("contextmenu", { clientX: rect.left + 24, clientY: rect.bottom }));
+    }
+  });
 }
 
 // src/views/changeRows.ts
@@ -19968,7 +20415,7 @@ async function runBulkAction(ctx, accepted, changes, action, scopeLabel) {
     await action();
   } catch (err) {
     const target = scopeLabel ? `${scopeLabel}'s changes` : "all changes";
-    new import_obsidian16.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage2(err)}`);
+    new import_obsidian17.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${target}: ${errorMessage2(err)}`);
   }
 }
 function renderChangeRow(ctx, list, change, stats, opts = {}) {
@@ -19979,15 +20426,21 @@ function renderChangeRow(ctx, list, change, stats, opts = {}) {
   const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "\u25B8" });
   const info = summary.createDiv({ cls: "terminus-pending-info" });
   const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-  nameRow.createSpan({ cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge22.pathBasename)(change.diff.filePath) });
-  if (change.editCount > 1) {
-    nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
-  }
+  nameRow.createSpan({ cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge23.pathBasename)(change.diff.filePath) });
+  const editCountBadge = () => {
+    if (change.editCount > 1) {
+      nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
+    }
+  };
+  if (inbox)
+    editCountBadge();
   const statsEl = inbox ? nameRow.createSpan({ cls: "terminus-pending-stats" }) : nameRow;
   statsEl.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
   statsEl.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
-  const vaultName = (0, import_terminus_node_bridge22.pathBasename)(ctx.plugin.getVaultBasePath());
-  const relativePath = (0, import_terminus_node_bridge22.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
+  if (!inbox)
+    editCountBadge();
+  const vaultName = (0, import_terminus_node_bridge23.pathBasename)(ctx.plugin.getVaultBasePath());
+  const relativePath = (0, import_terminus_node_bridge23.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
   if (!inbox) {
     info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
   } else {
@@ -20002,12 +20455,12 @@ function renderChangeRow(ctx, list, change, stats, opts = {}) {
       return;
     }
     const el2 = info.createDiv({ cls: `${cls} terminus-pending-warning` });
-    (0, import_obsidian16.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), "alert-triangle");
+    (0, import_obsidian17.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), "alert-triangle");
     el2.createSpan({ text });
   };
   if (inbox && opts.alsoEditedBy && opts.alsoEditedBy.length > 0) {
     const el2 = info.createDiv({ cls: "terminus-pending-coeditors" });
-    (0, import_obsidian16.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), "users");
+    (0, import_obsidian17.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), "users");
     el2.createSpan({ text: `Also edited by ${opts.alsoEditedBy.join(", ")}` });
   }
   const collision = collisionLabel(change);
@@ -20025,8 +20478,8 @@ function renderChangeRow(ctx, list, change, stats, opts = {}) {
     if (!accepted && !await confirmCollisionReject(ctx.plugin.app, [change]))
       return;
     ctx.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err) => {
-      new import_obsidian16.Notice(
-        `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge22.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
+      new import_obsidian17.Notice(
+        `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge23.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
       );
     });
   };
@@ -20076,14 +20529,14 @@ function renderChangeRow(ctx, list, change, stats, opts = {}) {
 function renderInboxRowActions(actions, ctx, change, stop, resolve) {
   const labelled = (icon, label, tooltip, run) => {
     const button = actions.createEl("button", { cls: "terminus-row-action" });
-    (0, import_obsidian16.setIcon)(button.createSpan({ cls: "terminus-meta-icon" }), icon);
+    (0, import_obsidian17.setIcon)(button.createSpan({ cls: "terminus-meta-icon" }), icon);
     button.createSpan({ text: label });
-    (0, import_obsidian16.setTooltip)(button, tooltip);
+    (0, import_obsidian17.setTooltip)(button, tooltip);
     button.addEventListener("click", (e) => stop(e, run));
   };
   const iconOnly = (icon, cls, label, run) => {
     const button = actions.createEl("button", { cls: `clickable-icon terminus-row-resolve ${cls}`, attr: { "aria-label": label } });
-    (0, import_obsidian16.setIcon)(button, icon);
+    (0, import_obsidian17.setIcon)(button, icon);
     button.addEventListener("click", (e) => stop(e, run));
   };
   if (change.payload.tool_name !== "NotebookEdit") {
@@ -20100,7 +20553,7 @@ function renderRowBody(ctx, body, change) {
     const list = warning.createEl("ul");
     for (const link of change.brokenBacklinks) {
       list.createEl("li", {
-        text: `${(0, import_terminus_node_bridge22.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
+        text: `${(0, import_terminus_node_bridge23.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
       });
     }
   }
@@ -20129,8 +20582,8 @@ function renderRowBody(ctx, body, change) {
     if (previewRendered)
       return;
     previewRendered = true;
-    const relPath = (0, import_terminus_node_bridge22.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
-    void import_obsidian16.MarkdownRenderer.render(ctx.plugin.app, change.diff.newText, previewContainer, relPath, ctx.component);
+    const relPath = (0, import_terminus_node_bridge23.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
+    void import_obsidian17.MarkdownRenderer.render(ctx.plugin.app, change.diff.newText, previewContainer, relPath, ctx.component);
   });
   gitBtn.addEventListener("click", () => {
     activate(2);
@@ -20185,20 +20638,50 @@ function renderHistoryRow(ctx, list, item) {
     cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
     text: item.accepted ? "Kept" : "Reverted"
   });
-  row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge22.pathBasename)(item.diff.filePath) });
+  row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge23.pathBasename)(item.diff.filePath) });
   row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
     ctx.plugin.pendingChangesStore.undo(item.historyId).catch((err) => {
-      new import_obsidian16.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
+      new import_obsidian17.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
     });
   });
 }
+function renderShellChangeRows(ctx, container, changes) {
+  const list = container.createDiv({ cls: "terminus-inbox-shell-list" });
+  const base = ctx.plugin.getVaultBasePath();
+  for (const change of changes) {
+    const relative = (0, import_terminus_node_bridge23.pathRelative)(base, change.filePath);
+    const path = relative.startsWith("..") ? change.filePath : relative;
+    const row = list.createDiv({ cls: "terminus-inbox-shell-row" });
+    row.createSpan({ cls: "terminus-inbox-shell-path", text: path, attr: { title: change.filePath } });
+    row.createSpan({ cls: "terminus-inbox-shell-status", text: describeStatus(change.status) });
+    (0, import_obsidian17.setTooltip)(row, `Open ${path}`);
+    const open = () => void openFileAtPath(ctx.plugin, change.filePath);
+    row.addEventListener("click", open);
+    makeActivatable(row, open, () => void 0);
+  }
+}
+var SHELL_CHANGE_TOOLTIP = "Changed indirectly -- by a script, a formatter or a package manager -- with no before-state Terminus could snapshot: a rename, binary content, or a file that already had uncommitted changes when the turn began.\nListed so an empty review list never reads as nothing having happened.";
 
 // src/views/PendingChangesView.ts
 var PENDING_CHANGES_VIEW_TYPE = "terminus-pending-changes";
-var PendingChangesView = class extends import_obsidian17.ItemView {
+var PendingChangesView = class extends import_obsidian18.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.plugin = plugin;
+    /** What the shell-change list looked like at the last render; see
+     *  onSessionChange. */
+    this.shellSignature = "";
+    /** The session store emits on every status flip -- working, idle, needs
+     *  attention -- many times a turn, and a re-render here would drop the
+     *  panel's scroll position and pop collapsed terminal groups back open.
+     *  Only an actual change to the shell-change list is worth redrawing for. */
+    this.onSessionChange = () => {
+      const signature = this.shellChangeSignature();
+      if (signature === this.shellSignature)
+        return;
+      this.shellSignature = signature;
+      this.render();
+    };
     this.render = () => {
       const container = this.contentEl;
       container.empty();
@@ -20211,10 +20694,17 @@ var PendingChangesView = class extends import_obsidian17.ItemView {
       } else {
         this.renderPendingSection(container, header, changes);
       }
+      this.renderShellChanges(container);
       if (history.length > 0) {
         renderHistorySection(this.rows, container, history);
       }
     };
+  }
+  /** How the user has arranged the panel. Kept on the plugin, not here:
+   *  Obsidian rebuilds a deferred sidebar view, and this panel re-renders on
+   *  every recorded edit, so view-held state sprang every fold back open. */
+  get ui() {
+    return this.plugin.classicUi;
   }
   get rows() {
     return { plugin: this.plugin, component: this };
@@ -20231,10 +20721,53 @@ var PendingChangesView = class extends import_obsidian17.ItemView {
   async onOpen() {
     this.plugin.dedupeView(PENDING_CHANGES_VIEW_TYPE);
     this.plugin.pendingChangesStore.on("change", this.render);
+    this.plugin.agentSessionStore.on("change", this.onSessionChange);
     this.render();
   }
   async onClose() {
     this.plugin.pendingChangesStore.off("change", this.render);
+    this.plugin.agentSessionStore.off("change", this.onSessionChange);
+  }
+  shellChanges() {
+    return this.plugin.groups.terminals().flatMap((view) => {
+      var _a8, _b;
+      return (_b = (_a8 = this.plugin.agentSessionStore.get(view.hookToken)) == null ? void 0 : _a8.shellChanges) != null ? _b : [];
+    });
+  }
+  shellChangeSignature() {
+    return this.shellChanges().map((change) => `${change.filePath}:${change.status}`).join("\0");
+  }
+  /**
+   * The files git reported as changed during a turn that no hook and no
+   * Bash snapshot could give a before-state for. Everything recoverable is
+   * already a row above; this is what's left, and leaving it out entirely
+   * is what used to make an empty panel read as "nothing happened".
+   *
+   * Pooled across terminals, since Classic's panel is one unified list
+   * rather than the inbox's card per session.
+   */
+  renderShellChanges(container) {
+    if (!this.plugin.settings.detectShellChanges)
+      return;
+    const changes = this.shellChanges();
+    this.shellSignature = this.shellChangeSignature();
+    if (changes.length === 0)
+      return;
+    const section = container.createDiv({ cls: "terminus-inbox-shell" });
+    const head = section.createDiv({ cls: "terminus-inbox-shell-head" });
+    (0, import_obsidian18.setIcon)(head.createSpan({ cls: "terminus-inbox-chevron" }), this.ui.shellExpanded ? "chevron-down" : "chevron-right");
+    (0, import_obsidian18.setIcon)(head.createSpan({ cls: "terminus-meta-icon" }), "terminal");
+    const count = `${changes.length} ${changes.length === 1 ? "file" : "files"}`;
+    head.createSpan({ text: `${count} changed without a snapshot` });
+    (0, import_obsidian18.setTooltip)(head, SHELL_CHANGE_TOOLTIP);
+    head.setAttr("aria-expanded", String(this.ui.shellExpanded));
+    head.addEventListener("click", () => {
+      this.ui.shellExpanded = !this.ui.shellExpanded;
+      this.render();
+    });
+    if (!this.ui.shellExpanded)
+      return;
+    renderShellChangeRows(this.rows, section, changes);
   }
   renderPendingSection(container, header, changes) {
     var _a8;
@@ -20322,18 +20855,24 @@ var PendingChangesView = class extends import_obsidian17.ItemView {
     for (const change of changes) {
       renderChangeRow(this.rows, list, change, (_c2 = statsById.get(change.id)) != null ? _c2 : { added: 0, removed: 0 });
     }
-    let groupExpanded = true;
+    const collapsed = this.ui.collapsedGroups.has(panelLabel);
+    list.toggle(!collapsed);
+    chevron.setText(collapsed ? "\u25B8" : "\u25BE");
     groupHeader.addEventListener("click", () => {
-      groupExpanded = !groupExpanded;
-      list.toggle(groupExpanded);
-      chevron.setText(groupExpanded ? "\u25BE" : "\u25B8");
+      if (this.ui.collapsedGroups.has(panelLabel))
+        this.ui.collapsedGroups.delete(panelLabel);
+      else
+        this.ui.collapsedGroups.add(panelLabel);
+      const nowCollapsed = this.ui.collapsedGroups.has(panelLabel);
+      list.toggle(!nowCollapsed);
+      chevron.setText(nowCollapsed ? "\u25B8" : "\u25BE");
     });
   }
 };
 
 // src/views/AgentInboxView.ts
 var import_obsidian19 = require("obsidian");
-var import_terminus_node_bridge24 = __toESM(require_dist());
+var import_terminus_node_bridge25 = __toESM(require_dist());
 
 // src/state/AgentSessionStore.ts
 var MAX_SUBAGENTS = 50;
@@ -20764,7 +21303,7 @@ function truncateTo(text, max) {
 }
 
 // src/claude/transcriptUsage.ts
-var import_terminus_node_bridge23 = __toESM(require_dist());
+var import_terminus_node_bridge24 = __toESM(require_dist());
 var MILLION = 1e6;
 var LONG_PROMPT_TOKENS = 1e5;
 var US_ONLY_MULTIPLIER = 1.1;
@@ -20855,7 +21394,7 @@ var TranscriptUsageReader = class {
     this.pending.delete(path);
   }
   async readNow(path, kind) {
-    const text = await (0, import_terminus_node_bridge23.readTextFileIfExists)(path);
+    const text = await (0, import_terminus_node_bridge24.readTextFileIfExists)(path);
     if (text === null) {
       this.files.delete(path);
       return null;
@@ -20945,8 +21484,8 @@ function summarize(state) {
 function subagentTranscriptPath(leadTranscriptPath, agentId) {
   if (!leadTranscriptPath.endsWith(".jsonl"))
     return null;
-  const session = (0, import_terminus_node_bridge23.pathBasename)(leadTranscriptPath, ".jsonl");
-  return (0, import_terminus_node_bridge23.pathJoin)((0, import_terminus_node_bridge23.pathDirname)(leadTranscriptPath), session, "subagents", `agent-${agentId}.jsonl`);
+  const session = (0, import_terminus_node_bridge24.pathBasename)(leadTranscriptPath, ".jsonl");
+  return (0, import_terminus_node_bridge24.pathJoin)((0, import_terminus_node_bridge24.pathDirname)(leadTranscriptPath), session, "subagents", `agent-${agentId}.jsonl`);
 }
 
 // src/state/inboxModel.ts
@@ -21129,47 +21668,6 @@ function guardRenderDuringPress(component, el2, render) {
     }
     render();
   };
-}
-
-// src/views/uiHelpers.ts
-var import_obsidian18 = require("obsidian");
-function iconButton(parent, icon, label, onClick) {
-  const button = parent.createEl("button", { cls: "clickable-icon terminus-icon-button", attr: { "aria-label": label } });
-  (0, import_obsidian18.setIcon)(button, icon);
-  button.addEventListener("click", (evt) => {
-    evt.stopPropagation();
-    onClick(evt);
-  });
-  return button;
-}
-function groupIcon(parent, color) {
-  const el2 = parent.createSpan({ cls: "terminus-group-icon" });
-  if (color)
-    el2.style.setProperty("--terminus-group-color", color);
-  (0, import_obsidian18.setIcon)(el2, "folder");
-  return el2;
-}
-function iconLabel(parent, icon, text, cls) {
-  const el2 = parent.createSpan({ cls });
-  (0, import_obsidian18.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), icon);
-  el2.createSpan({ text });
-  return el2;
-}
-function makeActivatable(row, activate, menu) {
-  row.setAttr("role", "button");
-  row.setAttr("tabindex", "0");
-  row.addEventListener("keydown", (evt) => {
-    if (evt.target !== row)
-      return;
-    if (evt.key === "Enter" || evt.key === " ") {
-      evt.preventDefault();
-      activate();
-    } else if (evt.key === "ContextMenu" || evt.key === "F10" && evt.shiftKey) {
-      evt.preventDefault();
-      const rect = row.getBoundingClientRect();
-      menu(new MouseEvent("contextmenu", { clientX: rect.left + 24, clientY: rect.bottom }));
-    }
-  });
 }
 
 // src/views/AgentInboxView.ts
@@ -22010,7 +22508,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     for (const item of items) {
       const line = list.createDiv({ cls: "terminus-inbox-feedback-item" });
       const where = (_a8 = item.newLines) != null ? _a8 : item.oldLines;
-      const place = `${(0, import_terminus_node_bridge24.pathRelative)(base, item.filePath)}${where ? `:${where.start}` : ""}`;
+      const place = `${(0, import_terminus_node_bridge25.pathRelative)(base, item.filePath)}${where ? `:${where.start}` : ""}`;
       line.createSpan({ cls: "terminus-inbox-feedback-place", text: place });
       if (item.rejected)
         line.createSpan({ cls: "terminus-diff-stat-remove", text: "rejected" });
@@ -22047,7 +22545,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     if (!card.ended && session.status === "working") {
       if (!session.currentFile)
         return "Working\u2026";
-      return `Editing ${(0, import_terminus_node_bridge24.pathRelative)(this.plugin.getVaultBasePath(), session.currentFile)}\u2026`;
+      return `Editing ${(0, import_terminus_node_bridge25.pathRelative)(this.plugin.getVaultBasePath(), session.currentFile)}\u2026`;
     }
     return session.lastMessage === null ? null : plainPreview(session.lastMessage);
   }
@@ -22286,6 +22784,8 @@ Time between turns, while Claude waited on you, isn't counted.`
    */
   renderShellChanges(el2, card) {
     var _a8, _b;
+    if (!this.plugin.settings.detectShellChanges)
+      return;
     const changes = (_b = (_a8 = card.session) == null ? void 0 : _a8.shellChanges) != null ? _b : [];
     if (changes.length === 0)
       return;
@@ -22294,11 +22794,8 @@ Time between turns, while Claude waited on you, isn't counted.`
     const head = section.createDiv({ cls: "terminus-inbox-shell-head" });
     (0, import_obsidian19.setIcon)(head.createSpan({ cls: "terminus-inbox-chevron" }), expanded ? "chevron-down" : "chevron-right");
     (0, import_obsidian19.setIcon)(head.createSpan({ cls: "terminus-meta-icon" }), "terminal");
-    head.createSpan({ text: `${fileCount(changes.length)} changed outside Claude's edit tools` });
-    (0, import_obsidian19.setTooltip)(
-      head,
-      "Changed by a shell command -- a formatter, sed, a package manager -- which Terminus can't snapshot, diff or revert.\nListed so an empty review list doesn't read as nothing having happened."
-    );
+    head.createSpan({ text: `${fileCount(changes.length)} changed without a snapshot` });
+    (0, import_obsidian19.setTooltip)(head, SHELL_CHANGE_TOOLTIP);
     const toggle = () => {
       this.ui.userAction();
       if (expanded)
@@ -22312,19 +22809,7 @@ Time between turns, while Claude waited on you, isn't counted.`
     head.setAttr("aria-expanded", String(expanded));
     if (!expanded)
       return;
-    const list = section.createDiv({ cls: "terminus-inbox-shell-list" });
-    const base = this.plugin.getVaultBasePath();
-    for (const change of changes) {
-      const relative = (0, import_terminus_node_bridge24.pathRelative)(base, change.filePath);
-      const path = relative.startsWith("..") ? change.filePath : relative;
-      const row = list.createDiv({ cls: "terminus-inbox-shell-row" });
-      row.createSpan({ cls: "terminus-inbox-shell-path", text: path, attr: { title: change.filePath } });
-      row.createSpan({ cls: "terminus-inbox-shell-status", text: describeStatus(change.status) });
-      (0, import_obsidian19.setTooltip)(row, `Open ${path}`);
-      const open = () => void openFileAtPath(this.plugin, change.filePath);
-      row.addEventListener("click", open);
-      makeActivatable(row, open, () => void 0);
-    }
+    renderShellChangeRows(this.rows, section, changes);
   }
   /** `owner` is the agent the rows sit under (null: the lead); a file that
    *  other agents in this session also edited says which. A long list over
@@ -22391,7 +22876,7 @@ Time between turns, while Claude waited on you, isn't counted.`
     const base = this.plugin.getVaultBasePath();
     const byFolder = /* @__PURE__ */ new Map();
     for (const change of changes) {
-      const relative = (0, import_terminus_node_bridge24.pathRelative)(base, change.diff.filePath);
+      const relative = (0, import_terminus_node_bridge25.pathRelative)(base, change.diff.filePath);
       const path = relative.startsWith("..") ? change.diff.filePath : relative;
       const folder = path.split("/").slice(0, -1).join("/");
       const list = (_a8 = byFolder.get(folder)) != null ? _a8 : [];
@@ -22570,7 +23055,7 @@ function formatClock(at3) {
 
 // src/views/TerminusSidebarView.ts
 var import_obsidian21 = require("obsidian");
-var import_terminus_node_bridge25 = __toESM(require_dist());
+var import_terminus_node_bridge26 = __toESM(require_dist());
 
 // src/pluginVersion.ts
 var import_obsidian20 = require("obsidian");
@@ -23355,7 +23840,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     const lines = [];
     const base = this.plugin.getVaultBasePath();
     if (session.status === "working") {
-      lines.push(session.currentFile ? `Editing ${(0, import_terminus_node_bridge25.pathRelative)(base, session.currentFile)}\u2026` : "Working\u2026");
+      lines.push(session.currentFile ? `Editing ${(0, import_terminus_node_bridge26.pathRelative)(base, session.currentFile)}\u2026` : "Working\u2026");
     } else if (session.status === "needs-attention" && session.needsMessage) {
       lines.push(session.needsMessage);
     } else if (session.lastMessage) {
@@ -23369,7 +23854,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     if (files.length > 0) {
       lines.push("", `${files.length} to review:`);
       for (const change of files.slice(0, 5))
-        lines.push(`  ${(0, import_terminus_node_bridge25.pathRelative)(base, change.diff.filePath)}`);
+        lines.push(`  ${(0, import_terminus_node_bridge26.pathRelative)(base, change.diff.filePath)}`);
       if (files.length > 5)
         lines.push(`  and ${files.length - 5} more`);
     }
@@ -23383,9 +23868,9 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
   }
   folderLabel(folder) {
     if (!folder)
-      return (0, import_terminus_node_bridge25.pathBasename)(this.plugin.getVaultBasePath());
-    const relative = (0, import_terminus_node_bridge25.pathRelative)(this.plugin.getVaultBasePath(), folder);
-    return relative.startsWith("..") ? folder : relative || (0, import_terminus_node_bridge25.pathBasename)(folder);
+      return (0, import_terminus_node_bridge26.pathBasename)(this.plugin.getVaultBasePath());
+    const relative = (0, import_terminus_node_bridge26.pathRelative)(this.plugin.getVaultBasePath(), folder);
+    return relative.startsWith("..") ? folder : relative || (0, import_terminus_node_bridge26.pathBasename)(folder);
   }
 };
 var BRANCH_TTL_MS = 6e4;
@@ -23646,7 +24131,11 @@ var GroupController = class {
     plugin.register(() => this.clearWakeTimer());
     this.statusEl = plugin.addStatusBarItem();
     this.statusEl.addClass("terminus-group-status", "mod-clickable");
-    this.statusEl.addEventListener("click", () => this.switchGroupPicker());
+    this.statusEl.addEventListener("click", () => {
+      if (this.multiAgent)
+        this.switchGroupPicker();
+    });
+    this.refreshStatus();
     this.registerCommands();
   }
   registerCommands() {
@@ -24184,7 +24673,7 @@ var ResumeQueue = class {
 };
 
 // src/state/PendingChangesStore.ts
-var import_terminus_node_bridge26 = __toESM(require_dist());
+var import_terminus_node_bridge27 = __toESM(require_dist());
 var MAX_HISTORY = 20;
 var PendingChangesStore = class extends TypedEmitter {
   constructor() {
@@ -24205,7 +24694,7 @@ var PendingChangesStore = class extends TypedEmitter {
    * and the UI warns before a reject undoes it.
    */
   recordChange(input) {
-    var _a8, _b, _c2, _d;
+    var _a8, _b, _c2, _d, _e4;
     const key = input.diff.filePath;
     const existing = this.entries.get(key);
     const agent = { token: input.token, agentId: (_b = (_a8 = input.agent) == null ? void 0 : _a8.id) != null ? _b : null, agentType: (_d = (_c2 = input.agent) == null ? void 0 : _c2.type) != null ? _d : null };
@@ -24240,6 +24729,14 @@ var PendingChangesStore = class extends TypedEmitter {
       promptIds: input.promptId ? [input.promptId] : [],
       brokenBacklinks: []
     };
+    if (change.diff.oldText === change.diff.newText) {
+      if (!existing)
+        return;
+      this.entries.delete(key);
+      (_e4 = existing.onExternallyResolved) == null ? void 0 : _e4.call(existing, true);
+      this.emit("change");
+      return;
+    }
     this.entries.set(key, { change, onExternallyResolved: existing == null ? void 0 : existing.onExternallyResolved });
     this.emit("change");
     this.emit("recorded", change);
@@ -24326,9 +24823,9 @@ var PendingChangesStore = class extends TypedEmitter {
     const newOldText = diff.oldText.slice(0, hunk.oldStart) + chosen + diff.oldText.slice(hunk.oldEnd);
     const newNewText = diff.newText.slice(0, hunk.newStart) + chosen + diff.newText.slice(hunk.newEnd);
     if (!diff.existedBefore && newOldText === "") {
-      await (0, import_terminus_node_bridge26.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge27.deleteFileIfExists)(diff.filePath);
     } else {
-      await (0, import_terminus_node_bridge26.writeTextFile)(diff.filePath, newOldText);
+      await (0, import_terminus_node_bridge27.writeTextFile)(diff.filePath, newOldText);
     }
     entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
     if (newOldText === newNewText) {
@@ -24372,13 +24869,13 @@ var PendingChangesStore = class extends TypedEmitter {
   }
   async applyOldState(diff) {
     if (!diff.existedBefore) {
-      await (0, import_terminus_node_bridge26.deleteFileIfExists)(diff.filePath);
+      await (0, import_terminus_node_bridge27.deleteFileIfExists)(diff.filePath);
       return;
     }
-    await (0, import_terminus_node_bridge26.writeTextFile)(diff.filePath, diff.revertText);
+    await (0, import_terminus_node_bridge27.writeTextFile)(diff.filePath, diff.revertText);
   }
   async applyNewState(diff) {
-    await (0, import_terminus_node_bridge26.writeTextFile)(diff.filePath, diff.newText);
+    await (0, import_terminus_node_bridge27.writeTextFile)(diff.filePath, diff.newText);
   }
 };
 
@@ -25038,7 +25535,7 @@ function vaultRelative(plugin, absolutePath) {
 }
 
 // src/state/ActionLog.ts
-var import_terminus_node_bridge27 = __toESM(require_dist());
+var import_terminus_node_bridge28 = __toESM(require_dist());
 function isActionLogEntryArray(value) {
   return Array.isArray(value);
 }
@@ -25052,7 +25549,7 @@ var ActionLog = class {
   async load() {
     if (this.loaded)
       return;
-    const raw = await (0, import_terminus_node_bridge27.readTextFileIfExists)(this.logFilePath);
+    const raw = await (0, import_terminus_node_bridge28.readTextFileIfExists)(this.logFilePath);
     if (raw && raw.trim()) {
       const parsed = JSON.parse(raw);
       this.entries = isActionLogEntryArray(parsed) ? parsed : [];
@@ -25078,8 +25575,8 @@ var ActionLog = class {
     return result;
   }
   async persist() {
-    await (0, import_terminus_node_bridge27.makeDirRecursive)((0, import_terminus_node_bridge27.pathDirname)(this.logFilePath));
-    await (0, import_terminus_node_bridge27.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
+    await (0, import_terminus_node_bridge28.makeDirRecursive)((0, import_terminus_node_bridge28.pathDirname)(this.logFilePath));
+    await (0, import_terminus_node_bridge28.writeTextFile)(this.logFilePath, JSON.stringify(this.entries, null, 2));
   }
 };
 
@@ -25281,6 +25778,17 @@ var InboxUiState = class {
   }
 };
 
+// src/state/ClassicUiState.ts
+var ClassicUiState = class {
+  constructor() {
+    /** Terminal groups folded to their header, by panel label. */
+    this.collapsedGroups = /* @__PURE__ */ new Set();
+    /** Whether the "changed without a snapshot" list is unfolded. Folded by
+     *  default: it is the footnote to the review list, not the list. */
+    this.shellExpanded = false;
+  }
+};
+
 // src/state/DelegationStore.ts
 var DelegationStore = class extends TypedEmitter {
   constructor() {
@@ -25461,7 +25969,7 @@ var import_obsidian28 = require("obsidian");
 
 // src/settings.ts
 var import_obsidian27 = require("obsidian");
-var import_terminus_node_bridge28 = __toESM(require_dist());
+var import_terminus_node_bridge29 = __toESM(require_dist());
 
 // src/terminal/fontCatalog.ts
 var CANDIDATE_MONOSPACE_FONTS = [
@@ -25570,7 +26078,6 @@ var DEFAULT_MULTI_AGENT_SETTINGS = {
   sendBehavior: "steer",
   showEstimatedCost: true,
   showGitBranch: true,
-  detectShellChanges: true,
   logSessions: false,
   sessionLogFolder: "Terminus/Sessions",
   sessionBaseFolder: "",
@@ -25583,6 +26090,7 @@ var DEFAULT_SETTINGS = {
   fontSize: 13,
   terminalPlacement: "ask",
   confirmBulkActions: false,
+  detectShellChanges: true,
   shellBinOverride: "",
   python3BinOverride: "",
   claudeAuthToken: "",
@@ -25607,8 +26115,14 @@ function resolveSettings(saved) {
     legacyClassic.autoRevealPendingChanges = autoRevealPendingChanges;
   if (autoRevealDelayMs !== void 0)
     legacyClassic.autoRevealDelayMs = autoRevealDelayMs;
+  const legacyShared = {};
+  const legacyDetect = multiAgent == null ? void 0 : multiAgent.detectShellChanges;
+  if (rest.detectShellChanges === void 0 && legacyDetect !== void 0) {
+    legacyShared.detectShellChanges = legacyDetect;
+  }
   return {
     ...DEFAULT_SETTINGS,
+    ...legacyShared,
     ...rest,
     classic: { ...DEFAULT_CLASSIC_SETTINGS, ...legacyClassic, ...classic },
     multiAgent: { ...DEFAULT_MULTI_AGENT_SETTINGS, ...multiAgent },
@@ -25638,6 +26152,19 @@ var TerminusSettingTab = class extends import_obsidian27.PluginSettingTab {
       (toggle) => toggle.setValue(this.plugin.settings.confirmBulkActions).onChange(async (value) => {
         this.plugin.settings.confirmBulkActions = value;
         await this.plugin.saveSettings();
+      })
+    );
+  }
+  /** Shared by both modes: a shell change feeds the same store either way,
+   *  so Classic's Pending Changes gets them as readily as the inbox. */
+  renderDetectShellChanges(containerEl) {
+    new import_obsidian27.Setting(containerEl).setName("Detect shell changes").setDesc(
+      "Claude's Edit and Write tools, and the files its shell commands name, are what Terminus can snapshot directly. This reads git status at the start and end of each turn to catch the rest -- a file written by a script, a formatter or a package manager. One whose pre-turn content git still has becomes a normal reviewable change; the rest are listed as changed, with a link to open them. Two git calls per turn per repository, and nothing outside one."
+    ).addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.detectShellChanges).onChange(async (value) => {
+        this.plugin.settings.detectShellChanges = value;
+        await this.plugin.saveSettings();
+        this.plugin.refreshTerminusViews();
       })
     );
   }
@@ -25671,6 +26198,7 @@ var TerminusSettingTab = class extends import_obsidian27.PluginSettingTab {
       );
     }
     this.renderConfirmBulkActions(containerEl);
+    this.renderDetectShellChanges(containerEl);
   }
   renderMultiAgentSection(containerEl) {
     const multiAgent = this.plugin.settings.multiAgent;
@@ -25691,6 +26219,7 @@ var TerminusSettingTab = class extends import_obsidian27.PluginSettingTab {
       );
     }
     this.renderConfirmBulkActions(containerEl);
+    this.renderDetectShellChanges(containerEl);
     new import_obsidian27.Setting(containerEl).setName("Track subagents").setDesc(
       "Show each subagent Claude starts as a row on its session's card, with the changes it made. Turning this off removes the subagent hooks from .claude/settings.local.json and credits every change to the main session."
     ).addToggle(
@@ -25726,15 +26255,6 @@ var TerminusSettingTab = class extends import_obsidian27.PluginSettingTab {
     new import_obsidian27.Setting(containerEl).setName("Show git branch on cards").setDesc("When a session's folder is a git repository, show its current branch on the session's card.").addToggle(
       (toggle) => toggle.setValue(multiAgent.showGitBranch).onChange(async (value) => {
         multiAgent.showGitBranch = value;
-        await this.plugin.saveSettings();
-        this.plugin.refreshTerminusViews();
-      })
-    );
-    new import_obsidian27.Setting(containerEl).setName("Detect shell changes").setDesc(
-      "Claude's Edit and Write tools are the only ones Terminus can snapshot. This reads git status at the start and end of each turn so files Claude changed another way -- a formatter, sed, a package manager -- are at least listed on its card. Two git calls per turn, and nothing outside a git repository."
-    ).addToggle(
-      (toggle) => toggle.setValue(multiAgent.detectShellChanges).onChange(async (value) => {
-        multiAgent.detectShellChanges = value;
         await this.plugin.saveSettings();
         this.plugin.refreshTerminusViews();
       })
@@ -25840,7 +26360,7 @@ var TerminusSettingTab = class extends import_obsidian27.PluginSettingTab {
     }
     new import_obsidian27.Setting(containerEl).setName("Advanced").setHeading();
     new import_obsidian27.Setting(containerEl).setName("Shell binary override").setDesc(
-      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge28.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
+      `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge29.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
     ).addText(
       (text) => text.setPlaceholder("e.g. /bin/zsh").setValue(this.plugin.settings.shellBinOverride).onChange(async (value) => {
         this.plugin.settings.shellBinOverride = value.trim();
@@ -26338,6 +26858,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
     this.resumeQueue = new ResumeQueue();
     /** How the user has arranged the Agent inbox; outlives the view. */
     this.inboxUi = new InboxUiState();
+    this.classicUi = new ClassicUiState();
     /** Files of the current burst of edits, for the auto-reveal's threshold. */
     this.revealBurst = /* @__PURE__ */ new Set();
     /** The inbox's user-action revision when the current burst began. */
@@ -26376,7 +26897,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
     );
     this.addSettingTab(new TerminusSettingTab(this.app, this));
     await provisionResources(this.getPluginDir());
-    this.actionLog = new ActionLog((0, import_terminus_node_bridge29.pathJoin)(this.getPluginDir(), "action-log.json"));
+    this.actionLog = new ActionLog((0, import_terminus_node_bridge30.pathJoin)(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.steerQueue.on("change", () => {
       this.app.workspace.requestSaveLayout();
@@ -26883,9 +27404,9 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
       return;
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian32.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge29.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian32.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge30.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian32.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge29.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian32.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge30.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -26917,7 +27438,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
     return getHookBridgePath(this.app, this.manifest);
   }
   getPluginDir() {
-    return (0, import_terminus_node_bridge29.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return (0, import_terminus_node_bridge30.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
   /**
    * Every leaf of a view type, including ones Obsidian hasn't loaded yet
@@ -27201,7 +27722,7 @@ ${result}`))
       return;
     const base = this.getVaultBasePath();
     const prompt = composeFeedbackPrompt(items, (absolute) => {
-      const relative = (0, import_terminus_node_bridge29.pathRelative)(base, absolute);
+      const relative = (0, import_terminus_node_bridge30.pathRelative)(base, absolute);
       return relative.startsWith("..") ? absolute : relative;
     });
     if (!terminal.typeIntoInput(prompt))

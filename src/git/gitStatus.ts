@@ -1,4 +1,4 @@
-import { execFileText, pathJoin } from "terminus-node-bridge";
+import { execFileText, pathJoin, pathRelative } from "terminus-node-bridge";
 
 /**
  * Snapshots of `git status` for a session's folder, used to notice files
@@ -16,12 +16,14 @@ import { execFileText, pathJoin } from "terminus-node-bridge";
  * rather than per session is what keeps the user's own edits out -- those
  * happen between turns, whereas during one Claude is the only writer.
  *
- * Deliberately only ever reports a count and a list of paths. Crediting a
- * shell edit to a particular turn's commands, or rebuilding its diff, is
- * guesswork that gets it wrong whenever a file is touched twice or someone
- * else commits mid-session; naming the file and letting the user look is
- * both honest and enough. Nothing here polls, and nothing runs outside a
- * repo.
+ * A file that was CLEAN when the turn began has an exact before-state: its
+ * content at HEAD (see readGitFileAtHead). Those become ordinary reviewable
+ * changes, with a diff and a Reject that restores real bytes. For a file
+ * that was already dirty, HEAD is not what it looked like before Claude
+ * touched it, and no exact revert exists -- so those keep the old treatment
+ * of a name and a status word, which is honest about what is known.
+ *
+ * Nothing here polls, and nothing runs outside a repo.
  */
 
 /** One entry of `git status --porcelain`: git's two status letters and the
@@ -80,6 +82,54 @@ export function changedSince(before: GitStatus | null, after: GitStatus | null):
     changed.push({ filePath, status });
   }
   return changed;
+}
+
+/**
+ * A tracked file's content at HEAD, or null when HEAD has no such path or
+ * the read fails for any reason.
+ *
+ * This is the pre-turn snapshot for a shell edit that nothing else took one
+ * of. It is only equivalent to "the content before this turn" for a file
+ * that was CLEAN when the turn began -- then HEAD and the pre-turn bytes are
+ * the same, which is what makes a Reject on one of these exact rather than a
+ * guess. A file already dirty at the baseline has no such equivalence, so
+ * callers must not use this for one (see TerminalView.changeFromShellEntry).
+ *
+ * The one case it still gets wrong is a commit made mid-turn, which moves
+ * HEAD out from under the comparison. Rare enough, and visible in the diff
+ * itself, to be worth the exactness everywhere else.
+ */
+const MAX_BASELINE_CHARS = 2 * 1024 * 1024;
+
+export async function readGitFileAtHead(root: string, filePath: string): Promise<string | null> {
+  // git wants a repo-root-relative path with forward slashes, whatever the
+  // platform spells them as.
+  const relative = pathRelative(root, filePath).split("\\").join("/");
+  if (!relative || relative.startsWith("..")) return null;
+  try {
+    const { stdout } = await execFileText("git", ["show", `HEAD:${relative}`], { cwd: root, maxBuffer: 8 * 1024 * 1024 });
+    // A NUL byte means this was never text: a diff of it would be nonsense
+    // and a UTF-8 revert would corrupt it, so it is left to the read-only
+    // list rather than turned into a reviewable change. The size cap is
+    // there for the same reason -- past it the diff is unreadable and the
+    // content is not worth holding twice (see TerminalView's own).
+    if (stdout.includes("\u0000") || stdout.length > MAX_BASELINE_CHARS) return null;
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether git's status letters say the file is new -- "??" untracked, or
+ *  "A" already added to the index. Both mean HEAD has no copy, so the
+ *  pre-turn content is "didn't exist" and a Reject deletes it. */
+export function isNewFile(status: string): boolean {
+  return status.includes("?") || status.includes("A");
+}
+
+/** A rename or copy, whose before/after pairing we don't reconstruct. */
+export function isRenameOrCopy(status: string): boolean {
+  return status.includes("R") || status.includes("C");
 }
 
 /** Git's status letters as one word for the card. */

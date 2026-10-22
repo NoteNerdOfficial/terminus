@@ -1,12 +1,32 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
 import { PendingChange } from "../state/PendingChangesStore";
+import type { ShellChange } from "../state/AgentSessionStore";
 import { computeDiffStats } from "../diff/renderDiff";
-import { ChangeRowContext, renderChangeRow, renderHistorySection, runBulkAction } from "./changeRows";
+import {
+  ChangeRowContext,
+  SHELL_CHANGE_TOOLTIP,
+  renderChangeRow,
+  renderHistorySection,
+  renderShellChangeRows,
+  runBulkAction,
+} from "./changeRows";
+import type { ClassicUiState } from "../state/ClassicUiState";
 import type TerminusPlugin from "../main";
 
 export const PENDING_CHANGES_VIEW_TYPE = "terminus-pending-changes";
 
 export class PendingChangesView extends ItemView {
+  /** What the shell-change list looked like at the last render; see
+   *  onSessionChange. */
+  private shellSignature = "";
+
+  /** How the user has arranged the panel. Kept on the plugin, not here:
+   *  Obsidian rebuilds a deferred sidebar view, and this panel re-renders on
+   *  every recorded edit, so view-held state sprang every fold back open. */
+  private get ui(): ClassicUiState {
+    return this.plugin.classicUi;
+  }
+
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
   }
@@ -30,11 +50,38 @@ export class PendingChangesView extends ItemView {
   async onOpen(): Promise<void> {
     this.plugin.dedupeView(PENDING_CHANGES_VIEW_TYPE);
     this.plugin.pendingChangesStore.on("change", this.render);
+    // Shell changes with no reviewable before-state live on the session,
+    // not in the pending-change store, so they need their own signal.
+    this.plugin.agentSessionStore.on("change", this.onSessionChange);
     this.render();
   }
 
   async onClose(): Promise<void> {
     this.plugin.pendingChangesStore.off("change", this.render);
+    this.plugin.agentSessionStore.off("change", this.onSessionChange);
+  }
+
+  /** The session store emits on every status flip -- working, idle, needs
+   *  attention -- many times a turn, and a re-render here would drop the
+   *  panel's scroll position and pop collapsed terminal groups back open.
+   *  Only an actual change to the shell-change list is worth redrawing for. */
+  private onSessionChange = (): void => {
+    const signature = this.shellChangeSignature();
+    if (signature === this.shellSignature) return;
+    this.shellSignature = signature;
+    this.render();
+  };
+
+  private shellChanges(): ShellChange[] {
+    return this.plugin.groups
+      .terminals()
+      .flatMap((view) => this.plugin.agentSessionStore.get(view.hookToken)?.shellChanges ?? []);
+  }
+
+  private shellChangeSignature(): string {
+    return this.shellChanges()
+      .map((change) => `${change.filePath}:${change.status}`)
+      .join("\u0000");
   }
 
   private render = (): void => {
@@ -53,10 +100,46 @@ export class PendingChangesView extends ItemView {
       this.renderPendingSection(container, header, changes);
     }
 
+    this.renderShellChanges(container);
+
     if (history.length > 0) {
       renderHistorySection(this.rows, container, history);
     }
   };
+
+  /**
+   * The files git reported as changed during a turn that no hook and no
+   * Bash snapshot could give a before-state for. Everything recoverable is
+   * already a row above; this is what's left, and leaving it out entirely
+   * is what used to make an empty panel read as "nothing happened".
+   *
+   * Pooled across terminals, since Classic's panel is one unified list
+   * rather than the inbox's card per session.
+   */
+  private renderShellChanges(container: HTMLElement): void {
+    // With detection off nothing refreshes this list, so whatever it last
+    // held would sit here indefinitely claiming to describe the session.
+    if (!this.plugin.settings.detectShellChanges) return;
+    const changes = this.shellChanges();
+    this.shellSignature = this.shellChangeSignature();
+    if (changes.length === 0) return;
+
+    const section = container.createDiv({ cls: "terminus-inbox-shell" });
+    const head = section.createDiv({ cls: "terminus-inbox-shell-head" });
+    setIcon(head.createSpan({ cls: "terminus-inbox-chevron" }), this.ui.shellExpanded ? "chevron-down" : "chevron-right");
+    setIcon(head.createSpan({ cls: "terminus-meta-icon" }), "terminal");
+    const count = `${changes.length} ${changes.length === 1 ? "file" : "files"}`;
+    head.createSpan({ text: `${count} changed without a snapshot` });
+    setTooltip(head, SHELL_CHANGE_TOOLTIP);
+    head.setAttr("aria-expanded", String(this.ui.shellExpanded));
+    head.addEventListener("click", () => {
+      this.ui.shellExpanded = !this.ui.shellExpanded;
+      this.render();
+    });
+    if (!this.ui.shellExpanded) return;
+
+    renderShellChangeRows(this.rows, section, changes);
+  }
 
   private renderPendingSection(container: HTMLElement, header: HTMLElement, changes: PendingChange[]): void {
     let totalAdded = 0;
@@ -181,12 +264,19 @@ export class PendingChangesView extends ItemView {
 
     // Terminal groups default open (matching a fresh review session where
     // you want everything visible); collapsing keeps a busy multi-session
-    // run from overwhelming the panel once you've triaged a group.
-    let groupExpanded = true;
+    // run from overwhelming the panel once you've triaged a group. The
+    // collapsed set lives on the view, not in this closure: the panel
+    // re-renders on every store change, and a local would have sprung every
+    // group back open each time Claude recorded another edit.
+    const collapsed = this.ui.collapsedGroups.has(panelLabel);
+    list.toggle(!collapsed);
+    chevron.setText(collapsed ? "▸" : "▾");
     groupHeader.addEventListener("click", () => {
-      groupExpanded = !groupExpanded;
-      list.toggle(groupExpanded);
-      chevron.setText(groupExpanded ? "▾" : "▸");
+      if (this.ui.collapsedGroups.has(panelLabel)) this.ui.collapsedGroups.delete(panelLabel);
+      else this.ui.collapsedGroups.add(panelLabel);
+      const nowCollapsed = this.ui.collapsedGroups.has(panelLabel);
+      list.toggle(!nowCollapsed);
+      chevron.setText(nowCollapsed ? "▸" : "▾");
     });
   }
 

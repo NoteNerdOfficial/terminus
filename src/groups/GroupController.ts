@@ -87,7 +87,14 @@ export class GroupController {
 
     this.statusEl = plugin.addStatusBarItem();
     this.statusEl.addClass("terminus-group-status", "mod-clickable");
-    this.statusEl.addEventListener("click", () => this.switchGroupPicker());
+    this.statusEl.addEventListener("click", () => {
+      if (this.multiAgent) this.switchGroupPicker();
+    });
+    // Hidden until there's a group to name. Without this it sits in the
+    // status bar empty but clickable until the first applyVisibility (the
+    // next layout-change) -- and in Classic, which has no groups at all,
+    // that would be the only state it ever had.
+    this.refreshStatus();
 
     this.registerCommands();
   }

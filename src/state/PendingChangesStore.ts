@@ -158,6 +158,23 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
           brokenBacklinks: [],
         };
 
+    // Net zero: the file is back exactly as this review window found it --
+    // created and then deleted, or edited and then changed back. There is
+    // nothing to put in a diff, and neither decision can do anything (Keep
+    // writes nothing; Reject restores a state the file is already in), so
+    // the row is dropped rather than left asking for a decision that cannot
+    // matter. resolveHunk converges on the same condition once every hunk
+    // has been decided one way or the other.
+    if (change.diff.oldText === change.diff.newText) {
+      if (!existing) return;
+      this.entries.delete(key);
+      // An inline editor overlay showing this change has to come down with
+      // it; the file's content stands as it is, which is what `true` says.
+      existing.onExternallyResolved?.(true);
+      this.emit("change");
+      return;
+    }
+
     this.entries.set(key, { change, onExternallyResolved: existing?.onExternallyResolved });
     this.emit("change");
     // Separate from "change" (which also fires on resolve/undo/backlink-scan

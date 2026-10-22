@@ -1,5 +1,5 @@
 import { readTextFileIfExists } from "terminus-node-bridge";
-import { PreToolUseHookPayload } from "../hooks/types";
+import { FileToolHookPayload } from "../hooks/types";
 
 export interface DiffResult {
   filePath: string;
@@ -19,7 +19,7 @@ async function readIfExists(filePath: string): Promise<{ text: string; existed: 
   return text === null ? { text: "", existed: false } : { text, existed: true };
 }
 
-export async function buildDiff(payload: PreToolUseHookPayload): Promise<DiffResult> {
+export async function buildDiff(payload: FileToolHookPayload): Promise<DiffResult> {
   if (payload.tool_name === "Edit") {
     const { file_path, old_string, new_string, replace_all } = payload.tool_input;
     const { text: oldText, existed } = await readIfExists(file_path);

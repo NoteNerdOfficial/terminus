@@ -13,7 +13,7 @@ export interface PreToolUseHookPayloadBase {
    *  subagents alike. UserPromptSubmit and Stop carry the same id. */
   prompt_id: string;
   permission_mode: string;
-  hook_event_name: "PreToolUse";
+  hook_event_name: "PreToolUse" | "PostToolUse";
   tool_use_id: string;
   /** Present only when a subagent made the call (captured from 2.1.296);
    *  the lead session's own calls carry neither. */
@@ -41,13 +41,50 @@ export interface NotebookEditToolInput {
   edit_mode?: string;
 }
 
-// Our PreToolUse hook matcher is exactly "Edit|Write|NotebookEdit" (see
-// provisionSettings.ts), so this union is intentionally closed to those
-// three -- Claude Code will never invoke our hook for any other tool.
+export interface BashToolInput {
+  command: string;
+  description?: string;
+  timeout?: number;
+}
+
+// The file-editing tools, whose payload alone says what the change is:
+// hook-bridge.sh posts one of these and the pre-edit snapshot is taken on
+// the spot (see server/diff.ts). Bash is handled separately below, since a
+// command's effect isn't knowable until it has run.
 export type PreToolUseHookPayload =
   | (PreToolUseHookPayloadBase & { tool_name: "Edit"; tool_input: EditToolInput })
   | (PreToolUseHookPayloadBase & { tool_name: "Write"; tool_input: WriteToolInput })
-  | (PreToolUseHookPayloadBase & { tool_name: "NotebookEdit"; tool_input: NotebookEditToolInput });
+  | (PreToolUseHookPayloadBase & { tool_name: "NotebookEdit"; tool_input: NotebookEditToolInput })
+  | BashToolHookPayload;
+
+/**
+ * Bash, on the same bridge as the three file tools but matched on both
+ * PreToolUse and PostToolUse -- a shell write is only reviewable as the
+ * difference between the two. Pre snapshots the files the command looks
+ * like it will write (see server/shellWrites.ts), Post re-reads them and
+ * records whatever actually changed. Both carry the same tool_use_id, which
+ * is what pairs them. Captured from Claude Code 2.1.312.
+ */
+export interface BashToolHookPayload extends PreToolUseHookPayloadBase {
+  hook_event_name: "PreToolUse" | "PostToolUse";
+  tool_name: "Bash";
+  tool_input: BashToolInput;
+  /** PostToolUse only; a non-zero exit still reports what it wrote. */
+  tool_response?: {
+    stdout?: string;
+    stderr?: string;
+    interrupted?: boolean;
+  };
+}
+
+/** The three file-editing tools alone -- what buildDiff can turn into a
+ *  diff from the payload by itself. */
+export type FileToolHookPayload = Exclude<PreToolUseHookPayload, BashToolHookPayload>;
+
+/** Whether this payload is the Bash pair rather than a file tool's own. */
+export function isBashPayload(payload: PreToolUseHookPayload): payload is BashToolHookPayload {
+  return payload.tool_name === "Bash";
+}
 
 // Session-level hook payloads. SessionStart, SessionEnd, UserPromptSubmit
 // and Stop were captured from a real `claude` 2.1.296 run; Notification

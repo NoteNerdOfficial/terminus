@@ -23,6 +23,7 @@ import { TranscriptUsageReader, subagentTranscriptPath } from "./claude/transcri
 import { FeedbackStore } from "./state/FeedbackStore";
 import { SteerQueueStore } from "./state/SteerQueueStore";
 import { InboxUiState } from "./state/InboxUiState";
+import { ClassicUiState } from "./state/ClassicUiState";
 import { DelegationStore } from "./state/DelegationStore";
 import { DelegateModal } from "./modals/DelegateModal";
 import { leafForPlacement, type OpenPlacement } from "./util/leafPlacement";
@@ -77,6 +78,7 @@ export default class TerminusPlugin extends Plugin {
   readonly resumeQueue = new ResumeQueue();
   /** How the user has arranged the Agent inbox; outlives the view. */
   readonly inboxUi = new InboxUiState();
+  readonly classicUi = new ClassicUiState();
   /** Files of the current burst of edits, for the auto-reveal's threshold. */
   private revealBurst = new Set<string>();
   /** The inbox's user-action revision when the current burst began. */

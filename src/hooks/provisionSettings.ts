@@ -26,6 +26,7 @@ function isClaudeSettingsFile(value: unknown): value is ClaudeSettingsFile {
 
 type HookEvent =
   | "PreToolUse"
+  | "PostToolUse"
   | "Stop"
   | "Notification"
   | "SessionStart"
@@ -37,14 +38,37 @@ type HookEvent =
 
 /** Hooks only the Multi-agent experience installs, all through the one
  *  session-event bridge. Switching back to Classic removes them again, so a
- *  Classic vault's settings file looks exactly as it did before. */
-const MULTI_AGENT_ONLY_EVENTS: HookEvent[] = ["SessionStart", "SessionEnd", "UserPromptSubmit", "StopFailure"];
+ *  Classic vault's settings file keeps only the shared set below. */
+const MULTI_AGENT_ONLY_EVENTS: HookEvent[] = ["SessionEnd", "StopFailure"];
+
+/** Also on the session-event bridge, but installed in both experiences,
+ *  because indirect-write detection runs in both and needs both signals:
+ *
+ *  UserPromptSubmit says "a turn is beginning", which is when the git
+ *  baseline is taken. Without it the first turn of a session has nothing to
+ *  compare against, and later turns measure from the previous turn's end --
+ *  which would credit Claude with whatever the user changed in between.
+ *
+ *  SessionStart says "a new Claude session", a /clear included, which is
+ *  what resets the per-session tracking (see TerminalView.onSessionEvent).
+ *  Without it in Classic, a file accounted for before a /clear stayed
+ *  accounted for after one, so an indirect write to it went unreported. */
+const SHARED_SESSION_EVENTS: HookEvent[] = ["SessionStart", "UserPromptSubmit"];
 
 /** Subagent tracking's hooks, also on the session-event bridge: installed
  *  only in Multi-agent with "Track subagents" on. */
 const SUBAGENT_EVENTS: HookEvent[] = ["SubagentStart", "SubagentStop"];
 
 const MATCHER = "Edit|Write|NotebookEdit";
+/** Bash, on both PreToolUse and PostToolUse. Claude writes a note with
+ *  `cat > note.md <<'EOF'` as readily as with the Write tool, and with only
+ *  the three file tools matched that whole class of change reached no
+ *  review panel at all. A command's effect isn't in its payload, so it
+ *  takes the pair: pre snapshots the files it looks like it will write,
+ *  post records what actually changed (see TerminalView.onShellCommand).
+ *  Its own matcher group rather than a widening of MATCHER, so the entry
+ *  users already have is left exactly as it is. */
+const BASH_MATCHER = "Bash";
 /** The lead's Agent tool call, for the subagent's task description. "Task"
  *  is the tool's older name. A separate PreToolUse entry on the session-event
  *  bridge, so it never reaches hook-bridge.sh's snapshot code. */
@@ -154,6 +178,21 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
     command: hookCommand(getNotificationBridgePath(app, manifest)),
     timeout: NOTIFICATION_TIMEOUT_SECONDS,
   });
+  // Both experiences: Classic's Pending Changes and the Multi-agent inbox
+  // are fed by the same store, so a shell write belongs in both.
+  const bridge = hookCommand(getHookBridgePath(app, manifest));
+  const bashPreChanged = ensureHook(hooks, "PreToolUse", {
+    matcher: BASH_MATCHER,
+    command: bridge,
+    timeout: DEFAULT_TIMEOUT_SECONDS,
+    distinctMatcher: true,
+  });
+  const bashPostChanged = ensureHook(hooks, "PostToolUse", {
+    matcher: BASH_MATCHER,
+    command: bridge,
+    timeout: DEFAULT_TIMEOUT_SECONDS,
+    distinctMatcher: true,
+  });
 
   const sessionEventBridge = hookCommand(getSessionEventBridgePath(app, manifest));
   const sessionHook = { command: sessionEventBridge, timeout: SESSION_EVENT_TIMEOUT_SECONDS };
@@ -161,6 +200,9 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
   for (const event of MULTI_AGENT_ONLY_EVENTS) {
     const changed = multiAgent ? ensureHook(hooks, event, sessionHook) : removeHook(hooks, event, sessionEventBridge);
     sessionHooksChanged ||= changed;
+  }
+  for (const event of SHARED_SESSION_EVENTS) {
+    sessionHooksChanged ||= ensureHook(hooks, event, sessionHook);
   }
   for (const event of SUBAGENT_EVENTS) {
     const changed = trackSubagents ? ensureHook(hooks, event, sessionHook) : removeHook(hooks, event, sessionEventBridge);
@@ -173,7 +215,7 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
     : removeHook(hooks, "PreToolUse", sessionEventBridge);
   sessionHooksChanged ||= agentToolChanged;
 
-  if (quotedLegacy || preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged) {
+  if (quotedLegacy || preToolUseChanged || stopChanged || notificationChanged || sessionHooksChanged || bashPreChanged || bashPostChanged) {
     await writeTextFile(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   }
 
@@ -191,11 +233,19 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
 function ensureHook(
   hooks: NonNullable<ClaudeSettingsFile["hooks"]>,
   event: HookEvent,
-  spec: { matcher?: string; command: string; timeout: number }
+  spec: { matcher?: string; command: string; timeout: number; distinctMatcher?: boolean }
 ): boolean {
   const entries = (hooks[event] ??= []);
 
-  const existing = entries.flatMap((entry) => entry.hooks ?? []).find((h) => h.command === spec.command);
+  // `distinctMatcher` is for the second entry a command has under one event:
+  // hook-bridge.sh is under PreToolUse for both the file tools and Bash, and
+  // matching on the command alone would find the file-tool entry and never
+  // add the Bash one. Everything else keeps the command-only match, so a
+  // matcher the user has deliberately widened is still left alone.
+  const existing = entries
+    .filter((entry) => !spec.distinctMatcher || entry.matcher === spec.matcher)
+    .flatMap((entry) => entry.hooks ?? [])
+    .find((h) => h.command === spec.command);
   if (!existing) {
     entries.push({
       // Omitted entirely for Stop/Notification: neither runs per-tool, so

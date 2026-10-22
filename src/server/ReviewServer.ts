@@ -1,5 +1,13 @@
 import { createHttpServer, bufferLength, concatBuffersToString, type SimpleHttpRequest, type SimpleHttpResponse, type SimpleHttpServer } from "terminus-node-bridge";
-import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload, StopHookPayload } from "../hooks/types";
+import {
+  BashToolHookPayload,
+  FileToolHookPayload,
+  NotificationHookPayload,
+  PreToolUseHookPayload,
+  SessionEventHookPayload,
+  StopHookPayload,
+  isBashPayload,
+} from "../hooks/types";
 
 export interface RegisteredPanel {
   /** Called synchronously within the PreToolUse hook's request/response
@@ -8,7 +16,15 @@ export interface RegisteredPanel {
    *  pre-edit snapshot. Does not wait on a human: the write is allowed to
    *  proceed immediately after this resolves, and review happens after the
    *  fact (see PendingChangesStore) rather than gating the write. */
-  onChangeApplied(payload: PreToolUseHookPayload): Promise<void>;
+  onChangeApplied(payload: FileToolHookPayload): Promise<void>;
+
+  /** Called from the Bash hooks, which fire in a PreToolUse/PostToolUse
+   *  pair around every shell command. A command's effect isn't in its
+   *  payload the way an Edit's is, so the pre call snapshots the files it
+   *  looks like it will write and the post call records what actually
+   *  changed -- that pair is what gives a `cat > note.md` row the same
+   *  diff and Reject as a Write's. */
+  onShellCommand(payload: BashToolHookPayload): Promise<void>;
 
   /** Called from the Stop hook when Claude finishes a turn in this panel --
    *  the one signal that says "no more writes are coming", which nothing in
@@ -158,7 +174,8 @@ export class ReviewServer {
       return;
     }
 
-    await panel.onChangeApplied(payload);
+    if (isBashPayload(payload)) await panel.onShellCommand(payload);
+    else await panel.onChangeApplied(payload);
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("");
   }

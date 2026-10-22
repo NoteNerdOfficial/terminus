@@ -1,8 +1,6 @@
 import { ItemView, Menu, Platform, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
 import { pathRelative } from "terminus-node-bridge";
 import { activeTime, type AgentSession, type SubagentRun } from "../state/AgentSessionStore";
-import { describeStatus } from "../git/gitStatus";
-import { openFileAtPath } from "../editor/openWithDiff";
 import { addUsage, formatModelName, totalTokens, UsageTotals } from "../claude/transcriptUsage";
 import { PendingChange } from "../state/PendingChangesStore";
 import { buildInbox, InboxCard, InboxSubagent, InboxTurn, scopeInbox } from "../state/inboxModel";
@@ -10,7 +8,14 @@ import type { InboxUiState } from "../state/InboxUiState";
 import { TerminalView } from "./TerminalView";
 import { computeDiffStats } from "../diff/renderDiff";
 import { ActionLogModal } from "../modals/ActionLogModal";
-import { ChangeRowContext, renderChangeRow, renderHistorySection, runBulkAction } from "./changeRows";
+import {
+  ChangeRowContext,
+  SHELL_CHANGE_TOOLTIP,
+  renderChangeRow,
+  renderHistorySection,
+  renderShellChangeRows,
+  runBulkAction,
+} from "./changeRows";
 import { guardRenderDuringPress } from "./renderGuard";
 import { groupIcon, iconButton, iconLabel, makeActivatable } from "./uiHelpers";
 import type TerminusPlugin from "../main";
@@ -1199,6 +1204,10 @@ export class AgentInboxView extends ItemView {
    * review list stops meaning "nothing happened".
    */
   private renderShellChanges(el: HTMLElement, card: InboxCard): void {
+    // With detection off nothing refreshes this list, so whatever it last
+    // held would sit on the card indefinitely claiming to describe the
+    // session.
+    if (!this.plugin.settings.detectShellChanges) return;
     const changes = card.session?.shellChanges ?? [];
     if (changes.length === 0) return;
     const expanded = this.ui.expandedShellChanges.has(card.token);
@@ -1206,11 +1215,8 @@ export class AgentInboxView extends ItemView {
     const head = section.createDiv({ cls: "terminus-inbox-shell-head" });
     setIcon(head.createSpan({ cls: "terminus-inbox-chevron" }), expanded ? "chevron-down" : "chevron-right");
     setIcon(head.createSpan({ cls: "terminus-meta-icon" }), "terminal");
-    head.createSpan({ text: `${fileCount(changes.length)} changed outside Claude's edit tools` });
-    setTooltip(
-      head,
-      "Changed by a shell command -- a formatter, sed, a package manager -- which Terminus can't snapshot, diff or revert.\nListed so an empty review list doesn't read as nothing having happened."
-    );
+    head.createSpan({ text: `${fileCount(changes.length)} changed without a snapshot` });
+    setTooltip(head, SHELL_CHANGE_TOOLTIP);
     const toggle = () => {
       this.ui.userAction();
       if (expanded) this.ui.expandedShellChanges.delete(card.token);
@@ -1222,19 +1228,7 @@ export class AgentInboxView extends ItemView {
     head.setAttr("aria-expanded", String(expanded));
     if (!expanded) return;
 
-    const list = section.createDiv({ cls: "terminus-inbox-shell-list" });
-    const base = this.plugin.getVaultBasePath();
-    for (const change of changes) {
-      const relative = pathRelative(base, change.filePath);
-      const path = relative.startsWith("..") ? change.filePath : relative;
-      const row = list.createDiv({ cls: "terminus-inbox-shell-row" });
-      row.createSpan({ cls: "terminus-inbox-shell-path", text: path, attr: { title: change.filePath } });
-      row.createSpan({ cls: "terminus-inbox-shell-status", text: describeStatus(change.status) });
-      setTooltip(row, `Open ${path}`);
-      const open = () => void openFileAtPath(this.plugin, change.filePath);
-      row.addEventListener("click", open);
-      makeActivatable(row, open, () => undefined);
-    }
+    renderShellChangeRows(this.rows, section, changes);
   }
 
   /** `owner` is the agent the rows sit under (null: the lead); a file that

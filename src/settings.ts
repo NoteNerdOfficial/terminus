@@ -80,11 +80,6 @@ export interface MultiAgentSettings {
   sendBehavior: SendBehavior;
   showEstimatedCost: boolean;
   showGitBranch: boolean;
-  /** Reads `git status` at each turn's start and end to notice files Claude
-   *  changed through the shell, which the Edit/Write/NotebookEdit hooks
-   *  can't see (see git/gitStatus.ts). Two git calls per turn, and nothing
-   *  at all outside a repo. */
-  detectShellChanges: boolean;
   /** Writes one note per Claude session into the vault, a section per turn
    *  (see state/SessionLog.ts). Off by default and never turned on by
    *  anything but the user: it is the only part of Terminus that puts
@@ -111,6 +106,13 @@ export interface TerminusSettings {
   fontSize: number;
   terminalPlacement: TerminalPlacement;
   confirmBulkActions: boolean;
+  /** Reads `git status` at each turn's start and end to catch files Claude
+   *  changed without its Edit/Write tools -- a script, a formatter, a
+   *  package manager (see git/gitStatus.ts). One whose pre-turn content git
+   *  can still supply becomes an ordinary reviewable change; the rest are
+   *  listed as changed-but-not-reviewable. Shared by both experiences: the
+   *  two review panels are fed by the same store. */
+  detectShellChanges: boolean;
   shellBinOverride: string;
   python3BinOverride: string;
   claudeAuthToken: string;
@@ -151,7 +153,6 @@ export const DEFAULT_MULTI_AGENT_SETTINGS: MultiAgentSettings = {
   sendBehavior: "steer",
   showEstimatedCost: true,
   showGitBranch: true,
-  detectShellChanges: true,
   logSessions: false,
   sessionLogFolder: "Terminus/Sessions",
   sessionBaseFolder: "",
@@ -165,6 +166,7 @@ export const DEFAULT_SETTINGS: TerminusSettings = {
   fontSize: 13,
   terminalPlacement: "ask",
   confirmBulkActions: false,
+  detectShellChanges: true,
   shellBinOverride: "",
   python3BinOverride: "",
   claudeAuthToken: "",
@@ -189,6 +191,11 @@ interface LegacyFlatSettings {
   autoRevealDelayMs?: number;
 }
 
+/** Settings that used to live under `multiAgent` and are now shared. */
+interface LegacyMultiAgentSettings {
+  detectShellChanges?: boolean;
+}
+
 /**
  * Builds the in-memory settings from whatever data.json holds. A plain
  * shallow merge isn't enough: it would take a saved `classic` object as-is
@@ -204,8 +211,18 @@ export function resolveSettings(saved: unknown): TerminusSettings {
   if (autoRevealPendingChanges !== undefined) legacyClassic.autoRevealPendingChanges = autoRevealPendingChanges;
   if (autoRevealDelayMs !== undefined) legacyClassic.autoRevealDelayMs = autoRevealDelayMs;
 
+  // Shell-change detection was Multi-agent's until it started feeding the
+  // shared store, so a vault that turned it off there keeps it off here
+  // rather than finding it back on.
+  const legacyShared: Partial<TerminusSettings> = {};
+  const legacyDetect = (multiAgent as LegacyMultiAgentSettings | undefined)?.detectShellChanges;
+  if (rest.detectShellChanges === undefined && legacyDetect !== undefined) {
+    legacyShared.detectShellChanges = legacyDetect;
+  }
+
   return {
     ...DEFAULT_SETTINGS,
+    ...legacyShared,
     ...rest,
     classic: { ...DEFAULT_CLASSIC_SETTINGS, ...legacyClassic, ...classic },
     multiAgent: { ...DEFAULT_MULTI_AGENT_SETTINGS, ...multiAgent },
@@ -243,6 +260,23 @@ export class TerminusSettingTab extends PluginSettingTab {
         toggle.setValue(this.plugin.settings.confirmBulkActions).onChange(async (value) => {
           this.plugin.settings.confirmBulkActions = value;
           await this.plugin.saveSettings();
+        })
+      );
+  }
+
+  /** Shared by both modes: a shell change feeds the same store either way,
+   *  so Classic's Pending Changes gets them as readily as the inbox. */
+  private renderDetectShellChanges(containerEl: HTMLElement): void {
+    new Setting(containerEl)
+      .setName("Detect shell changes")
+      .setDesc(
+        "Claude's Edit and Write tools, and the files its shell commands name, are what Terminus can snapshot directly. This reads git status at the start and end of each turn to catch the rest -- a file written by a script, a formatter or a package manager. One whose pre-turn content git still has becomes a normal reviewable change; the rest are listed as changed, with a link to open them. Two git calls per turn per repository, and nothing outside one."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.detectShellChanges).onChange(async (value) => {
+          this.plugin.settings.detectShellChanges = value;
+          await this.plugin.saveSettings();
+          this.plugin.refreshTerminusViews();
         })
       );
   }
@@ -291,6 +325,7 @@ export class TerminusSettingTab extends PluginSettingTab {
     }
 
     this.renderConfirmBulkActions(containerEl);
+    this.renderDetectShellChanges(containerEl);
   }
 
   private renderMultiAgentSection(containerEl: HTMLElement): void {
@@ -318,6 +353,7 @@ export class TerminusSettingTab extends PluginSettingTab {
     }
 
     this.renderConfirmBulkActions(containerEl);
+    this.renderDetectShellChanges(containerEl);
 
     new Setting(containerEl)
       .setName("Track subagents")
@@ -377,19 +413,6 @@ export class TerminusSettingTab extends PluginSettingTab {
       .addToggle((toggle) =>
         toggle.setValue(multiAgent.showGitBranch).onChange(async (value) => {
           multiAgent.showGitBranch = value;
-          await this.plugin.saveSettings();
-          this.plugin.refreshTerminusViews();
-        })
-      );
-
-    new Setting(containerEl)
-      .setName("Detect shell changes")
-      .setDesc(
-        "Claude's Edit and Write tools are the only ones Terminus can snapshot. This reads git status at the start and end of each turn so files Claude changed another way -- a formatter, sed, a package manager -- are at least listed on its card. Two git calls per turn, and nothing outside a git repository."
-      )
-      .addToggle((toggle) =>
-        toggle.setValue(multiAgent.detectShellChanges).onChange(async (value) => {
-          multiAgent.detectShellChanges = value;
           await this.plugin.saveSettings();
           this.plugin.refreshTerminusViews();
         })

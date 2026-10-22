@@ -2,12 +2,15 @@ import { Component, MarkdownRenderer, Notice, setIcon, setTooltip } from "obsidi
 import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { PendingChange, ResolvedChange } from "../state/PendingChangesStore";
 import { renderDiffBody } from "../diff/renderDiff";
-import { openChangedFile } from "../editor/openWithDiff";
+import { openChangedFile, openFileAtPath } from "../editor/openWithDiff";
 import { openDiffSplitView } from "./DiffSplitView";
 import { ActionLogModal } from "../modals/ActionLogModal";
 import { ConfirmModal } from "../modals/ConfirmModal";
 import { collisionLabel, confirmCollisionReject, hasCollision } from "../modals/collisions";
 import { getGitHeadContent } from "../git/gitDiff";
+import { describeStatus } from "../git/gitStatus";
+import { makeActivatable } from "./uiHelpers";
+import type { ShellChange } from "../state/AgentSessionStore";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
 
@@ -85,14 +88,20 @@ export function renderChangeRow(
   const info = summary.createDiv({ cls: "terminus-pending-info" });
   const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
   nameRow.createSpan({ cls: "terminus-pending-filename", text: pathBasename(change.diff.filePath) });
-  if (change.editCount > 1) {
-    nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
-  }
+  const editCountBadge = () => {
+    if (change.editCount > 1) {
+      nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
+    }
+  };
+  // The inbox puts the badge between the name and its right-aligned counts;
+  // Classic keeps the original order, with the badge after them.
+  if (inbox) editCountBadge();
   // Classic puts the counts beside the name; the inbox row sets them apart
   // on the right of the name line.
   const statsEl = inbox ? nameRow.createSpan({ cls: "terminus-pending-stats" }) : nameRow;
   statsEl.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
   statsEl.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
+  if (!inbox) editCountBadge();
   // Cut down from the system root, not the vault root: keeps the vault
   // folder name as a recognizable anchor ("Test1/notes/File 8.md")
   // instead of either the full "/Users/.../Test1/..." prefix or a bare
@@ -348,3 +357,36 @@ function renderHistoryRow(ctx: ChangeRowContext, list: HTMLElement, item: Resolv
     });
   });
 }
+
+/**
+ * The files git reported as changed that have no reviewable before-state --
+ * a rename, binary content, or a file that already had uncommitted changes
+ * when the turn began. Everything git *can* supply a baseline for becomes an
+ * ordinary row above instead (see TerminalView.changeFromShellEntry), so
+ * what lands here is the honest remainder: named and openable, with no diff
+ * and no Keep/Reject, because there is nothing exact to revert to.
+ *
+ * Shared by Classic's Pending Changes and the Multi-agent inbox, which wrap
+ * it in their own foldable headers.
+ */
+export function renderShellChangeRows(ctx: ChangeRowContext, container: HTMLElement, changes: ShellChange[]): void {
+  const list = container.createDiv({ cls: "terminus-inbox-shell-list" });
+  const base = ctx.plugin.getVaultBasePath();
+  for (const change of changes) {
+    const relative = pathRelative(base, change.filePath);
+    // Outside the vault there is no shorter honest spelling than the whole
+    // path, which is the case this list exists to make visible.
+    const path = relative.startsWith("..") ? change.filePath : relative;
+    const row = list.createDiv({ cls: "terminus-inbox-shell-row" });
+    row.createSpan({ cls: "terminus-inbox-shell-path", text: path, attr: { title: change.filePath } });
+    row.createSpan({ cls: "terminus-inbox-shell-status", text: describeStatus(change.status) });
+    setTooltip(row, `Open ${path}`);
+    const open = () => void openFileAtPath(ctx.plugin, change.filePath);
+    row.addEventListener("click", open);
+    makeActivatable(row, open, () => undefined);
+  }
+}
+
+/** The one-line summary both panels put above that list. */
+export const SHELL_CHANGE_TOOLTIP =
+  "Changed indirectly -- by a script, a formatter or a package manager -- with no before-state Terminus could snapshot: a rename, binary content, or a file that already had uncommitted changes when the turn began.\nListed so an empty review list never reads as nothing having happened.";

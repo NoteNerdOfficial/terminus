@@ -4,7 +4,14 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readGitStatus, changedSince, describeStatus } from "../src/git/gitStatus";
+import {
+  readGitStatus,
+  changedSince,
+  describeStatus,
+  isNewFile,
+  isRenameOrCopy,
+  readGitFileAtHead,
+} from "../src/git/gitStatus";
 
 /**
  * Shell-edit detection, against a real git repository rather than canned
@@ -100,5 +107,54 @@ describe("git status snapshots", () => {
 
   it("returns null outside a repository", async () => {
     assert.equal(await readGitStatus(plain), null);
+  });
+});
+
+/**
+ * The pre-turn baseline a reviewable shell change is built from. A Reject
+ * writes these bytes back to disk, so "close enough" is not good enough
+ * here -- hence a real repository rather than canned output.
+ */
+describe("pre-turn baseline from git", () => {
+  const at = (rel: string) => join(repo, rel);
+  const statusOf = (rel: string) => after_!.entries.get(at(rel)) ?? "";
+
+  it("gives a clean file's content at HEAD, which is what it held before the turn", async () => {
+    assert.equal(await readGitFileAtHead(repo, at("src/a.ts")), "a\n");
+  });
+
+  it("reads a path containing a space", async () => {
+    assert.equal(await readGitFileAtHead(repo, at("src/with space.ts")), "s\n");
+  });
+
+  it("still has a deleted file's content, so rejecting restores it", async () => {
+    assert.equal(await readGitFileAtHead(repo, at("to-delete.ts")), "d\n");
+  });
+
+  it("has nothing for a file HEAD never held", async () => {
+    assert.equal(await readGitFileAtHead(repo, at("new-untracked.ts")), null);
+  });
+
+  it("refuses a path outside the repository", async () => {
+    assert.equal(await readGitFileAtHead(repo, join(plain, "elsewhere.ts")), null);
+  });
+
+  it("tells a file new in this turn from one that was modified", () => {
+    assert.ok(isNewFile(statusOf("new-untracked.ts")), "untracked counts as new");
+    assert.ok(!isNewFile(statusOf("src/a.ts")));
+  });
+
+  it("sets a rename apart, whose before/after pairing isn't reconstructed", () => {
+    const renamed = [...after_!.entries].find(([path]) => path.endsWith("renamed.ts"));
+    assert.ok(renamed, "the rename is in the snapshot");
+    assert.ok(isRenameOrCopy(renamed[1]));
+    assert.ok(!isRenameOrCopy(statusOf("src/a.ts")));
+  });
+
+  it("can tell which files had an exact before-state at all", () => {
+    // The rule TerminalView applies: HEAD is only the pre-turn content for
+    // a file that was clean when the turn began.
+    assert.ok(before_!.entries.has(at("dirty-before.ts")), "already dirty, so HEAD is not its before-state");
+    assert.ok(!before_!.entries.has(at("src/a.ts")), "clean at the baseline, so HEAD is exactly its before-state");
   });
 });

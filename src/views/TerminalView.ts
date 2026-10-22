@@ -12,10 +12,12 @@ import {
   getAllEnvVars,
   bufferToBytes,
   fileExistsSync,
+  getEnvVar,
+  readTextFileIfExists,
 } from "terminus-node-bridge";
 import { PtyProcess } from "../pty/PtyProcess";
 import { getShellIntegrationEnv } from "../pty/shellIntegration";
-import { buildDiff } from "../server/diff";
+import { buildDiff, DiffResult } from "../server/diff";
 import { detectBacklinkBreakage } from "../backlinks/breakage";
 import { CommandTracker, TrackedCommand } from "../terminal/CommandTracker";
 import { CwdTracker } from "../terminal/CwdTracker";
@@ -25,9 +27,25 @@ import { openTerminalColorPicker } from "../terminal/TerminalColorPicker";
 import { refreshTabHeader, refreshPaneTitle, refreshTabPendingDot } from "../terminal/tabHeaderColor";
 import { CommandHelpModal } from "../modals/CommandHelpModal";
 import { RenameTerminalModal } from "../modals/RenameTerminalModal";
-import { NotificationHookPayload, PreToolUseHookPayload, SessionEventHookPayload, StopHookPayload } from "../hooks/types";
+import {
+  BashToolHookPayload,
+  FileToolHookPayload,
+  NotificationHookPayload,
+  PreToolUseHookPayload,
+  SessionEventHookPayload,
+  StopHookPayload,
+} from "../hooks/types";
+import { parseShellWriteTargets } from "../server/shellWrites";
 import { getGitBranch } from "../git/gitBranch";
-import { changedSince, readGitStatus, type GitStatus } from "../git/gitStatus";
+import {
+  changedSince,
+  isNewFile,
+  isRenameOrCopy,
+  readGitFileAtHead,
+  readGitStatus,
+  type GitStatus,
+  type GitStatusEntry,
+} from "../git/gitStatus";
 import type { ShellChange } from "../state/AgentSessionStore";
 import { withoutInheritedClaudeSession } from "../pty/claudeSessionEnv";
 import { addDelegateItem, addForkItem, addMoveItems } from "../groups/groupMenus";
@@ -248,15 +266,25 @@ export class TerminalView extends ItemView {
   // that a timed guess would only risk clearing it too early.
   private isPendingAttention = false;
 
-  // Shell-edit detection (Multi-agent, "Detect shell changes" on; see
-  // git/gitStatus.ts). `turnBaseline` is `git status` as the current turn
-  // began, compared against a fresh read when it ends; `hookedFiles` is
-  // every file an Edit/Write/NotebookEdit hook has accounted for this
-  // session, which is what tells Claude's tool edits apart from the ones it
-  // made through the shell. Both are per Claude session, so both reset at
-  // SessionStart (a /clear included).
-  private turnBaseline: GitStatus | null = null;
+  // Indirect-write detection (both experiences, "Detect shell changes" on;
+  // see git/gitStatus.ts). `turnBaselines` is `git status` as the current
+  // turn began, compared against a fresh read when it ends; `hookedFiles`
+  // is every file a hook or a Bash snapshot has already accounted for this
+  // session, which is what leaves only the writes nothing saw directly.
+  // Both are per Claude session, so both reset at SessionStart (a /clear
+  // included).
+  /** `git status` per repository root as the current turn began. More than
+   *  one because Claude's own folder and the vault are often different
+   *  repositories -- scanning only the session's cwd missed every change it
+   *  made in the vault, and vice versa. */
+  private turnBaselines = new Map<string, GitStatus>();
   private readonly hookedFiles = new Set<string>();
+  /** Pre-command content of the files each in-flight Bash call looks like it
+   *  will write, keyed by tool_use_id so PostToolUse can pair with its own
+   *  PreToolUse. Entries are consumed by that post call, and cleared when a
+   *  turn or session ends in case one never arrives (an interrupted command,
+   *  or a hook that timed out). */
+  private readonly shellSnapshots = new Map<string, Array<{ filePath: string; text: string | null }>>();
 
   constructor(leaf: WorkspaceLeaf, private plugin: TerminusPlugin) {
     super(leaf);
@@ -389,6 +417,7 @@ export class TerminalView extends ItemView {
 
     this.plugin.reviewServer.register(this.token, {
       onChangeApplied: (payload) => this.onChangeApplied(payload),
+      onShellCommand: (payload) => this.onShellCommand(payload),
       onTurnEnd: (payload) => this.onTurnEnd(payload),
       onNeedsAttention: (payload) => this.onNeedsAttention(payload),
       onSessionEvent: (payload) => this.onSessionEvent(payload),
@@ -565,6 +594,12 @@ export class TerminalView extends ItemView {
   private endTurn(message: string | undefined, identity: ReturnType<typeof sessionIdentity>, failed: boolean, promptId?: string): void {
     this.clearActivity();
     this.clearPendingAttention();
+    // A Bash snapshot still waiting on a PostToolUse that never arrived --
+    // the command was denied at the permission prompt, interrupted, or its
+    // hook timed out -- is dead weight once the turn is over, and it holds
+    // the full text of every file that command named. PostToolUse always
+    // lands well before Stop, so nothing live is dropped here.
+    this.shellSnapshots.clear();
     if (failed) this.plugin.agentSessionStore.turnFailed(this.token, message, identity, Date.now(), promptId);
     else this.plugin.agentSessionStore.turnEnded(this.token, message, identity, Date.now(), false, promptId);
     void this.plugin.refreshUsage(this.token);
@@ -606,7 +641,31 @@ export class TerminalView extends ItemView {
   }
 
   private get detectsShellChanges(): boolean {
-    return this.plugin.experience === "multi-agent" && this.plugin.settings.multiAgent.detectShellChanges;
+    return this.plugin.settings.detectShellChanges;
+  }
+
+  /** The folders to ask git about: Claude's own working directory and the
+   *  vault. Either can be outside the other -- a session run in `~/code/api`
+   *  writes there and in the vault -- and a repository reached from both is
+   *  scanned once, since readGitStatus resolves each to its root. */
+  private shellScanDirs(): string[] {
+    const dirs: string[] = [];
+    const cwd = this.plugin.agentSessionStore.get(this.token)?.cwd;
+    if (cwd) dirs.push(cwd);
+    const vault = this.plugin.getVaultBasePath();
+    if (!dirs.includes(vault)) dirs.push(vault);
+    return dirs;
+  }
+
+  /** `git status` for each of those, keyed by the repository root so two
+   *  folders in one repository collapse to a single entry. */
+  private async readShellStatuses(): Promise<Map<string, GitStatus>> {
+    const byRoot = new Map<string, GitStatus>();
+    for (const dir of this.shellScanDirs()) {
+      const status = await readGitStatus(dir);
+      if (status && !byRoot.has(status.root)) byRoot.set(status.root, status);
+    }
+    return byRoot;
   }
 
   /** `git status` as this turn begins, to compare against at its end. Taken
@@ -621,54 +680,122 @@ export class TerminalView extends ItemView {
    *  as a fallback, and naming a file the user changed themselves would be
    *  worse than missing one. */
   private async takeShellBaseline(): Promise<void> {
-    if (!this.detectsShellChanges) {
-      this.turnBaseline = null;
-      return;
-    }
-    const cwd = this.plugin.agentSessionStore.get(this.token)?.cwd;
-    this.turnBaseline = cwd ? await readGitStatus(cwd) : null;
+    this.turnBaselines = this.detectsShellChanges ? await this.readShellStatuses() : new Map<string, GitStatus>();
   }
 
   /**
    * At a turn's end: the files whose git status changed during it that no
-   * Edit/Write/NotebookEdit hook accounted for. Those are the ones Claude
-   * changed through the shell -- `sed -i`, a formatter, a package manager --
-   * which our PreToolUse matcher never sees, so the review panel would
-   * otherwise be silently empty for them.
+   * Edit/Write/NotebookEdit hook and no Bash snapshot accounted for. Those
+   * are the ones written indirectly -- by a script, a formatter, a package
+   * manager -- where the path never appears in the command, so there was
+   * nothing for shellWrites.ts to snapshot ahead of time.
    *
-   * The list carries across turns, since nothing here resolves an entry the
-   * way Accept/Reject resolves a pending change; an entry whose file is no
-   * longer dirty at all (the user reverted it, or it got committed) is
-   * dropped on the next pass, so it cleans itself up.
+   * Each one git can still supply a pre-turn baseline for becomes an
+   * ordinary reviewable change, with a diff and Keep/Reject (see
+   * changeFromShellEntry). The remainder -- a rename, a binary, a file
+   * already dirty when the turn began -- is returned as a ShellChange: named
+   * and openable, but honestly marked as having no reviewable before-state.
+   *
+   * That list carries across turns, since nothing resolves an entry the way
+   * Accept/Reject resolves a pending change; an entry whose file is no
+   * longer dirty at all (reverted, or committed) is dropped on the next
+   * pass, so it cleans itself up.
    */
   private async checkShellChanges(): Promise<ShellChange[]> {
-    if (!this.detectsShellChanges) return [];
-    const cwd = this.plugin.agentSessionStore.get(this.token)?.cwd;
-    if (!cwd) return [];
-    const after = await readGitStatus(cwd);
-    const baseline = this.turnBaseline;
+    if (!this.detectsShellChanges) {
+      // Nothing will refresh the list again, so drop it rather than leave a
+      // stale one describing a session it no longer matches.
+      if (this.plugin.agentSessionStore.get(this.token)?.shellChanges.length) {
+        this.plugin.agentSessionStore.shellChangesRead(this.token, []);
+      }
+      return [];
+    }
+    const after = await this.readShellStatuses();
+    const baselines = this.turnBaselines;
     // The next turn measures from here, whatever this one found.
-    this.turnBaseline = after;
-    if (!after) return [];
+    this.turnBaselines = after;
+    if (after.size === 0) return [];
 
     const session = this.plugin.agentSessionStore.get(this.token);
     if (!session) return [];
+    const stillDirty = (filePath: string) => [...after.values()].some((status) => status.entries.has(filePath));
     const known = new Set(session.shellChanges.map((change) => change.filePath));
-    const kept = session.shellChanges.filter((change) => after.entries.has(change.filePath));
+    const kept = session.shellChanges.filter((change) => stillDirty(change.filePath));
     const at = Date.now();
     // Only this turn's new ones are returned: the session log records what
     // each turn did, not the running list the card shows.
     const added: ShellChange[] = [];
-    for (const entry of changedSince(baseline, after)) {
-      if (this.hookedFiles.has(entry.filePath) || known.has(entry.filePath)) continue;
-      // Terminus's own session-log note is a file that appears with no edit
-      // hook behind it, which is this pass's definition of a shell edit; it
-      // must not report the plugin's bookkeeping as Claude's work.
-      if (this.plugin.sessionLog.ownsPath(entry.filePath)) continue;
-      added.push({ filePath: entry.filePath, status: entry.status, at });
+
+    for (const [root, status] of after) {
+      const baseline = baselines.get(root) ?? null;
+      for (const entry of changedSince(baseline, status)) {
+        if (this.hookedFiles.has(entry.filePath) || known.has(entry.filePath)) continue;
+        // Terminus's own session-log note is a file that appears with no
+        // edit hook behind it, which is this pass's definition of an
+        // indirect write; it must not report the plugin's own bookkeeping
+        // as Claude's work.
+        if (this.plugin.sessionLog.ownsPath(entry.filePath)) continue;
+        // Already dirty when the turn began, so HEAD is not what the file
+        // looked like before Claude touched it and no exact revert exists.
+        const wasClean = !baseline?.entries.has(entry.filePath);
+        const diff = wasClean ? await this.changeFromShellEntry(root, entry) : null;
+        if (diff) {
+          this.recordFileChange(diff, this.shellPayload(), false);
+          continue;
+        }
+        added.push({ filePath: entry.filePath, status: entry.status, at });
+      }
     }
+
     this.plugin.agentSessionStore.shellChangesRead(this.token, [...kept, ...added]);
     return added;
+  }
+
+  /**
+   * A reviewable diff for one git-reported file, or null when its pre-turn
+   * content can't be established exactly. Only ever called for a file that
+   * was clean at the turn's baseline, which is what makes HEAD the right
+   * before-state (see readGitFileAtHead).
+   */
+  private async changeFromShellEntry(root: string, entry: GitStatusEntry): Promise<DiffResult | null> {
+    // A rename's before/after pairing isn't reconstructed; treating one as a
+    // create plus a delete would offer a Reject that loses the file.
+    if (isRenameOrCopy(entry.status)) return null;
+
+    const current = await readReviewableText(entry.filePath);
+    if (current === undefined) return null;
+
+    // New in this turn: HEAD has no copy, so the before-state is "didn't
+    // exist" and a Reject deletes it.
+    if (isNewFile(entry.status)) {
+      if (current === null) return null; // created and already gone again
+      return { filePath: entry.filePath, oldText: "", newText: current, existedBefore: false, revertText: "" };
+    }
+
+    const before = await readGitFileAtHead(root, entry.filePath);
+    if (before === null) return null;
+    const newText = current ?? "";
+    if (before === newText) return null;
+    return { filePath: entry.filePath, oldText: before, newText, existedBefore: true, revertText: before };
+  }
+
+  /** The payload a git-detected change is recorded under. There is no hook
+   *  behind one, so it carries the session's own fields and an empty command
+   *  -- enough for the store, the action log and the session log, all of
+   *  which only read the tool name and the session identity. */
+  private shellPayload(): BashToolHookPayload {
+    const session = this.plugin.agentSessionStore.get(this.token);
+    return {
+      session_id: session?.sessionId ?? "",
+      transcript_path: session?.transcriptPath ?? "",
+      cwd: session?.cwd ?? this.plugin.getVaultBasePath(),
+      prompt_id: session?.turns[session.turns.length - 1]?.promptId ?? "",
+      permission_mode: "",
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_use_id: "",
+      tool_input: { command: "" },
+    };
   }
 
   /** Fires from the Notification hook -- Claude needs this terminal's
@@ -681,10 +808,12 @@ export class TerminalView extends ItemView {
     this.plugin.agentSessionStore.needsAttention(this.token, payload?.notification_type, payload?.message, sessionIdentity(payload));
   }
 
-  /** SessionStart / SessionEnd / UserPromptSubmit, and the subagent
-   *  events -- only sent while the Multi-agent experience has those hooks
-   *  installed. Subagent events are dropped once tracking is off, since
-   *  a session started earlier keeps sending them. */
+  /** SessionStart / SessionEnd / UserPromptSubmit, and the subagent events.
+   *  SessionStart and UserPromptSubmit are installed in both experiences
+   *  (indirect-write detection needs its reset and its turn-start signal);
+   *  the rest arrive only while Multi-agent has those hooks installed.
+   *  Subagent events are dropped once tracking is off, since a session
+   *  started earlier keeps sending them. */
   private onSessionEvent(payload: SessionEventHookPayload): void {
     const store = this.plugin.agentSessionStore;
     const identity = sessionIdentity(payload);
@@ -694,7 +823,8 @@ export class TerminalView extends ItemView {
         // A new Claude session (a /clear included) starts the shell-change
         // tracking over, matching the store's own clean slate.
         this.hookedFiles.clear();
-        this.turnBaseline = null;
+        this.shellSnapshots.clear();
+        this.turnBaselines.clear();
         this.plugin.sessionLog.sessionStarted(this.token, payload.session_id);
         this.rememberClaudeSession(payload.session_id, payload.cwd);
         this.typePendingPrompt();
@@ -1396,14 +1526,80 @@ export class TerminalView extends ItemView {
    * immediately so a whole multi-edit turn completes uninterrupted. This
    * just records the pre-edit snapshot for later review/revert.
    */
-  private async onChangeApplied(payload: PreToolUseHookPayload): Promise<void> {
-    const diff = await buildDiff(payload);
-    this.noteActivity(diff.filePath);
+  private async onChangeApplied(payload: FileToolHookPayload): Promise<void> {
+    this.recordFileChange(await buildDiff(payload), payload);
+  }
+
+  /**
+   * The Bash pair, which is how a shell write becomes reviewable. PreToolUse
+   * snapshots the content of every file the command looks like it will write
+   * (see server/shellWrites.ts); PostToolUse re-reads them and records the
+   * ones that really changed, as a diff indistinguishable from a Write's --
+   * same row, same Split Diff, same Keep/Reject.
+   *
+   * A path the parse guessed wrong costs nothing: its content still matches
+   * the snapshot, so the comparison below drops it and no row appears. That
+   * is what lets the parse be generous.
+   */
+  private async onShellCommand(payload: BashToolHookPayload): Promise<void> {
+    if (payload.hook_event_name === "PreToolUse") {
+      const targets = parseShellWriteTargets(payload.tool_input.command, payload.cwd, getEnvVar("HOME"));
+      if (targets.length === 0) return;
+      const snapshots = await Promise.all(
+        targets.map(async (filePath) => ({ filePath, text: await readReviewableText(filePath) }))
+      );
+      const reviewable = snapshots.filter((s): s is { filePath: string; text: string | null } => s.text !== undefined);
+      if (reviewable.length > 0) this.shellSnapshots.set(payload.tool_use_id, reviewable);
+      return;
+    }
+
+    const snapshots = this.shellSnapshots.get(payload.tool_use_id);
+    if (!snapshots) return;
+    this.shellSnapshots.delete(payload.tool_use_id);
+
+    for (const snapshot of snapshots) {
+      const after = await readReviewableText(snapshot.filePath);
+      // Unchanged, a file the command never touched at all, or one that
+      // stopped being reviewable text (`cp` over it with an image, say).
+      if (after === undefined || after === snapshot.text) continue;
+      const before = snapshot.text ?? "";
+      this.recordFileChange(
+        {
+          filePath: snapshot.filePath,
+          oldText: before,
+          newText: after ?? "",
+          existedBefore: snapshot.text !== null,
+          // Exact pre-command bytes, so Reject restores a modified file and
+          // deletes one the command created (see PendingChangesStore).
+          revertText: before,
+        },
+        payload
+      );
+    }
+  }
+
+  /**
+   * Shared by the file tools, the Bash pair and the turn-end git pass:
+   * everything that happens once a change has a diff.
+   *
+   * `live` says whether Claude is still mid-turn. It is false for the git
+   * pass alone, which runs from finishTurn -- after the Stop hook has
+   * already closed the turn and cleared the activity chip. Reporting those
+   * changes as live work would put a finished session back into "working"
+   * with an elapsed timer nothing will stop again, and raise the "Claude is
+   * editing X" chip over a turn that is already over. The change itself is
+   * still recorded in full; only the two signals that mean "work is
+   * happening right now" are skipped.
+   */
+  private recordFileChange(diff: DiffResult, payload: PreToolUseHookPayload, live = true): void {
+    if (live) {
+      this.noteActivity(diff.filePath);
+      this.plugin.agentSessionStore.fileEdited(this.token, diff.filePath, sessionIdentity(payload), payload.prompt_id);
+    }
     // Accounted for by a hook, so the shell-change check must not report it
     // (see checkShellChanges). Tracked even with that check off: the setting
     // can be turned on mid-session, and a Set of paths costs nothing.
     this.hookedFiles.add(diff.filePath);
-    this.plugin.agentSessionStore.fileEdited(this.token, diff.filePath, sessionIdentity(payload), payload.prompt_id);
     const editAgent = this.plugin.tracksSubagents && payload.agent_id ? { id: payload.agent_id, type: payload.agent_type ?? "" } : null;
     // Accumulated per turn and written out when the turn ends; a no-op
     // unless the user turned session logging on.
@@ -1446,6 +1642,36 @@ export class TerminalView extends ItemView {
     const broken = detectBacklinkBreakage(this.app, file, merged.diff.oldText, merged.diff.newText);
     this.plugin.pendingChangesStore.setBrokenBacklinks(absoluteFilePath, broken);
   }
+}
+
+/** Beyond this, a file is named but not diffed; see readReviewableText.
+ *  Well under the review server's 5 MB body cap, and far past any note. */
+const MAX_REVIEWABLE_CHARS = 2 * 1024 * 1024;
+
+/**
+ * A file's content for review: `null` when it isn't there, and `undefined`
+ * when it can't be reviewed as text -- a directory (`rm -rf dist`), a
+ * permission error, or binary content. Those are skipped rather than
+ * guessed at, for two reasons: treating an unreadable file as absent would
+ * make Reject delete something that is really there, and round-tripping
+ * bytes that aren't text through a UTF-8 revert would corrupt them.
+ */
+async function readReviewableText(filePath: string): Promise<string | null | undefined> {
+  let text: string | null;
+  try {
+    text = await readTextFileIfExists(filePath);
+  } catch {
+    return undefined;
+  }
+  if (text === null) return null;
+  // A NUL byte is the cheap, reliable tell that this was never text.
+  if (text.includes("\u0000")) return undefined;
+  // Past this size a diff is unreadable anyway, and holding two copies of
+  // it (the snapshot and the recorded change) is a real cost for a review
+  // nobody can act on. Skipping sends it to the no-snapshot list instead,
+  // which still names the file.
+  if (text.length > MAX_REVIEWABLE_CHARS) return undefined;
+  return text;
 }
 
 /** The session fields every hook payload carries, for AgentSessionStore.
