@@ -65,16 +65,23 @@ export const VISIBLE_FINISHED_SUBAGENTS = 10;
 
 /**
  * Sorts sessions and pending changes into the inbox's sections. A change
- * goes on the card of the terminal that first edited it (the same terminal
- * its row has always been labelled with), under the lead or the subagent
- * that made that first edit. A session is listed while Claude runs in it,
+ * goes on the card of the terminal that edited it LAST, under the lead or
+ * the subagent that made that edit, because the last edit is the one the
+ * file on disk now holds and so the one the row's diff shows.
+ *
+ * Note this is not the terminal the row's revertText belongs to: rejecting
+ * restores the state before the FIRST terminal's edit (see
+ * PendingChangesStore.recordChange), which for a file two terminals touched
+ * means reverting past a session whose card this is not. The card says so
+ * rather than hiding it, and confirmCollisionReject asks before any such
+ * reject regardless of the bulk-action setting. A session is listed while Claude runs in it,
  * or after it ended while it still has pending changes or queued feedback
  * (`feedbackTokens`), so that feedback can still be seen and discarded.
  */
 export function buildInbox(sessions: AgentSession[], changes: PendingChange[], feedbackTokens: ReadonlySet<string> = new Set()): Inbox {
   const changesByToken = new Map<string, PendingChange[]>();
   for (const change of changes) {
-    const owner = change.contributors[0]?.token;
+    const owner = change.contributors[change.contributors.length - 1]?.token;
     if (!owner) continue;
     const list = changesByToken.get(owner) ?? [];
     list.push(change);
@@ -195,19 +202,21 @@ function splitByAgent(
  * own turn order so they read oldest to newest like the conversation did.
  *
  * A row can coalesce edits from more than one turn (see
- * PendingChange.promptIds); it's listed under the FIRST of them, the turn
- * whose pre-edit snapshot the row would revert to -- the same rule that
- * puts a row edited by two terminals on the first one's card. A subagent's
- * edits carry their lead's prompt_id, so they land in the turn the user
- * actually asked for rather than in one of their own.
+ * PendingChange.promptIds), and when two terminals edited it those ids span
+ * both sessions. The row belongs to THIS session's turn, so the first id
+ * this session has a record of wins; `promptIds[0]` is the fallback for a
+ * turn no longer on record. A subagent's edits carry their lead's
+ * prompt_id, so they land in the turn the user actually asked for rather
+ * than in one of their own.
  */
 function buildTurns(token: string, session: AgentSession | null, changes: PendingChange[]): InboxTurn[] {
   if (changes.length === 0) return [];
   const runs = session?.subagents ?? [];
   const byTurn = new Map<string, PendingChange[]>();
   const unattributed: PendingChange[] = [];
+  const known = new Set((session?.turns ?? []).map((t) => t.promptId));
   for (const change of changes) {
-    const promptId = change.promptIds[0];
+    const promptId = change.promptIds.find((id) => known.has(id)) ?? change.promptIds[0];
     if (promptId === undefined) {
       unattributed.push(change);
       continue;

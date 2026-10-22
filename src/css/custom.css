@@ -2408,6 +2408,8 @@
   align-items: center;
   gap: var(--tm-gap);
   padding: 10px 10px 6px 14px;
+  /* The overlap popover hangs off this. */
+  position: relative;
 }
 
 .terminus-inbox-title {
@@ -2589,24 +2591,26 @@
 
 /* A long change list, grouped by folder. */
 .terminus-inbox-tree-head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 4px 4px 8px;
+  padding: 4px 8px;
   font-size: var(--font-ui-smaller);
-  font-weight: 600;
   color: var(--text-muted);
-  background-color: var(--background-secondary);
+  /* Opaque, and the same surface as the card body it rides over. */
+  background-color: var(--background-primary-alt);
 }
 
 .terminus-inbox-folder {
+  position: sticky;
+  top: calc(var(--terminus-stick-top, 0px) + var(--terminus-section-h, 25px) + var(--terminus-card-head-h, 32px));
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
+  background-color: var(--background-primary-alt);
+  transition: box-shadow 140ms ease;
   border-radius: var(--radius-s);
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
@@ -2615,7 +2619,7 @@
 
 .terminus-inbox-folder:hover,
 .terminus-inbox-folder:focus-visible {
-  background-color: var(--background-modifier-hover);
+  background-image: linear-gradient(var(--background-modifier-hover), var(--background-modifier-hover));
 }
 
 .terminus-inbox-folder-name {
@@ -2656,11 +2660,30 @@
   padding: 4px 8px 16px;
 }
 
+/* Four levels pin, each inside its own box: the section heading
+   ("Finished"), the session card's name, the turn, and the folder. Every
+   level parks under the one above it, and because each lives in its own
+   containing block, scrolling past a section or a card hands the pin to the
+   next one instead of stacking two of them. */
 .terminus-inbox-section {
+  position: sticky;
+  top: var(--terminus-stick-top, 0px);
+  z-index: 6;
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 14px 4px 6px;
+  /* The side margin became padding: same text position, but the band is
+     wide enough to cover the cards passing under it. */
+  margin: 14px 0 6px;
+  padding: 2px 4px 3px;
+  /* Every heading on a level is the height of its tallest sibling, so the
+     level below pins flush against any of them. The measured height is a
+     border box, so min-height has to mean the same thing or each pass
+     inflates it by the padding. */
+  box-sizing: border-box;
+  min-height: var(--terminus-section-h, 25px);
+  background-color: var(--terminus-pane-bg, var(--background-secondary));
+  transition: box-shadow 140ms ease;
   font-size: var(--font-ui-smaller);
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -2687,7 +2710,13 @@
 
 .terminus-inbox-card {
   position: relative;
+  /* `hidden` would make the card a scroll container, and a sticky header
+     inside one pins to the card instead of to the pane -- it never moves.
+     `clip` clips identically without becoming a scroller. The `hidden`
+     above it is the fallback for engines without `clip`, where the
+     headers simply scroll away as they used to. */
   overflow: hidden;
+  overflow: clip;
   margin: 0 0 10px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
@@ -2701,6 +2730,34 @@
 
 .terminus-inbox-card.is-ended {
   opacity: 0.8;
+}
+
+/* The session's whole identity -- name, status, counts, banner, closing
+   message -- pins as one block, with the card's own surface behind it so
+   the work below passes out of sight. `flow-root` keeps the banner's and
+   the message's bottom margins inside the block, so the measured height is
+   the height the eye sees and the turn below lands flush. */
+.terminus-inbox-card-top {
+  position: sticky;
+  top: calc(var(--terminus-stick-top, 0px) + var(--terminus-section-h, 25px));
+  z-index: 5;
+  display: flow-root;
+  background-color: var(--background-primary);
+  transition: box-shadow 140ms ease;
+  /* Once the card's own top border has scrolled away, the pinned block
+     redraws it, joining the left and right borders that are still there --
+     so a pinned session still reads as the top of a card. Straight, not
+     rounded: the rounded corners went with the border. */
+  --terminus-card-edge: transparent;
+  box-shadow: inset 0 1px 0 var(--terminus-card-edge);
+}
+
+.terminus-inbox-card-top.is-pinned {
+  --terminus-card-edge: var(--background-modifier-border);
+}
+
+.terminus-inbox-card.is-needs-attention .terminus-inbox-card-top.is-pinned {
+  --terminus-card-edge: var(--tm-attention);
 }
 
 .terminus-inbox-card-head {
@@ -2866,7 +2923,9 @@
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 0 6px;
-  padding: 6px 4px 4px 6px;
+  /* 8px on the right, matching the turn and folder headings above, so the
+     +/- counts and the Keep button run down one line. */
+  padding: 6px 8px 4px 6px;
 }
 
 .terminus-pending-row.is-inbox .terminus-pending-chevron {
@@ -3166,19 +3225,66 @@
 }
 
 .terminus-inbox-turn-head {
+  position: sticky;
+  top: calc(var(--terminus-stick-top, 0px) + var(--terminus-section-h, 25px) + var(--terminus-card-head-h, 32px));
+  z-index: 3;
   display: flex;
   align-items: baseline;
   gap: 5px;
-  padding: 5px 10px 5px 8px;
-  border-radius: var(--radius-s);
+  /* More room above a heading than below it, and the same 8px right edge
+     as every folder heading and file row, so the counts line up. */
+  margin-top: 10px;
+  padding: 5px 8px;
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
   cursor: pointer;
+  background-color: var(--background-primary-alt);
+  transition: box-shadow 140ms ease;
+}
+
+.terminus-inbox-turn:first-child .terminus-inbox-turn-head {
+  margin-top: 0;
+}
+
+/* No rule anywhere at rest. One hairline appears under the bottom of the
+   pinned stack, where rows are actually passing -- an affordance, not
+   decoration; the seams inside the stack stay unruled so four pinned levels
+   don't read as four stripes. Inset, so it takes no space and nothing
+   below it shifts. */
+.terminus-inbox-section.is-stuck,
+.terminus-inbox-card-top.is-stuck,
+.terminus-inbox-turn-head.is-stuck,
+.terminus-inbox-folder.is-stuck {
+  box-shadow: inset 0 -1px 0 var(--background-modifier-border);
+}
+
+/* A card top can be both: the card's edge above, the stack's hairline below. */
+.terminus-inbox-card-top.is-stuck {
+  box-shadow: inset 0 1px 0 var(--terminus-card-edge), inset 0 -1px 0 var(--background-modifier-border);
+}
+
+/* Under a turn the folder heading is the fourth level, so it adds the turn
+   header's height to the stack above it. */
+.terminus-inbox-turn-body .terminus-inbox-folder {
+  top: calc(var(--terminus-stick-top, 0px) + var(--terminus-section-h, 25px) + var(--terminus-card-head-h, 32px) + var(--terminus-turn-head-h, 28px));
+}
+
+/* The fold-all control, left of the totals so the numbers stay rightmost. */
+.terminus-inbox-fold-slot {
+  display: inline-flex;
+  flex: none;
+  align-self: center;
+}
+
+.terminus-inbox-fold-slot:empty {
+  display: none;
 }
 
 .terminus-inbox-turn-head:hover,
 .terminus-inbox-turn-head:focus-visible {
-  background-color: var(--background-modifier-hover);
+  /* Layered over the opaque surface rather than replacing it: the header
+     has to stay opaque while rows pass under it. */
+  background-image: linear-gradient(var(--background-modifier-hover), var(--background-modifier-hover));
 }
 
 .terminus-inbox-turn-head .terminus-inbox-chevron {
@@ -3224,7 +3330,6 @@
 
 .terminus-inbox-turn-body {
   margin: 0 0 4px 10px;
-  border-left: 1px solid var(--background-modifier-border-hover);
 }
 
 .terminus-inbox-turn-body > .terminus-inbox-changes .terminus-pending-list {
@@ -3490,4 +3595,327 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-tabs.terminus-hidden-pa
 
 body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-tabs):not(:has(.workspace-tabs:not(.terminus-hidden-pane):not(.working-tabs-hidden-pane))) {
   display: none;
+}
+
+/* --------------------------------------------------------------------------
+   Files more than one session wrote.
+
+   PendingChangesStore keys a pending change by file path alone, so two
+   terminals editing one file inside a review window coalesce into a single
+   row that keeps the FIRST edit's snapshot. Three surfaces say so: a chip in
+   the header, a note under the turn that produced the files, and a line on
+   the card of the session whose edits are filed elsewhere.
+
+   Nothing here is an alarm. Leaving the changes alone is identical to
+   keeping them (resolveItem writes nothing when accepted), so these say what
+   happened rather than warn, and carry no attention colour.
+   -------------------------------------------------------------------------- */
+
+.terminus-pending-view .terminus-inbox-overlap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background-color: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.terminus-pending-view .terminus-inbox-overlap-chip:hover,
+.terminus-pending-view .terminus-inbox-overlap-chip[aria-expanded="true"] {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.terminus-pending-view .terminus-inbox-overlap-chip .terminus-inbox-count {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.terminus-inbox-overlap-pop {
+  position: absolute;
+  top: calc(100% - 2px);
+  right: 10px;
+  z-index: 20;
+  /* Never wider than the pane: a floating panel that overhangs a sidebar
+     gets clipped at the workspace edge. */
+  width: min(320px, calc(100% - 20px));
+  padding: 10px 0 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background-color: var(--background-primary-alt, var(--background-primary));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.terminus-inbox-overlap-group {
+  padding: 0 12px;
+}
+
+.terminus-inbox-overlap-group + .terminus-inbox-overlap-group {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.terminus-inbox-overlap-ask {
+  padding-left: 8px;
+  border-left: 2px solid var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+  /* Two lines of the request is enough to recognise it; more would push
+     the files it is about off the bottom. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.terminus-inbox-overlap-ask.is-unrecorded {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.terminus-inbox-overlap-by {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 0 8px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-inbox-overlap-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background-color: var(--text-faint);
+}
+
+.terminus-inbox-overlap-then {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-inbox-overlap-line {
+  flex: 1;
+  height: 1px;
+  background-color: var(--background-modifier-border);
+}
+
+.terminus-inbox-overlap-files {
+  margin: 6px -12px 0;
+}
+
+/* An ordinary file row. Nothing marks it as overlapping: inside this
+   popover every row is, and the pairing is told once above. */
+.terminus-pending-view .terminus-inbox-overlap-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 16px;
+  align-items: center;
+  gap: 0 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 3px 12px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background-color: transparent;
+  color: var(--text-normal);
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminus-pending-view .terminus-inbox-overlap-row:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-inbox-overlap-name {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+}
+
+.terminus-inbox-overlap-file {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-ui-small);
+}
+
+/* Shrinks far sooner than the filename: the folder disambiguates, the
+   filename is the thing being read. */
+.terminus-inbox-overlap-folder {
+  flex: 0 40 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-inbox-overlap-stats {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-inbox-overlap-go {
+  display: flex;
+  justify-content: flex-end;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.terminus-pending-view .terminus-inbox-overlap-row:hover .terminus-inbox-overlap-go,
+.terminus-pending-view .terminus-inbox-overlap-row:focus-visible .terminus-inbox-overlap-go {
+  opacity: 1;
+}
+
+.terminus-inbox-overlap-foot {
+  margin-top: 8px;
+  padding: 8px 12px 0;
+  border-top: 1px solid var(--background-modifier-border);
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+}
+
+/* Under the turn whose files were rewritten afterwards. Indented past the
+   turn header's chevron and index so it reads as belonging to it. */
+.terminus-inbox-overlap-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 0 10px 4px 32px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.45;
+}
+
+.terminus-inbox-overlap-note .terminus-meta-icon {
+  color: var(--text-faint);
+  margin-top: 1px;
+}
+
+/* On a card with no turn headers the note has nothing to sit under, so it
+   lines up with the card's own content instead. */
+.terminus-inbox-card-body > .terminus-inbox-overlap-note {
+  padding-left: 16px;
+}
+
+/* On the card of the session whose overlapping edits are filed on another
+   card. Boxed, because it is about files that are NOT in the list below
+   it, and an unboxed line there would read as a caption for them. */
+.terminus-inbox-overlap-elsewhere {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 2px 10px 8px 14px;
+  padding: 6px 8px;
+  border-radius: var(--radius-s);
+  background-color: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.45;
+}
+
+.terminus-inbox-overlap-elsewhere .terminus-meta-icon {
+  color: var(--text-faint);
+  margin-top: 1px;
+}
+
+.terminus-inbox-overlap-strong {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.terminus-pending-view .terminus-inbox-overlap-show {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-accent);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.terminus-pending-view .terminus-inbox-overlap-show:hover {
+  color: var(--text-accent-hover);
+  text-decoration: underline;
+}
+
+/* --------------------------------------------------------------------------
+   Split Diff: which baseline the left column shows.
+
+   Only appears when a second terminal edited the file, because only then is
+   there a second baseline: ChangeContributor.before, the content that
+   terminal found and overwrote. Without it that version exists nowhere,
+   since recordChange resets the row's oldText to the first edit's snapshot.
+
+   Buttons are scoped to the view so Obsidian's default button fill does not
+   win over them.
+   -------------------------------------------------------------------------- */
+
+.terminus-split-diff-compare {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-split-diff-compare-label {
+  color: var(--text-faint);
+}
+
+.terminus-diff-split-view .terminus-split-diff-compare-option {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  background-color: transparent;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  cursor: pointer;
+}
+
+.terminus-diff-split-view .terminus-split-diff-compare-option:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.terminus-diff-split-view .terminus-split-diff-compare-option.is-active {
+  background-color: var(--background-modifier-active);
+  border-color: var(--background-modifier-border);
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+/* Says why the hunk bars went quiet, next to the control that did it. */
+.terminus-split-diff-compare-note {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.terminus-split-diff-hunk-readonly {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
 }

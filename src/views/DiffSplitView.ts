@@ -19,6 +19,10 @@ interface DiffSplitViewState {
 export class DiffSplitView extends ItemView {
   private changeId: string | null = null;
   /** Open comment boxes and their text, kept across re-renders. */
+  /** Which baseline the body is drawn against (an index into
+   *  diffBaselines). Lives here, not in the renderer, so it survives the
+   *  re-render every store change causes while Claude is still working. */
+  private compareIndex = 0;
   private commentDrafts = new Map<string, string>();
   private openComments = new Set<string>();
 
@@ -46,7 +50,11 @@ export class DiffSplitView extends ItemView {
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
-    this.changeId = (state as DiffSplitViewState | undefined)?.changeId ?? null;
+    const next = (state as DiffSplitViewState | undefined)?.changeId ?? null;
+    // A different file has its own set of baselines, so the choice made
+    // for the last one means nothing here.
+    if (next !== this.changeId) this.compareIndex = 0;
+    this.changeId = next;
     await super.setState(state, result);
     this.render();
     // Showing another group's change switches to that group, so the tab
@@ -123,7 +131,13 @@ export class DiffSplitView extends ItemView {
       }
     }
 
-    renderSplitDiffBody(container, this.app, this.plugin.pendingChangesStore, change, comments);
+    renderSplitDiffBody(container, this.app, this.plugin.pendingChangesStore, change, comments, {
+      index: this.compareIndex,
+      onPick: (index) => {
+        this.compareIndex = index;
+        this.render();
+      },
+    });
   };
 }
 

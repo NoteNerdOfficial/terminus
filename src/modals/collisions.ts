@@ -74,3 +74,84 @@ export async function confirmCollisionReject(app: App, changes: PendingChange[],
     "Reject"
   );
 }
+
+/** One pair of sessions that edited the same files: the one that edited
+ *  first (whose card the rows are filed on, see buildInbox) and the one
+ *  that edited last (whose version is the one on disk). */
+export interface OverlapGroup {
+  first: ChangeContributor;
+  /** The last contributor, whose edit is what the file now holds. */
+  last: ChangeContributor;
+  /** Every later contributor, named together when there is more than one. */
+  laterLabel: string;
+  changes: PendingChange[];
+}
+
+/** Groups the overlapping changes by which pair of sessions made them.
+ *  Order follows the changes, so the group holding the oldest change
+ *  comes first. */
+export function groupOverlaps(changes: PendingChange[]): OverlapGroup[] {
+  const groups = new Map<string, OverlapGroup>();
+  for (const change of changes) {
+    if (!hasCollision(change)) continue;
+    const first = change.contributors[0];
+    const last = change.contributors[change.contributors.length - 1];
+    if (!first || !last) continue;
+    const key = change.contributors.map((c) => c.token).join(">");
+    const existing = groups.get(key);
+    if (existing) existing.changes.push(change);
+    else groups.set(key, { first, last, laterLabel: joinNames(laterContributors(change)), changes: [change] });
+  }
+  return [...groups.values()];
+}
+
+/** The overlapping changes a session edited but does not own: another
+ *  terminal edited them afterwards, so buildInbox filed them on that
+ *  terminal's card and this session's card never lists them. */
+export function changesOwnedElsewhere(changes: PendingChange[], token: string): PendingChange[] {
+  return changes.filter(
+    (c) =>
+      hasCollision(c) &&
+      c.contributors[c.contributors.length - 1]?.token !== token &&
+      c.contributors.some((x) => x.token === token)
+  );
+}
+
+/** The overlapping changes a session owns that someone else started: the
+ *  row's revertText predates this session, so rejecting reaches back past
+ *  it into another terminal's work. */
+export function changesStartedElsewhere(changes: PendingChange[], token: string): PendingChange[] {
+  return changes.filter(
+    (c) => hasCollision(c) && c.contributors[c.contributors.length - 1]?.token === token
+  );
+}
+
+
+/** A left-hand side Split Diff can compare the current file against. */
+export interface DiffBaseline {
+  /** Column header and selector label. */
+  label: string;
+  text: string;
+}
+
+/**
+ * What the current content can be compared with: always the original, plus
+ * the file as each later terminal found it (ChangeContributor.before). For
+ * a file two terminals edited that second entry is the first terminal's
+ * result, which is otherwise unreachable once the row coalesced.
+ *
+ * Labelled "Before X's edits" rather than "X's version": if the earlier
+ * terminal came back and edited again after X, the snapshot is still
+ * exactly what X found, but it is no longer that terminal's latest work.
+ */
+export function diffBaselines(change: PendingChange): DiffBaseline[] {
+  const baselines: DiffBaseline[] = [{ label: "Original", text: change.diff.oldText }];
+  for (const contributor of change.contributors.slice(1)) {
+    const text = contributor.before;
+    // Nothing to offer when the snapshot was never taken (a row recorded
+    // before this field existed) or is the original over again.
+    if (text === undefined || text === change.diff.oldText) continue;
+    baselines.push({ label: `Before ${contributor.label}'s edits`, text });
+  }
+  return baselines;
+}

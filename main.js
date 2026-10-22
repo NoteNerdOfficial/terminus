@@ -18777,6 +18777,45 @@ async function confirmCollisionReject(app, changes, scope = "file") {
     "Reject"
   );
 }
+function groupOverlaps(changes) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const change of changes) {
+    if (!hasCollision(change)) continue;
+    const first = change.contributors[0];
+    const last = change.contributors[change.contributors.length - 1];
+    if (!first || !last) continue;
+    const key = change.contributors.map((c) => c.token).join(">");
+    const existing = groups.get(key);
+    if (existing) existing.changes.push(change);
+    else groups.set(key, { first, last, laterLabel: joinNames(laterContributors(change)), changes: [change] });
+  }
+  return [...groups.values()];
+}
+function changesOwnedElsewhere(changes, token) {
+  return changes.filter(
+    (c) => {
+      var _a7;
+      return hasCollision(c) && ((_a7 = c.contributors[c.contributors.length - 1]) == null ? void 0 : _a7.token) !== token && c.contributors.some((x) => x.token === token);
+    }
+  );
+}
+function changesStartedElsewhere(changes, token) {
+  return changes.filter(
+    (c) => {
+      var _a7;
+      return hasCollision(c) && ((_a7 = c.contributors[c.contributors.length - 1]) == null ? void 0 : _a7.token) === token;
+    }
+  );
+}
+function diffBaselines(change) {
+  const baselines = [{ label: "Original", text: change.diff.oldText }];
+  for (const contributor of change.contributors.slice(1)) {
+    const text = contributor.before;
+    if (text === void 0 || text === change.diff.oldText) continue;
+    baselines.push({ label: `Before ${contributor.label}'s edits`, text });
+  }
+  return baselines;
+}
 
 // src/editor/openWithDiff.ts
 async function openChangedFile(plugin, change) {
@@ -18857,14 +18896,40 @@ var import_obsidian13 = require("obsidian");
 var import_terminus_node_bridge19 = __toESM(require_dist());
 var EDGE = 4;
 var MIN_HIDDEN_TO_TRUNCATE = 4;
-function renderSplitDiffBody(container, app, store, change, comments) {
+function renderSplitDiffBody(container, app, store, change, comments, compare) {
+  var _a7, _b;
   const { diff } = change;
+  const baselines = diffBaselines(change);
+  const picked = Math.min(Math.max((_a7 = compare == null ? void 0 : compare.index) != null ? _a7 : 0, 0), baselines.length - 1);
+  const left = (_b = baselines[picked]) != null ? _b : { label: "Original", text: diff.oldText };
+  const actionable = picked === 0;
   const wrapper = container.createDiv({ cls: "terminus-split-diff-wrapper terminus-diff-body-wrapper" });
+  if (compare && baselines.length > 1) {
+    const bar = wrapper.createDiv({ cls: "terminus-split-diff-compare" });
+    bar.createSpan({ cls: "terminus-split-diff-compare-label", text: "Compare with" });
+    baselines.forEach((baseline, index) => {
+      const button = bar.createEl("button", {
+        cls: "terminus-split-diff-compare-option",
+        text: baseline.label
+      });
+      button.toggleClass("is-active", index === picked);
+      button.setAttr("aria-pressed", String(index === picked));
+      button.addEventListener("click", () => compare.onPick(index));
+    });
+    if (!actionable) {
+      bar.createSpan({
+        cls: "terminus-split-diff-compare-note",
+        text: "Accept and Reject act on the original. Switch back to use them."
+      });
+    }
+  }
+  const lastContributor = change.contributors[change.contributors.length - 1];
+  const rightLabel = change.contributors.length > 1 && lastContributor ? `${lastContributor.label}'s version` : "Claude's edit";
   const colHeader = wrapper.createDiv({ cls: "terminus-split-diff-colheader" });
-  colHeader.createDiv({ cls: "terminus-split-diff-colheader-cell", text: "Original" });
-  colHeader.createDiv({ cls: "terminus-split-diff-colheader-cell", text: "Claude's edit" });
+  colHeader.createDiv({ cls: "terminus-split-diff-colheader-cell", text: left.label });
+  colHeader.createDiv({ cls: "terminus-split-diff-colheader-cell", text: rightLabel });
   const scrollBody = wrapper.createDiv({ cls: "terminus-split-diff-scroll" });
-  const parts = computeSplitParts(diff.oldText, diff.newText);
+  const parts = computeSplitParts(left.text, diff.newText);
   let oldLineNo = 1;
   let newLineNo = 1;
   for (const part of parts) {
@@ -18877,10 +18942,10 @@ function renderSplitDiffBody(container, app, store, change, comments) {
     }
     const { oldLines, newLines } = buildHunkSides(part.oldValue, part.newValue);
     const lineSpan = (start, count) => count > 0 ? { start, end: start + count - 1 } : null;
-    renderHunkControls(scrollBody, part, change, app, store, comments, {
+    renderHunkControls(scrollBody, part, change, app, store, actionable ? comments : void 0, {
       oldLines: lineSpan(oldLineNo, oldLines.length),
       newLines: lineSpan(newLineNo, newLines.length)
-    });
+    }, actionable);
     const rowCount = Math.max(oldLines.length, newLines.length);
     for (let k3 = 0; k3 < rowCount; k3++) {
       const oldCell = oldLines[k3];
@@ -18895,7 +18960,7 @@ function renderSplitDiffBody(container, app, store, change, comments) {
       });
     }
   }
-  renderMinimap(wrapper, scrollBody, buildDiffLines(diff.oldText, diff.newText));
+  renderMinimap(wrapper, scrollBody, buildDiffLines(left.text, diff.newText));
 }
 function buildHunkSides(oldValue, newValue) {
   const oldRaw = splitLines(oldValue);
@@ -18951,9 +19016,13 @@ function renderContextBlock(container, lines, oldStart, newStart) {
   });
   lines.slice(lines.length - EDGE).forEach((text, i8) => renderContextRow(container, text, oldStart + lines.length - EDGE + i8, newStart + lines.length - EDGE + i8));
 }
-function renderHunkControls(container, hunk, change, app, store, comments, lines) {
+function renderHunkControls(container, hunk, change, app, store, comments, lines, actionable = true) {
   const bar = container.createDiv({ cls: "terminus-inline-diff-controls terminus-split-diff-hunk-controls" });
   bar.createSpan({ cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
+  if (!actionable) {
+    bar.createSpan({ cls: "terminus-split-diff-hunk-readonly", text: "View only" });
+    return;
+  }
   const resolve = async (accepted) => {
     var _a7;
     if (!accepted && !await confirmCollisionReject(app, [(_a7 = store.get(change.id)) != null ? _a7 : change], "hunk")) return false;
@@ -19070,6 +19139,10 @@ var DiffSplitView = class extends import_obsidian14.ItemView {
     this.plugin = plugin;
     this.changeId = null;
     /** Open comment boxes and their text, kept across re-renders. */
+    /** Which baseline the body is drawn against (an index into
+     *  diffBaselines). Lives here, not in the renderer, so it survives the
+     *  re-render every store change causes while Claude is still working. */
+    this.compareIndex = 0;
     this.commentDrafts = /* @__PURE__ */ new Map();
     this.openComments = /* @__PURE__ */ new Set();
     this.render = () => {
@@ -19120,7 +19193,13 @@ var DiffSplitView = class extends import_obsidian14.ItemView {
           (0, import_obsidian14.setTooltip)(note, "Send them from this session's card in the Agent inbox");
         }
       }
-      renderSplitDiffBody(container, this.app, this.plugin.pendingChangesStore, change, comments);
+      renderSplitDiffBody(container, this.app, this.plugin.pendingChangesStore, change, comments, {
+        index: this.compareIndex,
+        onPick: (index) => {
+          this.compareIndex = index;
+          this.render();
+        }
+      });
     };
   }
   getViewType() {
@@ -19141,7 +19220,9 @@ var DiffSplitView = class extends import_obsidian14.ItemView {
   }
   async setState(state, result) {
     var _a7;
-    this.changeId = (_a7 = state == null ? void 0 : state.changeId) != null ? _a7 : null;
+    const next = (_a7 = state == null ? void 0 : state.changeId) != null ? _a7 : null;
+    if (next !== this.changeId) this.compareIndex = 0;
+    this.changeId = next;
     await super.setState(state, result);
     this.render();
     this.plugin.groups.revealGroupOf(this.leaf);
@@ -19338,8 +19419,10 @@ function renderChangeRow(ctx, list, change, stats, opts = {}) {
     (0, import_obsidian17.setIcon)(el2.createSpan({ cls: "terminus-meta-icon" }), "users");
     el2.createSpan({ text: `Also edited by ${opts.alsoEditedBy.join(", ")}` });
   }
-  const collision = collisionLabel(change);
-  if (collision) warning("terminus-collision-warning", collision);
+  if (!inbox) {
+    const collision = collisionLabel(change);
+    if (collision) warning("terminus-collision-warning", collision);
+  }
   if (change.brokenBacklinks.length > 0) {
     const count = change.brokenBacklinks.length;
     warning("terminus-backlink-warning", `may break ${count} incoming ${count === 1 ? "link" : "links"}`);
@@ -20316,7 +20399,7 @@ function buildInbox(sessions, changes, feedbackTokens = /* @__PURE__ */ new Set(
   var _a7, _b, _c2, _d, _e4;
   const changesByToken = /* @__PURE__ */ new Map();
   for (const change of changes) {
-    const owner = (_a7 = change.contributors[0]) == null ? void 0 : _a7.token;
+    const owner = (_a7 = change.contributors[change.contributors.length - 1]) == null ? void 0 : _a7.token;
     if (!owner) continue;
     const list = (_b = changesByToken.get(owner)) != null ? _b : [];
     list.push(change);
@@ -20407,18 +20490,19 @@ function splitByAgent(token, changes, runs) {
   return { leadChanges, byAgent };
 }
 function buildTurns(token, session, changes) {
-  var _a7, _b, _c2;
+  var _a7, _b, _c2, _d, _e4;
   if (changes.length === 0) return [];
   const runs = (_a7 = session == null ? void 0 : session.subagents) != null ? _a7 : [];
   const byTurn = /* @__PURE__ */ new Map();
   const unattributed = [];
+  const known = new Set(((_b = session == null ? void 0 : session.turns) != null ? _b : []).map((t) => t.promptId));
   for (const change of changes) {
-    const promptId = change.promptIds[0];
+    const promptId = (_c2 = change.promptIds.find((id) => known.has(id))) != null ? _c2 : change.promptIds[0];
     if (promptId === void 0) {
       unattributed.push(change);
       continue;
     }
-    const list = (_b = byTurn.get(promptId)) != null ? _b : [];
+    const list = (_d = byTurn.get(promptId)) != null ? _d : [];
     list.push(change);
     byTurn.set(promptId, list);
   }
@@ -20434,7 +20518,7 @@ function buildTurns(token, session, changes) {
     for (const row of byAgent.values()) if (!row.run) subagents.push(row);
     turns.push({ promptId, record, prompt: (_a8 = record == null ? void 0 : record.prompt) != null ? _a8 : null, changes: inTurn, leadChanges, subagents });
   };
-  for (const record of (_c2 = session == null ? void 0 : session.turns) != null ? _c2 : []) {
+  for (const record of (_e4 = session == null ? void 0 : session.turns) != null ? _e4 : []) {
     const inTurn = byTurn.get(record.promptId);
     if (!inTurn) continue;
     byTurn.delete(record.promptId);
@@ -20480,8 +20564,14 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.focusedToken = null;
     /** A render was asked for while a guidance box had focus (see renderNow). */
     this.renderSkipped = false;
+    /** Pending frame for the pinned-header pass; null when none is queued. */
+    this.stuckFrame = null;
     /** The queued message being edited in place, if any. */
     this.editingQueueId = null;
+    /** Whether the header's overlap popover is showing. Lives on the view,
+     *  not in InboxUiState, because it is dismissed by the next click and
+     *  so never needs to survive a view being closed and reopened. */
+    this.overlapOpen = false;
     /** Set in onOpen: holds renders while a mouse button is down here. */
     this.guardedRender = () => this.renderNow();
     /** Every re-render goes through here: the stores change often while
@@ -20518,7 +20608,82 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.focusedToken = front instanceof TerminalView ? front.hookToken : null;
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.onFocusChange()));
     this.registerInterval(window.setInterval(() => this.tickElapsed(), 1e3));
+    this.registerDomEvent(this.contentEl, "scroll", () => this.queueStuckPass());
+    this.registerDomEvent(document, "click", (evt) => {
+      var _a8, _b;
+      if (!this.overlapOpen) return;
+      const target = evt.target;
+      if (target instanceof Node && ((_a8 = this.contentEl.querySelector(".terminus-inbox-overlap-pop")) == null ? void 0 : _a8.contains(target))) return;
+      if (target instanceof Node && ((_b = this.contentEl.querySelector(".terminus-inbox-overlap-chip")) == null ? void 0 : _b.contains(target))) return;
+      this.overlapOpen = false;
+      this.render();
+    });
+    this.registerDomEvent(document, "keydown", (evt) => {
+      if (!this.overlapOpen || evt.key !== "Escape") return;
+      this.overlapOpen = false;
+      this.render();
+    });
     this.render();
+  }
+  /**
+   * `position: sticky` has no state of its own, so a pinned header is found
+   * by comparing its box to the offset it would rest at. Runs on a frame so
+   * a fling doesn't do this once per scroll event.
+   */
+  queueStuckPass() {
+    if (this.stuckFrame !== null) return;
+    this.stuckFrame = window.requestAnimationFrame(() => {
+      this.stuckFrame = null;
+      this.markStuck();
+    });
+  }
+  markStuck() {
+    const container = this.contentEl;
+    const style = window.getComputedStyle(container);
+    const top = container.getBoundingClientRect().top + container.clientTop + (Number.parseFloat(style.paddingTop) || 0);
+    const scrolled = container.scrollTop > 0;
+    const heads = Array.from(container.querySelectorAll(STICKY_HEADS));
+    const pinned = scrolled ? heads.filter((el2) => {
+      const offset = Number.parseFloat(window.getComputedStyle(el2).top) || 0;
+      return Math.abs(el2.getBoundingClientRect().top - top - offset) < 1;
+    }) : [];
+    const edge = pinned.at(-1);
+    const held = new Set(pinned);
+    for (const el2 of heads) {
+      el2.toggleClass("is-pinned", held.has(el2));
+      el2.toggleClass("is-stuck", el2 === edge);
+    }
+  }
+  /**
+   * Each pinned level parks directly under the one above it, so it needs the
+   * measured height of the levels above -- not a constant, because a theme's
+   * interface font decides it.
+   *
+   * Section headings share one number, which CSS hands back as a
+   * `min-height`: a "Clear" button makes one taller than its neighbours, and
+   * a card pinned under the short one would otherwise leave a gap. Card tops
+   * and turn headers legitimately differ -- a banner, a two-line message, a
+   * fold-all icon -- so each publishes its own height to its own subtree
+   * instead, floored, so neighbours overlap by a fraction rather than
+   * showing a sliver of a row through the seam.
+   */
+  measureStickyOffsets(container) {
+    const style = window.getComputedStyle(container);
+    container.style.setProperty("--terminus-stick-top", `${-(Number.parseFloat(style.paddingTop) || 0)}px`);
+    let section = 0;
+    for (const el2 of Array.from(container.querySelectorAll(".terminus-inbox-section"))) {
+      section = Math.max(section, el2.getBoundingClientRect().height);
+    }
+    container.style.setProperty("--terminus-section-h", `${Math.ceil(section)}px`);
+    const publish = (owner, head, name) => {
+      for (const el2 of Array.from(container.querySelectorAll(owner))) {
+        const box = el2.querySelector(head);
+        el2.style.setProperty(name, `${box ? Math.floor(box.getBoundingClientRect().height) : 0}px`);
+      }
+    };
+    publish(".terminus-inbox-card", ".terminus-inbox-card-top", "--terminus-card-head-h");
+    publish(".terminus-inbox-turn", ".terminus-inbox-turn-head", "--terminus-turn-head-h");
+    container.style.setProperty("--terminus-pane-bg", opaqueBackground(container));
   }
   /** Brings the card the sidebar pointed at into view, unfolded, and marks
    *  it for a moment. */
@@ -20549,6 +20714,8 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.render();
   }
   async onClose() {
+    if (this.stuckFrame !== null) window.cancelAnimationFrame(this.stuckFrame);
+    this.stuckFrame = null;
     this.plugin.pendingChangesStore.off("change", this.render);
     this.plugin.agentSessionStore.off("change", this.render);
     this.plugin.feedbackStore.off("change", this.render);
@@ -20607,7 +20774,8 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.renderSection(body, "Working", inbox.working);
     const finished = inbox.finished.filter((card) => !(this.ui.dismissed.has(card.token) && this.dismissible(card)));
     if (finished.length > 0) {
-      const heading = this.renderSectionHeading(body, "Finished", finished.length, this.ui.finishedCollapsed);
+      const section = body.createDiv({ cls: "terminus-inbox-section-group" });
+      const heading = this.renderSectionHeading(section, "Finished", finished.length, this.ui.finishedCollapsed);
       const toggle = () => {
         this.ui.userAction();
         this.ui.finishedCollapsed = !this.ui.finishedCollapsed;
@@ -20626,7 +20794,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
         });
         clear.addEventListener("keydown", (evt) => evt.stopPropagation());
       }
-      if (!this.ui.finishedCollapsed) for (const card of finished) this.renderCard(body, card, true);
+      if (!this.ui.finishedCollapsed) for (const card of finished) this.renderCard(section, card, true);
     } else if (cardCount > 0 && inbox.needsAttention.length === 0 && inbox.working.length === 0) {
       const empty = body.createDiv({ cls: "terminus-inbox-empty" });
       (0, import_obsidian19.setIcon)(empty.createDiv({ cls: "terminus-inbox-empty-icon" }), "check-circle");
@@ -20646,6 +20814,8 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     const history = this.plugin.pendingChangesStore.listHistory();
     if (history.length > 0) renderHistorySection(this.rows, body, history);
     container.scrollTop = scrollTop;
+    this.measureStickyOffsets(container);
+    this.markStuck();
     this.revealRequested(container);
   }
   /** What the sidebar has selected, as the inbox sees it: the selected
@@ -20746,19 +20916,181 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
   }
   /** A card's terminal, name and colour. The name falls back to what a
    *  closed terminal left behind. */
+  /**
+   * The overlap popover: the two requests that collided, in the user's own
+   * words, and the files they both touched. It resolves nothing. Every row
+   * leads to Split diff, where both versions sit side by side and changes
+   * are picked one at a time, which is the only tool that can separate two
+   * sessions' work within a file.
+   */
+  renderOverlapPopover(header, overlaps) {
+    const pop = header.createDiv({ cls: "terminus-inbox-overlap-pop" });
+    pop.addEventListener("click", (evt) => evt.stopPropagation());
+    const groups = groupOverlaps(overlaps);
+    for (const group of groups) {
+      const block = pop.createDiv({ cls: "terminus-inbox-overlap-group" });
+      this.renderOverlapAsk(block, group.first.token, group.first.label, group.first.color, group.changes);
+      const divider = block.createDiv({ cls: "terminus-inbox-overlap-then" });
+      divider.createSpan({ cls: "terminus-inbox-overlap-line" });
+      divider.createSpan({ text: "overwritten by" });
+      divider.createSpan({ cls: "terminus-inbox-overlap-line" });
+      this.renderOverlapAsk(block, group.last.token, group.laterLabel, group.last.color, group.changes);
+      const files = block.createDiv({ cls: "terminus-inbox-overlap-files" });
+      for (const change of group.changes) this.renderOverlapRow(files, change);
+    }
+    const last = groups[groups.length - 1];
+    const foot = pop.createDiv({ cls: "terminus-inbox-overlap-foot" });
+    if (groups.length === 1 && last) {
+      foot.setText(
+        `Each of these files now holds ${last.laterLabel}'s version. Anything ${last.first.label} wrote is only still in there if ${last.laterLabel} kept it. Open one to see what changed.`
+      );
+    } else {
+      foot.setText(
+        "Each of these files now holds the later session's version. Anything the earlier one wrote is only still in there if the later one kept it. Open one to see what changed."
+      );
+    }
+  }
+  /** One side of the collision: the request, and who made it. */
+  renderOverlapAsk(block, token, label, color, changes) {
+    const prompt = this.promptFor(token, changes);
+    const quote = block.createDiv({ cls: "terminus-inbox-overlap-ask" });
+    quote.setText(prompt ? `\u201C${plainPreview(prompt)}\u201D` : "Request not recorded");
+    quote.toggleClass("is-unrecorded", prompt === null);
+    if (prompt) (0, import_obsidian19.setTooltip)(quote, prompt, { placement: "top" });
+    const by = block.createDiv({ cls: "terminus-inbox-overlap-by" });
+    const dot = by.createSpan({ cls: "terminus-inbox-overlap-dot" });
+    if (color) dot.style.backgroundColor = color;
+    by.createSpan({ text: label });
+  }
+  /**
+   * A plain file row: name, folder, counts, and a chevron that says it
+   * opens something. Nothing marks it as overlapping, because inside this
+   * popover every row is.
+   */
+  renderOverlapRow(host, change) {
+    var _a7, _b;
+    const row = host.createEl("button", { cls: "terminus-inbox-overlap-row" });
+    const name = row.createDiv({ cls: "terminus-inbox-overlap-name" });
+    const relative = (0, import_terminus_node_bridge25.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
+    const parts = relative.split("/");
+    name.createSpan({ cls: "terminus-inbox-overlap-file", text: (_a7 = parts[parts.length - 1]) != null ? _a7 : relative });
+    const folder = parts.slice(0, -1).join("/");
+    if (folder) name.createSpan({ cls: "terminus-inbox-overlap-folder", text: folder });
+    const { added, removed } = sumStats([change]);
+    const stats = row.createSpan({ cls: "terminus-inbox-overlap-stats" });
+    stats.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
+    stats.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
+    const split = change.payload.tool_name !== "NotebookEdit";
+    (0, import_obsidian19.setIcon)(row.createSpan({ cls: "terminus-inbox-overlap-go" }), "chevron-right");
+    (0, import_obsidian19.setTooltip)(row, split ? `Compare ${(_b = parts[parts.length - 1]) != null ? _b : relative} in Split diff` : "Open it");
+    row.addEventListener("click", () => {
+      this.overlapOpen = false;
+      this.render();
+      if (split) void openDiffSplitView(this.plugin, change.id);
+      else void openChangedFile(this.plugin, change);
+    });
+  }
+  /** The prompt a session asked, for whichever of these changes it made.
+   *  Null when no turn record carries it: the session may have ended, the
+   *  record may have fallen past the store's cap, or the hooks may have
+   *  gone in mid-turn. */
+  promptFor(token, changes) {
+    var _a7, _b;
+    const turns = (_b = (_a7 = this.plugin.agentSessionStore.get(token)) == null ? void 0 : _a7.turns) != null ? _b : [];
+    for (const change of changes) {
+      for (const promptId of change.promptIds) {
+        const record = turns.find((t) => t.promptId === promptId);
+        if (record == null ? void 0 : record.prompt) return record.prompt;
+      }
+    }
+    return null;
+  }
+  /**
+   * On the card that owns the rows, when an earlier session started some of
+   * them. The files here are this session's version, so there is nothing to
+   * say about content. What is worth saying is that the row's revertText
+   * predates this session: rejecting reaches back past it into the earlier
+   * terminal's work, which is the one consequence the card cannot show.
+   */
+  renderTurnOverlapNote(host, token, changes) {
+    const owned = changesStartedElsewhere(changes, token);
+    if (owned.length === 0) return;
+    const names = [...new Set(owned.map((c) => {
+      var _a7, _b;
+      return (_b = (_a7 = c.contributors[0]) == null ? void 0 : _a7.label) != null ? _b : "another session";
+    }))];
+    const who = names.length === 1 ? names[0] : "Earlier sessions";
+    const note = host.createDiv({ cls: "terminus-inbox-overlap-note" });
+    (0, import_obsidian19.setIcon)(note.createSpan({ cls: "terminus-meta-icon" }), "corner-down-right");
+    const count = owned.length === 1 ? "one of these files" : `${owned.length} of these files`;
+    const it2 = owned.length === 1 ? "it" : "them";
+    note.createSpan({
+      text: `${who} changed ${count} first. Rejecting ${it2} goes back to before ${who} started, not just this request.`
+    });
+  }
+  /**
+   * On the card of a session whose overlapping edits are filed elsewhere.
+   * buildInbox puts a change on the card of the terminal that edited it
+   * FIRST, so a session that rewrote someone else's file never lists it,
+   * and a card with nothing else pending can be dismissed while that work
+   * waits. This is the only place that says so.
+   */
+  renderOwnedElsewhere(host, card, allChanges) {
+    const elsewhere = changesOwnedElsewhere(allChanges, card.token);
+    if (elsewhere.length === 0) return;
+    const owners = [
+      ...new Set(elsewhere.map((c) => {
+        var _a7, _b;
+        return (_b = (_a7 = c.contributors[c.contributors.length - 1]) == null ? void 0 : _a7.label) != null ? _b : "another session";
+      }))
+    ];
+    const owner = owners.length === 1 ? owners[0] : "other sessions";
+    const line = host.createDiv({ cls: "terminus-inbox-overlap-elsewhere" });
+    (0, import_obsidian19.setIcon)(line.createSpan({ cls: "terminus-meta-icon" }), "copy");
+    const text = line.createSpan();
+    text.createSpan({ cls: "terminus-inbox-overlap-strong", text: fileCount(elsewhere.length) });
+    text.createSpan({ text: ` this session edited ${elsewhere.length === 1 ? "is" : "are"} listed on ` });
+    text.createSpan({ cls: "terminus-inbox-overlap-strong", text: `${owner}'s card` });
+    text.createSpan({ text: `, because ${owner} changed ${elsewhere.length === 1 ? "it" : "them"} last. ` });
+    const show = line.createEl("button", { cls: "terminus-inbox-overlap-show", text: "Show them" });
+    show.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      this.ui.userAction();
+      this.overlapOpen = true;
+      this.render();
+    });
+  }
   identify(card) {
-    var _a7, _b, _c2, _d, _e4;
+    var _a7, _b, _c2, _d, _e4, _f, _g;
     const terminal = this.plugin.findTerminalView(card.token);
     const firstChange = card.changes[0];
+    const own = card.changes.flatMap((c) => c.contributors).find((c) => c.token === card.token);
     return {
       terminal,
-      name: (_d = (_c2 = (_a7 = terminal == null ? void 0 : terminal.getDisplayText()) != null ? _a7 : firstChange == null ? void 0 : firstChange.panelLabel) != null ? _c2 : (_b = this.plugin.feedbackStore.listFor(card.token)[0]) == null ? void 0 : _b.terminalLabel) != null ? _d : "Closed terminal",
-      color: terminal ? terminal.effectiveColor : (_e4 = firstChange == null ? void 0 : firstChange.panelColor) != null ? _e4 : null
+      name: (_e4 = (_d = (_b = (_a7 = terminal == null ? void 0 : terminal.getDisplayText()) != null ? _a7 : own == null ? void 0 : own.label) != null ? _b : firstChange == null ? void 0 : firstChange.panelLabel) != null ? _d : (_c2 = this.plugin.feedbackStore.listFor(card.token)[0]) == null ? void 0 : _c2.terminalLabel) != null ? _e4 : "Closed terminal",
+      color: terminal ? terminal.effectiveColor : (_g = (_f = own == null ? void 0 : own.color) != null ? _f : firstChange == null ? void 0 : firstChange.panelColor) != null ? _g : null
     };
   }
   renderHeader(container, needsCount, allChanges) {
     const header = container.createDiv({ cls: "terminus-inbox-header" });
     header.createSpan({ cls: "terminus-inbox-title", text: "Agent inbox" });
+    const overlaps = allChanges.filter(hasCollision);
+    if (overlaps.length > 0) {
+      const chip = header.createEl("button", { cls: "terminus-inbox-overlap-chip" });
+      (0, import_obsidian19.setIcon)(chip.createSpan({ cls: "terminus-meta-icon" }), "copy");
+      chip.createSpan({ cls: "terminus-inbox-count", text: String(overlaps.length) });
+      (0, import_obsidian19.setTooltip)(chip, `${fileCount(overlaps.length)} edited by more than one session`);
+      chip.setAttr("aria-expanded", String(this.overlapOpen));
+      chip.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        this.ui.userAction();
+        this.overlapOpen = !this.overlapOpen;
+        this.render();
+      });
+      if (this.overlapOpen) this.renderOverlapPopover(header, overlaps);
+    } else {
+      this.overlapOpen = false;
+    }
     const next = header.createEl("button", { cls: "terminus-inbox-next" });
     (0, import_obsidian19.setIcon)(next.createSpan({ cls: "terminus-meta-icon" }), "skip-forward");
     next.createSpan({ text: "Next" });
@@ -20803,8 +21135,9 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
   }
   renderSection(body, label, cards) {
     if (cards.length === 0) return;
-    this.renderSectionHeading(body, label, cards.length, null);
-    for (const card of cards) this.renderCard(body, card);
+    const section = body.createDiv({ cls: "terminus-inbox-section-group" });
+    this.renderSectionHeading(section, label, cards.length, null);
+    for (const card of cards) this.renderCard(section, card);
   }
   /** `collapsed` null for a section that can't collapse. */
   renderSectionHeading(body, label, count, collapsed) {
@@ -20842,7 +21175,8 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     el2.dataset.token = card.token;
     el2.toggleClass("is-ended", card.ended);
     el2.toggleClass("is-focused", card.token === this.focusedToken);
-    const head = el2.createDiv({ cls: "terminus-inbox-card-head" });
+    const top = el2.createDiv({ cls: "terminus-inbox-card-top" });
+    const head = top.createDiv({ cls: "terminus-inbox-card-head" });
     const swatch = head.createSpan({ cls: "terminus-inbox-card-stroke" });
     if (color) swatch.style.setProperty("--terminus-terminal-color", color);
     head.createSpan({ cls: "terminus-inbox-card-name", text: name });
@@ -20858,7 +21192,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     head.addEventListener("click", toggle);
     makeActivatable(head, toggle, () => void 0);
     head.setAttr("aria-expanded", String(!collapsed));
-    const meta = el2.createDiv({ cls: "terminus-inbox-card-meta" });
+    const meta = top.createDiv({ cls: "terminus-inbox-card-meta" });
     const group = this.plugin.groupStore.get(terminal == null ? void 0 : terminal.groupId);
     if (group && group.name !== name) {
       const groupLabel = meta.createSpan({ cls: "terminus-inbox-group" });
@@ -20885,7 +21219,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     }
     if (collapsed) return;
     if (needsAttention && session) {
-      const banner = el2.createDiv({ cls: "terminus-inbox-banner", attr: { role: "status" } });
+      const banner = top.createDiv({ cls: "terminus-inbox-banner", attr: { role: "status" } });
       iconLabel(banner, "alert-triangle", (_c2 = session.needsMessage) != null ? _c2 : needsFallback(session), "terminus-inbox-banner-text");
       if (terminal) {
         banner.createEl("button", { cls: "mod-cta", text: "Answer in terminal" }).addEventListener(
@@ -20898,7 +21232,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       const quote = this.quoteFor(card);
       if (quote) {
         const failed = (session == null ? void 0 : session.lastTurnFailed) && session.status !== "working";
-        const quoteEl = el2.createDiv({ cls: `terminus-inbox-quote${failed ? " is-failed" : ""}`, attr: { title: quote } });
+        const quoteEl = top.createDiv({ cls: `terminus-inbox-quote${failed ? " is-failed" : ""}`, attr: { title: quote } });
         if (failed) {
           (0, import_obsidian19.setIcon)(quoteEl.createSpan({ cls: "terminus-meta-icon" }), "x-circle");
           quoteEl.createSpan({ text: `Turn failed: ${quote}` });
@@ -20908,12 +21242,15 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       }
     }
     const workEl = el2.createDiv({ cls: "terminus-inbox-card-body" });
+    this.renderOwnedElsewhere(workEl, card, this.plugin.pendingChangesStore.list());
     if (card.turns.length > 1) {
       this.renderTurns(workEl, card);
       this.renderQuietAgents(workEl, card);
     } else if (card.subagents.length === 0) {
+      this.renderTurnOverlapNote(workEl, card.token, card.changes);
       if (card.leadChanges.length > 0) this.renderChangeList(workEl.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges, card, null);
     } else {
+      this.renderTurnOverlapNote(workEl, card.token, card.changes);
       this.renderAgents(workEl, card);
     }
     this.renderShellChanges(workEl, card);
@@ -21351,12 +21688,12 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     makeActivatable(toggle, flip, () => void 0);
     toggle.setAttr("aria-expanded", String(expanded));
     if (!expanded) return;
-    for (const sub of quiet) this.renderSubagent(fold, card, sub, true);
+    for (const sub of quiet) void this.renderSubagent(fold, card, sub, true);
     if (card.hiddenSubagents > 0) {
       fold.createDiv({ cls: "terminus-inbox-more", text: `and ${card.hiddenSubagents} earlier` });
     }
   }
-  renderSubagent(el2, card, sub, compact, scope = "") {
+  renderSubagent(el2, card, sub, compact, scope = "", underTurn = false) {
     var _a7, _b, _c2, _d, _e4, _f, _g, _h, _i3, _j;
     const running = (_b = (_a7 = sub.run) == null ? void 0 : _a7.running) != null ? _b : false;
     const details = [];
@@ -21364,7 +21701,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     if (time) details.push(time);
     const failed = ((_c2 = sub.run) == null ? void 0 : _c2.outcome) === "failed" && sub.run.error ? sub.run.error : null;
     const task = (_e4 = (_d = sub.run) == null ? void 0 : _d.description) != null ? _e4 : null;
-    this.renderAgent(el2, card, {
+    return this.renderAgent(el2, card, {
       agentId: sub.agentId,
       mark: subagentMark(sub.run),
       name: task != null ? task : sub.agentType,
@@ -21377,7 +21714,8 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       error: failed,
       title: !failed && ((_j = sub.run) == null ? void 0 : _j.lastMessage) && !running ? sub.run.lastMessage : null,
       compact,
-      scope
+      scope,
+      underTurn
     });
   }
   /** One agent on a card -- the lead or a subagent -- always in the same
@@ -21411,9 +21749,15 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     } else if (agent.title) {
       row.setAttr("title", agent.title);
     }
-    if (agent.changes.length > 0) {
-      this.renderChangeList(row.createDiv({ cls: "terminus-inbox-agent-changes" }), agent.changes, card, agent.agentId, (_b = agent.scope) != null ? _b : "");
-    }
+    if (agent.changes.length === 0) return [];
+    return this.renderChangeList(
+      row.createDiv({ cls: "terminus-inbox-agent-changes" }),
+      agent.changes,
+      card,
+      agent.agentId,
+      (_b = agent.scope) != null ? _b : "",
+      agent.underTurn === true
+    );
   }
   /**
    * "3 turns · 12m 4s": how many requests this session has had, and how long
@@ -21461,7 +21805,8 @@ Time between turns, while Claude waited on you, isn't counted.`
       const scope = (_a7 = turn.promptId) != null ? _a7 : "unattributed";
       const key = `${card.token}|${scope}`;
       const folded = this.ui.collapsedTurns.has(key);
-      const head = section.createDiv({ cls: "terminus-inbox-turn-head" });
+      const turnEl = section.createDiv({ cls: "terminus-inbox-turn" });
+      const head = turnEl.createDiv({ cls: "terminus-inbox-turn-head" });
       head.toggleClass("is-failed", ((_b = turn.record) == null ? void 0 : _b.failed) === true);
       (0, import_obsidian19.setIcon)(head.createSpan({ cls: "terminus-inbox-chevron" }), folded ? "chevron-right" : "chevron-down");
       head.createSpan({ cls: "terminus-inbox-turn-index", text: String(index + 1) });
@@ -21469,6 +21814,7 @@ Time between turns, while Claude waited on you, isn't counted.`
       const promptEl = head.createSpan({ cls: "terminus-inbox-turn-prompt", text: label });
       (0, import_obsidian19.setTooltip)(promptEl, (_c2 = turn.prompt) != null ? _c2 : label, { placement: "top" });
       const { added, removed } = sumStats(turn.changes);
+      const foldSlot = head.createSpan({ cls: "terminus-inbox-fold-slot" });
       const stats = head.createSpan({ cls: "terminus-inbox-turn-stats" });
       stats.createSpan({ text: fileCount(turn.changes.length) });
       stats.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
@@ -21482,24 +21828,45 @@ Time between turns, while Claude waited on you, isn't counted.`
       head.addEventListener("click", toggle);
       makeActivatable(head, toggle, () => void 0);
       head.setAttr("aria-expanded", String(!folded));
+      this.renderTurnOverlapNote(turnEl, card.token, turn.changes);
       if (folded) return;
-      const body = section.createDiv({ cls: "terminus-inbox-turn-body" });
+      const body = turnEl.createDiv({ cls: "terminus-inbox-turn-body" });
+      const keys2 = [];
+      const done = () => {
+        if (keys2.length > 0) this.renderFoldAll(foldSlot, keys2);
+      };
       if (turn.subagents.length === 0) {
-        this.renderChangeList(body.createDiv({ cls: "terminus-inbox-changes" }), turn.leadChanges, card, null, scope);
+        keys2.push(...this.renderChangeList(body.createDiv({ cls: "terminus-inbox-changes" }), turn.leadChanges, card, null, scope, true));
+        done();
         return;
       }
       if (turn.leadChanges.length > 0) {
-        this.renderAgent(body, card, {
+        keys2.push(...this.renderAgent(body, card, {
           agentId: null,
           mark: { kind: "lead", icon: "bot", label: "Lead session" },
           name: "Lead",
           secondary: "main session",
           details: [],
           changes: turn.leadChanges,
-          scope
-        });
+          scope,
+          underTurn: true
+        }));
       }
-      for (const sub of turn.subagents) this.renderSubagent(body, card, sub, false, scope);
+      for (const sub of turn.subagents) keys2.push(...this.renderSubagent(body, card, sub, false, scope, true));
+      done();
+    });
+  }
+  /** One control for every folder under a turn. Lives on the turn header,
+   *  which already carries that turn's totals. */
+  renderFoldAll(host, keys2) {
+    const allFolded = keys2.every((key) => this.ui.collapsedFolders.has(key));
+    iconButton(host, allFolded ? "chevrons-up-down" : "chevrons-down-up", allFolded ? "Expand all folders" : "Collapse all folders", () => {
+      this.ui.userAction();
+      for (const key of keys2) {
+        if (allFolded) this.ui.collapsedFolders.delete(key);
+        else this.ui.collapsedFolders.add(key);
+      }
+      this.render();
     });
   }
   /**
@@ -21537,8 +21904,8 @@ Time between turns, while Claude waited on you, isn't counted.`
   /** `owner` is the agent the rows sit under (null: the lead); a file that
    *  other agents in this session also edited says which. A long list over
    *  several folders is grouped by folder, each foldable. */
-  renderChangeList(parent, changes, card, owner, scope = "") {
-    if (changes.length === 0) return;
+  renderChangeList(parent, changes, card, owner, scope = "", underTurn = false) {
+    if (changes.length === 0) return [];
     const list = parent.createDiv({ cls: "terminus-pending-list" });
     const row = (target, change, hideFolder) => {
       const others = change.agents.filter((a) => a.token === card.token && a.agentId !== owner).map((a) => agentLabel(card, a.agentId, a.agentType));
@@ -21547,28 +21914,21 @@ Time between turns, while Claude waited on you, isn't counted.`
     const folders = changes.length >= TREE_MIN_FILES ? this.groupByFolder(changes) : null;
     if (!folders || folders.length < 2) {
       for (const change of changes) row(list, change, false);
-      return;
+      return [];
     }
     const keyOf = (folder) => `${card.token}|${scope}|${owner != null ? owner : ""}|${folder}`;
-    const { added, removed } = sumStats(changes);
-    const allFolded = folders.every((f) => this.ui.collapsedFolders.has(keyOf(f.folder)));
-    const head = list.createDiv({ cls: "terminus-inbox-tree-head" });
-    head.createSpan({ text: `${changes.length} changed files` });
-    head.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
-    head.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
-    head.createDiv({ cls: "terminus-inbox-spacer" });
-    iconButton(head, allFolded ? "chevrons-up-down" : "chevrons-down-up", allFolded ? "Expand all folders" : "Collapse all folders", () => {
-      this.ui.userAction();
-      for (const f of folders) {
-        if (allFolded) this.ui.collapsedFolders.delete(keyOf(f.folder));
-        else this.ui.collapsedFolders.add(keyOf(f.folder));
-      }
-      this.render();
-    });
+    const keys2 = folders.map((f) => keyOf(f.folder));
+    if (!underTurn) {
+      const head = list.createDiv({ cls: "terminus-inbox-tree-head" });
+      head.createSpan({ text: `${folders.length} folders` });
+      head.createDiv({ cls: "terminus-inbox-spacer" });
+      this.renderFoldAll(head, keys2);
+    }
     for (const { folder, changes: inFolder } of folders) {
       const key = keyOf(folder);
       const folded = this.ui.collapsedFolders.has(key);
-      const heading = list.createDiv({ cls: "terminus-inbox-folder" });
+      const group = list.createDiv({ cls: "terminus-inbox-folder-group" });
+      const heading = group.createDiv({ cls: "terminus-inbox-folder" });
       (0, import_obsidian19.setIcon)(heading.createSpan({ cls: "terminus-inbox-chevron" }), folded ? "chevron-right" : "chevron-down");
       iconLabel(heading, "folder", folder || "Vault root", "terminus-inbox-folder-name");
       heading.createSpan({ cls: "terminus-inbox-folder-count", text: String(inFolder.length) });
@@ -21581,8 +21941,9 @@ Time between turns, while Claude waited on you, isn't counted.`
       heading.addEventListener("click", toggle);
       makeActivatable(heading, toggle, () => void 0);
       heading.setAttr("aria-expanded", String(!folded));
-      if (!folded) for (const change of inFolder) row(list, change, true);
+      if (!folded) for (const change of inFolder) row(group, change, true);
     }
+    return keys2;
   }
   /** The changes by folder, vault-relative (a file outside the vault by its
    *  own folder), in the order each folder first appears. */
@@ -21602,6 +21963,14 @@ Time between turns, while Claude waited on you, isn't counted.`
   }
 };
 var TREE_MIN_FILES = 6;
+var STICKY_HEADS = ".terminus-inbox-section, .terminus-inbox-card-top, .terminus-inbox-turn-head, .terminus-inbox-folder";
+function opaqueBackground(el2) {
+  for (let node = el2; node; node = node.parentElement) {
+    const colour = window.getComputedStyle(node).backgroundColor;
+    if (colour && colour !== "transparent" && !colour.startsWith("rgba(0, 0, 0, 0)")) return colour;
+  }
+  return "var(--background-secondary)";
+}
 var COST_TITLE = "Estimated from Terminus's built-in API price table, not a bill. On a Claude subscription, usage counts against your plan instead.";
 function sessionUsage(session) {
   if (!session) return null;
@@ -23272,7 +23641,12 @@ var PendingChangesStore = class extends TypedEmitter {
         existedBefore: existing.change.diff.existedBefore
       },
       editCount: existing.change.editCount + 1,
-      contributors: existing.change.contributors.some((c) => c.token === input.token) ? existing.change.contributors : [...existing.change.contributors, { token: input.token, label: input.panelLabel, color: input.panelColor }],
+      contributors: existing.change.contributors.some((c) => c.token === input.token) ? existing.change.contributors : [
+        ...existing.change.contributors,
+        // input.diff.oldText is read from disk at PreToolUse, so at
+        // this moment it IS the previous terminal's result.
+        { token: input.token, label: input.panelLabel, color: input.panelColor, before: input.diff.oldText }
+      ],
       agents: existing.change.agents.some((a) => a.token === agent.token && a.agentId === agent.agentId) ? existing.change.agents : [...existing.change.agents, agent],
       promptIds: input.promptId && !existing.change.promptIds.includes(input.promptId) ? [...existing.change.promptIds, input.promptId] : existing.change.promptIds
     } : {

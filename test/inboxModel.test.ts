@@ -7,10 +7,11 @@ import { identity } from "./helpers/fakeVault";
 
 /**
  * Turn records and how the Agent inbox groups a card's pending changes by
- * the request that caused them. The rules worth pinning down are the two
- * that are easy to get backwards: a row touched by several turns belongs to
- * the FIRST of them (the snapshot a reject returns it to), and a subagent's
- * edits belong to the lead's turn, not one of their own.
+ * the request that caused them. The rules worth pinning down are the ones
+ * that are easy to get backwards: within one session a row touched by
+ * several turns belongs to the FIRST of them; a subagent's edits belong to
+ * the lead's turn, not one of their own; and a row two terminals edited
+ * belongs to the one that edited it LAST, whose version the file now holds.
  */
 
 function change(path: string, promptIds: string[], agentId: string | null = null): PendingChange {
@@ -152,5 +153,74 @@ describe("inbox: grouping changes by turn", () => {
     const inbox = buildInbox(store.list(), [change("/repo/a.ts", ["p1"])]);
     const card = inbox.finished[0]!;
     assert.equal(card.turns.length, 1, "the card then draws no turn headers");
+  });
+});
+
+/**
+ * A file two terminals edited coalesces into one row (see
+ * PendingChangesStore.recordChange). It is filed on the card of the
+ * terminal that edited it LAST, because that is the version on disk and so
+ * the one the row's diff shows. Rejecting it still reverts past the FIRST
+ * terminal's edit, which is why the card says so and
+ * confirmCollisionReject always asks.
+ */
+describe("inbox: a file two terminals edited", () => {
+  function collided(): { store: AgentSessionStore; row: PendingChange } {
+    const store = new AgentSessionStore();
+    store.sessionStarted("tok-a", identity("A"));
+    store.promptSubmitted("tok-a", identity("A"), "rewrite the guide", "pa", 1000);
+    store.turnEnded("tok-a", "done", identity("A"), 2000, false, "pa");
+    store.sessionStarted("tok-b", identity("B"));
+    store.promptSubmitted("tok-b", identity("B"), "match the pricing page", "pb", 3000);
+    store.turnEnded("tok-b", "done", identity("B"), 4000, false, "pb");
+    const row = {
+      ...change("/repo/guide.md", ["pa", "pb"]),
+      contributors: [
+        { token: "tok-a", label: "A", color: null },
+        { token: "tok-b", label: "B", color: null },
+      ],
+      agents: [
+        { token: "tok-a", agentId: null, agentType: null },
+        { token: "tok-b", agentId: null, agentType: null },
+      ],
+    } as unknown as PendingChange;
+    return { store, row };
+  }
+
+  it("files the row on the card of the terminal that edited it last", () => {
+    const { store, row } = collided();
+    const inbox = buildInbox(store.list(), [row]);
+    const withRow = inbox.finished.filter((c) => c.changes.length > 0);
+    assert.equal(withRow.length, 1, "it appears on exactly one card, never both");
+    assert.equal(withRow[0]!.token, "tok-b", "the last editor owns it");
+  });
+
+  it("leaves the first editor's card listing nothing", () => {
+    const { store, row } = collided();
+    const inbox = buildInbox(store.list(), [row]);
+    const first = inbox.finished.find((c) => c.token === "tok-a")!;
+    assert.equal(first.changes.length, 0, "its own edit is on the other card now");
+    assert.equal(first.turns.length, 0, "so it has no turn to show either");
+    // This is exactly the state renderOwnedElsewhere exists for: a card
+    // that edited a file, says "Nothing to review", and (once the session
+    // ends) passes dismissible().
+  });
+
+  it("puts it under the owning session's own turn, not the first turn overall", () => {
+    const { store, row } = collided();
+    const inbox = buildInbox(store.list(), [row]);
+    const card = inbox.finished.find((c) => c.token === "tok-b")!;
+    assert.equal(card.turns.length, 1);
+    assert.equal(card.turns[0]!.promptId, "pb", "pa belongs to the other session");
+    assert.equal(card.turns[0]!.prompt, "match the pricing page");
+  });
+
+  it("falls back to the first prompt id when the owner has no record of any", () => {
+    const { row } = collided();
+    // No sessions at all: a closed terminal whose changes are still pending.
+    const inbox = buildInbox([], [row]);
+    const card = inbox.finished[0]!;
+    assert.equal(card.token, "tok-b");
+    assert.equal(card.turns[0]!.promptId, "pa", "something is better than dropping the row");
   });
 });

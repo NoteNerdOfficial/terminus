@@ -20,6 +20,19 @@ export class Notice {
   constructor(public message: string) {}
 }
 
+/**
+ * Never constructed by a test: it exists so modules that sit beside a modal
+ * can be imported for their pure helpers. modals/collisions.ts is the case
+ * in point -- hasCollision, collisionLabel and diffBaselines are plain
+ * functions over a PendingChange, but they share a file with
+ * confirmCollisionReject, which extends this.
+ */
+export class Modal {
+  constructor(public app: unknown) {}
+  open(): void {}
+  close(): void {}
+}
+
 export function normalizePath(path: string): string {
   return path.replace(/\/+/g, "/").replace(/^\/|\/$/g, "");
 }

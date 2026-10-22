@@ -11,6 +11,19 @@ export interface ChangeContributor {
   token: string;
   label: string;
   color: string | null;
+  /** The file as this terminal found it, captured when its first edit was
+   *  recorded. Absent on the first contributor, whose starting point is
+   *  the row's own diff.oldText.
+   *
+   *  This is the state the row would otherwise lose: recordChange resets
+   *  oldText to the FIRST edit's baseline, so without this the version a
+   *  later terminal overwrote exists nowhere once its edit lands. Split
+   *  Diff offers it as an alternative left-hand side.
+   *
+   *  Carries buildDiff's caveat for NotebookEdit, whose oldText is a
+   *  display-only approximation; the Split Diff entry point is hidden for
+   *  those changes, so it is never shown. */
+  before?: string;
 }
 
 /** Who inside a terminal edited a pending change's file: the lead session
@@ -135,7 +148,12 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
           editCount: existing.change.editCount + 1,
           contributors: existing.change.contributors.some((c) => c.token === input.token)
             ? existing.change.contributors
-            : [...existing.change.contributors, { token: input.token, label: input.panelLabel, color: input.panelColor }],
+            : [
+                ...existing.change.contributors,
+                // input.diff.oldText is read from disk at PreToolUse, so at
+                // this moment it IS the previous terminal's result.
+                { token: input.token, label: input.panelLabel, color: input.panelColor, before: input.diff.oldText },
+              ],
           agents: existing.change.agents.some((a) => a.token === agent.token && a.agentId === agent.agentId)
             ? existing.change.agents
             : [...existing.change.agents, agent],

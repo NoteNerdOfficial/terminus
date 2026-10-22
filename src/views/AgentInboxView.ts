@@ -3,10 +3,13 @@ import { pathRelative } from "terminus-node-bridge";
 import { activeTime, type AgentSession, type SubagentRun } from "../state/AgentSessionStore";
 import { addUsage, formatModelName, totalTokens, UsageTotals } from "../claude/transcriptUsage";
 import { PendingChange } from "../state/PendingChangesStore";
+import { changesOwnedElsewhere, changesStartedElsewhere, groupOverlaps, hasCollision } from "../modals/collisions";
 import { buildInbox, InboxCard, InboxSubagent, InboxTurn, scopeInbox } from "../state/inboxModel";
 import type { InboxUiState } from "../state/InboxUiState";
 import { TerminalView } from "./TerminalView";
 import { computeDiffStats } from "../diff/renderDiff";
+import { openDiffSplitView } from "./DiffSplitView";
+import { openChangedFile } from "../editor/openWithDiff";
 import { ActionLogModal } from "../modals/ActionLogModal";
 import {
   ChangeRowContext,
@@ -34,8 +37,14 @@ export class AgentInboxView extends ItemView {
   private focusedToken: string | null = null;
   /** A render was asked for while a guidance box had focus (see renderNow). */
   private renderSkipped = false;
+  /** Pending frame for the pinned-header pass; null when none is queued. */
+  private stuckFrame: number | null = null;
   /** The queued message being edited in place, if any. */
   private editingQueueId: number | null = null;
+  /** Whether the header's overlap popover is showing. Lives on the view,
+   *  not in InboxUiState, because it is dismissed by the next click and
+   *  so never needs to survive a view being closed and reopened. */
+  private overlapOpen = false;
   /** Set in onOpen: holds renders while a mouse button is down here. */
   private guardedRender: () => void = () => this.renderNow();
 
@@ -80,7 +89,108 @@ export class AgentInboxView extends ItemView {
     // Running timers advance in place: a re-render every second would
     // fight clicks (see renderGuard.ts) for the sake of a number.
     this.registerInterval(window.setInterval(() => this.tickElapsed(), 1000));
+    // Pinned headers grow a hairline while rows pass under them; nothing
+    // else here cares about scrolling, so one throttled listener does it.
+    this.registerDomEvent(this.contentEl, "scroll", () => this.queueStuckPass());
+    // The overlap popover closes on the next click outside it and on
+    // Escape, like Obsidian's own menus. Registered once rather than per
+    // render, and cheap: both return immediately while it is closed.
+    this.registerDomEvent(document, "click", (evt) => {
+      if (!this.overlapOpen) return;
+      const target = evt.target;
+      if (target instanceof Node && this.contentEl.querySelector(".terminus-inbox-overlap-pop")?.contains(target)) return;
+      if (target instanceof Node && this.contentEl.querySelector(".terminus-inbox-overlap-chip")?.contains(target)) return;
+      this.overlapOpen = false;
+      this.render();
+    });
+    this.registerDomEvent(document, "keydown", (evt) => {
+      if (!this.overlapOpen || evt.key !== "Escape") return;
+      this.overlapOpen = false;
+      this.render();
+    });
     this.render();
+  }
+
+  /**
+   * `position: sticky` has no state of its own, so a pinned header is found
+   * by comparing its box to the offset it would rest at. Runs on a frame so
+   * a fling doesn't do this once per scroll event.
+   */
+  private queueStuckPass(): void {
+    if (this.stuckFrame !== null) return;
+    this.stuckFrame = window.requestAnimationFrame(() => {
+      this.stuckFrame = null;
+      this.markStuck();
+    });
+  }
+
+  private markStuck(): void {
+    const container = this.contentEl;
+    // Sticky offsets are measured from the scroll container's content box,
+    // so a header's resting place is that edge plus its own offset -- which
+    // is itself negative by the pane's padding (see measureStickyOffsets).
+    const style = window.getComputedStyle(container);
+    const top = container.getBoundingClientRect().top + container.clientTop + (Number.parseFloat(style.paddingTop) || 0);
+    // At rest the topmost header sits at its own offset anyway, and nothing
+    // is passing under it yet.
+    const scrolled = container.scrollTop > 0;
+    const heads = Array.from(container.querySelectorAll<HTMLElement>(STICKY_HEADS));
+    const pinned = scrolled
+      ? heads.filter((el) => {
+          const offset = Number.parseFloat(window.getComputedStyle(el).top) || 0;
+          return Math.abs(el.getBoundingClientRect().top - top - offset) < 1;
+        })
+      : [];
+    // The levels stack in document order, so the last pinned header is the
+    // bottom of the stack -- the one edge rows actually pass under. Ruling
+    // the seams between pinned headers too would stripe the whole stack.
+    // `is-pinned` is the wider state: a pinned card top redraws the card's
+    // own top border, which by then has scrolled away above it.
+    const edge = pinned.at(-1);
+    const held = new Set(pinned);
+    for (const el of heads) {
+      el.toggleClass("is-pinned", held.has(el));
+      el.toggleClass("is-stuck", el === edge);
+    }
+  }
+
+  /**
+   * Each pinned level parks directly under the one above it, so it needs the
+   * measured height of the levels above -- not a constant, because a theme's
+   * interface font decides it.
+   *
+   * Section headings share one number, which CSS hands back as a
+   * `min-height`: a "Clear" button makes one taller than its neighbours, and
+   * a card pinned under the short one would otherwise leave a gap. Card tops
+   * and turn headers legitimately differ -- a banner, a two-line message, a
+   * fold-all icon -- so each publishes its own height to its own subtree
+   * instead, floored, so neighbours overlap by a fraction rather than
+   * showing a sliver of a row through the seam.
+   */
+  private measureStickyOffsets(container: HTMLElement): void {
+    const style = window.getComputedStyle(container);
+    // A theme's pane padding sits above the first level, and sticky counts
+    // offsets from the content box -- so without this the headers would park
+    // a padding's worth down the pane and rows would scroll through the gap
+    // above them.
+    container.style.setProperty("--terminus-stick-top", `${-(Number.parseFloat(style.paddingTop) || 0)}px`);
+    let section = 0;
+    for (const el of Array.from(container.querySelectorAll<HTMLElement>(".terminus-inbox-section"))) {
+      section = Math.max(section, el.getBoundingClientRect().height);
+    }
+    container.style.setProperty("--terminus-section-h", `${Math.ceil(section)}px`);
+    const publish = (owner: string, head: string, name: string): void => {
+      for (const el of Array.from(container.querySelectorAll<HTMLElement>(owner))) {
+        const box = el.querySelector<HTMLElement>(head);
+        el.style.setProperty(name, `${box ? Math.floor(box.getBoundingClientRect().height) : 0}px`);
+      }
+    };
+    publish(".terminus-inbox-card", ".terminus-inbox-card-top", "--terminus-card-head-h");
+    publish(".terminus-inbox-turn", ".terminus-inbox-turn-head", "--terminus-turn-head-h");
+    // A pinned header has to be opaque, and which Obsidian variable the
+    // pane's own background came from depends on where the view is docked
+    // and what the theme did to it -- so read it rather than guess.
+    container.style.setProperty("--terminus-pane-bg", opaqueBackground(container));
   }
 
   /** Brings the card the sidebar pointed at into view, unfolded, and marks
@@ -115,6 +225,8 @@ export class AgentInboxView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    if (this.stuckFrame !== null) window.cancelAnimationFrame(this.stuckFrame);
+    this.stuckFrame = null;
     this.plugin.pendingChangesStore.off("change", this.render);
     this.plugin.agentSessionStore.off("change", this.render);
     this.plugin.feedbackStore.off("change", this.render);
@@ -196,7 +308,8 @@ export class AgentInboxView extends ItemView {
     this.renderSection(body, "Working", inbox.working);
     const finished = inbox.finished.filter((card) => !(this.ui.dismissed.has(card.token) && this.dismissible(card)));
     if (finished.length > 0) {
-      const heading = this.renderSectionHeading(body, "Finished", finished.length, this.ui.finishedCollapsed);
+      const section = body.createDiv({ cls: "terminus-inbox-section-group" });
+      const heading = this.renderSectionHeading(section, "Finished", finished.length, this.ui.finishedCollapsed);
       const toggle = () => {
         this.ui.userAction();
         this.ui.finishedCollapsed = !this.ui.finishedCollapsed;
@@ -215,7 +328,7 @@ export class AgentInboxView extends ItemView {
         });
         clear.addEventListener("keydown", (evt) => evt.stopPropagation());
       }
-      if (!this.ui.finishedCollapsed) for (const card of finished) this.renderCard(body, card, true);
+      if (!this.ui.finishedCollapsed) for (const card of finished) this.renderCard(section, card, true);
     } else if (cardCount > 0 && inbox.needsAttention.length === 0 && inbox.working.length === 0) {
       // Every card dismissed: say so, rather than leave an inbox that
       // looks broken under "N sessions running".
@@ -241,6 +354,9 @@ export class AgentInboxView extends ItemView {
 
     // Last, once the content is as tall as it was.
     container.scrollTop = scrollTop;
+    // Both read layout, so they run after the scroll position is back.
+    this.measureStickyOffsets(container);
+    this.markStuck();
     this.revealRequested(container);
   }
 
@@ -337,23 +453,208 @@ export class AgentInboxView extends ItemView {
 
   /** A card's terminal, name and colour. The name falls back to what a
    *  closed terminal left behind. */
+  /**
+   * The overlap popover: the two requests that collided, in the user's own
+   * words, and the files they both touched. It resolves nothing. Every row
+   * leads to Split diff, where both versions sit side by side and changes
+   * are picked one at a time, which is the only tool that can separate two
+   * sessions' work within a file.
+   */
+  private renderOverlapPopover(header: HTMLElement, overlaps: PendingChange[]): void {
+    const pop = header.createDiv({ cls: "terminus-inbox-overlap-pop" });
+    // Clicks inside must not reach the document handler that closes it.
+    pop.addEventListener("click", (evt) => evt.stopPropagation());
+    const groups = groupOverlaps(overlaps);
+    for (const group of groups) {
+      const block = pop.createDiv({ cls: "terminus-inbox-overlap-group" });
+      this.renderOverlapAsk(block, group.first.token, group.first.label, group.first.color, group.changes);
+      const divider = block.createDiv({ cls: "terminus-inbox-overlap-then" });
+      divider.createSpan({ cls: "terminus-inbox-overlap-line" });
+      divider.createSpan({ text: "overwritten by" });
+      divider.createSpan({ cls: "terminus-inbox-overlap-line" });
+      this.renderOverlapAsk(block, group.last.token, group.laterLabel, group.last.color, group.changes);
+      const files = block.createDiv({ cls: "terminus-inbox-overlap-files" });
+      for (const change of group.changes) this.renderOverlapRow(files, change);
+    }
+    const last = groups[groups.length - 1];
+    const foot = pop.createDiv({ cls: "terminus-inbox-overlap-foot" });
+    if (groups.length === 1 && last) {
+      // Deliberately not "the first session's work is gone": whether it is
+      // depends on whether the later edit was a whole-file Write or an Edit
+      // that left the rest alone, which this cannot know (see
+      // server/diff.ts). Saying so sends the user to look instead.
+      foot.setText(
+        `Each of these files now holds ${last.laterLabel}'s version. ` +
+          `Anything ${last.first.label} wrote is only still in there if ${last.laterLabel} kept it. ` +
+          "Open one to see what changed."
+      );
+    } else {
+      foot.setText(
+        "Each of these files now holds the later session's version. " +
+          "Anything the earlier one wrote is only still in there if the later one kept it. " +
+          "Open one to see what changed."
+      );
+    }
+  }
+
+  /** One side of the collision: the request, and who made it. */
+  private renderOverlapAsk(block: HTMLElement, token: string, label: string, color: string | null, changes: PendingChange[]): void {
+    const prompt = this.promptFor(token, changes);
+    const quote = block.createDiv({ cls: "terminus-inbox-overlap-ask" });
+    quote.setText(prompt ? `“${plainPreview(prompt)}”` : "Request not recorded");
+    quote.toggleClass("is-unrecorded", prompt === null);
+    if (prompt) setTooltip(quote, prompt, { placement: "top" });
+    const by = block.createDiv({ cls: "terminus-inbox-overlap-by" });
+    const dot = by.createSpan({ cls: "terminus-inbox-overlap-dot" });
+    if (color) dot.style.backgroundColor = color;
+    by.createSpan({ text: label });
+  }
+
+  /**
+   * A plain file row: name, folder, counts, and a chevron that says it
+   * opens something. Nothing marks it as overlapping, because inside this
+   * popover every row is.
+   */
+  private renderOverlapRow(host: HTMLElement, change: PendingChange): void {
+    const row = host.createEl("button", { cls: "terminus-inbox-overlap-row" });
+    const name = row.createDiv({ cls: "terminus-inbox-overlap-name" });
+    const relative = pathRelative(this.plugin.getVaultBasePath(), change.diff.filePath);
+    const parts = relative.split("/");
+    name.createSpan({ cls: "terminus-inbox-overlap-file", text: parts[parts.length - 1] ?? relative });
+    const folder = parts.slice(0, -1).join("/");
+    if (folder) name.createSpan({ cls: "terminus-inbox-overlap-folder", text: folder });
+    const { added, removed } = sumStats([change]);
+    const stats = row.createSpan({ cls: "terminus-inbox-overlap-stats" });
+    stats.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
+    stats.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
+    // NotebookEdit has no usable Split diff (its oldText/newText are a
+    // display-only approximation), so those rows open the file instead.
+    const split = change.payload.tool_name !== "NotebookEdit";
+    setIcon(row.createSpan({ cls: "terminus-inbox-overlap-go" }), "chevron-right");
+    setTooltip(row, split ? `Compare ${parts[parts.length - 1] ?? relative} in Split diff` : "Open it");
+    row.addEventListener("click", () => {
+      this.overlapOpen = false;
+      this.render();
+      if (split) void openDiffSplitView(this.plugin, change.id);
+      else void openChangedFile(this.plugin, change);
+    });
+  }
+
+  /** The prompt a session asked, for whichever of these changes it made.
+   *  Null when no turn record carries it: the session may have ended, the
+   *  record may have fallen past the store's cap, or the hooks may have
+   *  gone in mid-turn. */
+  private promptFor(token: string, changes: PendingChange[]): string | null {
+    const turns = this.plugin.agentSessionStore.get(token)?.turns ?? [];
+    for (const change of changes) {
+      for (const promptId of change.promptIds) {
+        const record = turns.find((t) => t.promptId === promptId);
+        if (record?.prompt) return record.prompt;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * On the card that owns the rows, when an earlier session started some of
+   * them. The files here are this session's version, so there is nothing to
+   * say about content. What is worth saying is that the row's revertText
+   * predates this session: rejecting reaches back past it into the earlier
+   * terminal's work, which is the one consequence the card cannot show.
+   */
+  private renderTurnOverlapNote(host: HTMLElement, token: string, changes: PendingChange[]): void {
+    const owned = changesStartedElsewhere(changes, token);
+    if (owned.length === 0) return;
+    const names = [...new Set(owned.map((c) => c.contributors[0]?.label ?? "another session"))];
+    const who = names.length === 1 ? names[0] : "Earlier sessions";
+    const note = host.createDiv({ cls: "terminus-inbox-overlap-note" });
+    setIcon(note.createSpan({ cls: "terminus-meta-icon" }), "corner-down-right");
+    const count = owned.length === 1 ? "one of these files" : `${owned.length} of these files`;
+    const it = owned.length === 1 ? "it" : "them";
+    note.createSpan({
+      text:
+        `${who} changed ${count} first. Rejecting ${it} goes back to before ` +
+        `${who} started, not just this request.`,
+    });
+  }
+
+  /**
+   * On the card of a session whose overlapping edits are filed elsewhere.
+   * buildInbox puts a change on the card of the terminal that edited it
+   * FIRST, so a session that rewrote someone else's file never lists it,
+   * and a card with nothing else pending can be dismissed while that work
+   * waits. This is the only place that says so.
+   */
+  private renderOwnedElsewhere(host: HTMLElement, card: InboxCard, allChanges: PendingChange[]): void {
+    const elsewhere = changesOwnedElsewhere(allChanges, card.token);
+    if (elsewhere.length === 0) return;
+    const owners = [
+      ...new Set(elsewhere.map((c) => c.contributors[c.contributors.length - 1]?.label ?? "another session")),
+    ];
+    const owner = owners.length === 1 ? owners[0] : "other sessions";
+    const line = host.createDiv({ cls: "terminus-inbox-overlap-elsewhere" });
+    setIcon(line.createSpan({ cls: "terminus-meta-icon" }), "copy");
+    const text = line.createSpan();
+    text.createSpan({ cls: "terminus-inbox-overlap-strong", text: fileCount(elsewhere.length) });
+    text.createSpan({ text: ` this session edited ${elsewhere.length === 1 ? "is" : "are"} listed on ` });
+    text.createSpan({ cls: "terminus-inbox-overlap-strong", text: `${owner}'s card` });
+    text.createSpan({ text: `, because ${owner} changed ${elsewhere.length === 1 ? "it" : "them"} last. ` });
+    const show = line.createEl("button", { cls: "terminus-inbox-overlap-show", text: "Show them" });
+    show.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      this.ui.userAction();
+      this.overlapOpen = true;
+      this.render();
+    });
+  }
+
   private identify(card: InboxCard): { terminal: TerminalView | null; name: string; color: string | null } {
     const terminal = this.plugin.findTerminalView(card.token);
     const firstChange = card.changes[0];
+    // panelLabel/panelColor are the FIRST contributor's, which is not this
+    // card for a file another terminal started, so prefer the contributor
+    // entry recorded for this card's own token.
+    const own = card.changes.flatMap((c) => c.contributors).find((c) => c.token === card.token);
     return {
       terminal,
       name:
         terminal?.getDisplayText() ??
+        own?.label ??
         firstChange?.panelLabel ??
         this.plugin.feedbackStore.listFor(card.token)[0]?.terminalLabel ??
         "Closed terminal",
-      color: terminal ? terminal.effectiveColor : (firstChange?.panelColor ?? null),
+      color: terminal ? terminal.effectiveColor : (own?.color ?? firstChange?.panelColor ?? null),
     };
   }
 
   private renderHeader(container: HTMLElement, needsCount: number, allChanges: PendingChange[]): void {
     const header = container.createDiv({ cls: "terminus-inbox-header" });
     header.createSpan({ cls: "terminus-inbox-title", text: "Agent inbox" });
+
+    // Files more than one session wrote. `copy` rather than `users`: two
+    // offset sheets, the same thing twice, with no person in it.
+    const overlaps = allChanges.filter(hasCollision);
+    if (overlaps.length > 0) {
+      const chip = header.createEl("button", { cls: "terminus-inbox-overlap-chip" });
+      setIcon(chip.createSpan({ cls: "terminus-meta-icon" }), "copy");
+      chip.createSpan({ cls: "terminus-inbox-count", text: String(overlaps.length) });
+      setTooltip(chip, `${fileCount(overlaps.length)} edited by more than one session`);
+      chip.setAttr("aria-expanded", String(this.overlapOpen));
+      chip.addEventListener("click", (evt) => {
+        // Must not reach the document handler below: this re-renders
+        // synchronously, so by the time the event finished bubbling the
+        // chip it started on would be detached, the "was the click inside
+        // the chip?" test would fail, and the popover would close again on
+        // the very click that opened it.
+        evt.stopPropagation();
+        this.ui.userAction();
+        this.overlapOpen = !this.overlapOpen;
+        this.render();
+      });
+      if (this.overlapOpen) this.renderOverlapPopover(header, overlaps);
+    } else {
+      this.overlapOpen = false;
+    }
 
     const next = header.createEl("button", { cls: "terminus-inbox-next" });
     setIcon(next.createSpan({ cls: "terminus-meta-icon" }), "skip-forward");
@@ -403,8 +704,12 @@ export class AgentInboxView extends ItemView {
 
   private renderSection(body: HTMLElement, label: string, cards: InboxCard[]): void {
     if (cards.length === 0) return;
-    this.renderSectionHeading(body, label, cards.length, null);
-    for (const card of cards) this.renderCard(body, card);
+    // A section owns its heading and its cards, so the pinned heading
+    // leaves with the last of them instead of sitting over the next
+    // section's.
+    const section = body.createDiv({ cls: "terminus-inbox-section-group" });
+    this.renderSectionHeading(section, label, cards.length, null);
+    for (const card of cards) this.renderCard(section, card);
   }
 
   /** `collapsed` null for a section that can't collapse. */
@@ -446,7 +751,11 @@ export class AgentInboxView extends ItemView {
     el.dataset.token = card.token;
     el.toggleClass("is-ended", card.ended);
     el.toggleClass("is-focused", card.token === this.focusedToken);
-    const head = el.createDiv({ cls: "terminus-inbox-card-head" });
+    // Everything identifying the session pins as one block: its name and
+    // status, the meta line's counts, the banner asking for an answer and
+    // the closing message. The work below it scrolls under all of that.
+    const top = el.createDiv({ cls: "terminus-inbox-card-top" });
+    const head = top.createDiv({ cls: "terminus-inbox-card-head" });
     // The terminal's colour as a short stroke, like its tab and its row in
     // the sidebar; a group's colour is a dot.
     const swatch = head.createSpan({ cls: "terminus-inbox-card-stroke" });
@@ -465,7 +774,7 @@ export class AgentInboxView extends ItemView {
     makeActivatable(head, toggle, () => undefined);
     head.setAttr("aria-expanded", String(!collapsed));
 
-    const meta = el.createDiv({ cls: "terminus-inbox-card-meta" });
+    const meta = top.createDiv({ cls: "terminus-inbox-card-meta" });
     const group = this.plugin.groupStore.get(terminal?.groupId);
     // A terminal and its group often share a name (both taken from Claude's
     // title); the group's then adds nothing but a repeat.
@@ -499,7 +808,7 @@ export class AgentInboxView extends ItemView {
     if (collapsed) return;
 
     if (needsAttention && session) {
-      const banner = el.createDiv({ cls: "terminus-inbox-banner", attr: { role: "status" } });
+      const banner = top.createDiv({ cls: "terminus-inbox-banner", attr: { role: "status" } });
       iconLabel(banner, "alert-triangle", session.needsMessage ?? needsFallback(session), "terminus-inbox-banner-text");
       if (terminal) {
         banner.createEl("button", { cls: "mod-cta", text: "Answer in terminal" }).addEventListener("click", () =>
@@ -513,7 +822,7 @@ export class AgentInboxView extends ItemView {
       const quote = this.quoteFor(card);
       if (quote) {
         const failed = session?.lastTurnFailed && session.status !== "working";
-        const quoteEl = el.createDiv({ cls: `terminus-inbox-quote${failed ? " is-failed" : ""}`, attr: { title: quote } });
+        const quoteEl = top.createDiv({ cls: `terminus-inbox-quote${failed ? " is-failed" : ""}`, attr: { title: quote } });
         if (failed) {
           setIcon(quoteEl.createSpan({ cls: "terminus-meta-icon" }), "x-circle");
           quoteEl.createSpan({ text: `Turn failed: ${quote}` });
@@ -527,6 +836,7 @@ export class AgentInboxView extends ItemView {
     // below a rule and on the alternate surface, as a group card's
     // terminals are in the sidebar.
     const workEl = el.createDiv({ cls: "terminus-inbox-card-body" });
+    this.renderOwnedElsewhere(workEl, card, this.plugin.pendingChangesStore.list());
     // Changes from several requests waiting together is where "which of
     // these did I ask for?" gets hard, so each turn then gets a header with
     // the prompt that caused it. A single turn needs none: the card is it.
@@ -536,8 +846,10 @@ export class AgentInboxView extends ItemView {
       // their rows stay on the card, below the turns.
       this.renderQuietAgents(workEl, card);
     } else if (card.subagents.length === 0) {
+      this.renderTurnOverlapNote(workEl, card.token, card.changes);
       if (card.leadChanges.length > 0) this.renderChangeList(workEl.createDiv({ cls: "terminus-inbox-changes" }), card.leadChanges, card, null);
     } else {
+      this.renderTurnOverlapNote(workEl, card.token, card.changes);
       this.renderAgents(workEl, card);
     }
     this.renderShellChanges(workEl, card);
@@ -1003,13 +1315,13 @@ export class AgentInboxView extends ItemView {
     makeActivatable(toggle, flip, () => undefined);
     toggle.setAttr("aria-expanded", String(expanded));
     if (!expanded) return;
-    for (const sub of quiet) this.renderSubagent(fold, card, sub, true);
+    for (const sub of quiet) void this.renderSubagent(fold, card, sub, true);
     if (card.hiddenSubagents > 0) {
       fold.createDiv({ cls: "terminus-inbox-more", text: `and ${card.hiddenSubagents} earlier` });
     }
   }
 
-  private renderSubagent(el: HTMLElement, card: InboxCard, sub: InboxSubagent, compact: boolean, scope = ""): void {
+  private renderSubagent(el: HTMLElement, card: InboxCard, sub: InboxSubagent, compact: boolean, scope = "", underTurn = false): string[] {
     const running = sub.run?.running ?? false;
     const details: string[] = [];
     const time = subagentTime(sub.run);
@@ -1018,7 +1330,7 @@ export class AgentInboxView extends ItemView {
     // Named by its task ("Division note long form"), which is what tells
     // one agent from another; the type ("general-purpose") is secondary.
     const task = sub.run?.description ?? null;
-    this.renderAgent(el, card, {
+    return this.renderAgent(el, card, {
       agentId: sub.agentId,
       mark: subagentMark(sub.run),
       name: task ?? sub.agentType,
@@ -1032,6 +1344,7 @@ export class AgentInboxView extends ItemView {
       title: !failed && sub.run?.lastMessage && !running ? sub.run.lastMessage : null,
       compact,
       scope,
+      underTurn,
     });
   }
 
@@ -1057,8 +1370,11 @@ export class AgentInboxView extends ItemView {
       /** Distinguishes this row's change list from the same agent's list
        *  under another turn, so their folder folds don't share a key. */
       scope?: string;
+      /** A turn header sits above this row and owns the fold-all control,
+       *  so the change list below skips its own header. */
+      underTurn?: boolean;
     }
-  ): void {
+  ): string[] {
     const row = el.createDiv({ cls: "terminus-inbox-agent" });
     row.toggleClass("is-compact", agent.compact === true);
     row.toggleClass("has-changes", agent.changes.length > 0);
@@ -1091,9 +1407,15 @@ export class AgentInboxView extends ItemView {
       row.setAttr("title", agent.title);
     }
 
-    if (agent.changes.length > 0) {
-      this.renderChangeList(row.createDiv({ cls: "terminus-inbox-agent-changes" }), agent.changes, card, agent.agentId, agent.scope ?? "");
-    }
+    if (agent.changes.length === 0) return [];
+    return this.renderChangeList(
+      row.createDiv({ cls: "terminus-inbox-agent-changes" }),
+      agent.changes,
+      card,
+      agent.agentId,
+      agent.scope ?? "",
+      agent.underTurn === true
+    );
   }
 
   /**
@@ -1144,7 +1466,12 @@ export class AgentInboxView extends ItemView {
       const scope = turn.promptId ?? "unattributed";
       const key = `${card.token}|${scope}`;
       const folded = this.ui.collapsedTurns.has(key);
-      const head = section.createDiv({ cls: "terminus-inbox-turn-head" });
+      // Each turn is its own box, so its header sticks only while that
+      // turn's own files are on screen and releases as the next one
+      // arrives. Siblings in one container would all pin at the same
+      // offset and stack invisibly on top of each other.
+      const turnEl = section.createDiv({ cls: "terminus-inbox-turn" });
+      const head = turnEl.createDiv({ cls: "terminus-inbox-turn-head" });
       head.toggleClass("is-failed", turn.record?.failed === true);
       setIcon(head.createSpan({ cls: "terminus-inbox-chevron" }), folded ? "chevron-right" : "chevron-down");
       head.createSpan({ cls: "terminus-inbox-turn-index", text: String(index + 1) });
@@ -1158,6 +1485,12 @@ export class AgentInboxView extends ItemView {
       const promptEl = head.createSpan({ cls: "terminus-inbox-turn-prompt", text: label });
       setTooltip(promptEl, turn.prompt ?? label, { placement: "top" });
       const { added, removed } = sumStats(turn.changes);
+      // Filled in below, once the body says whether anything grouped by
+      // folder. The turn header is the only place these totals appear, so
+      // the fold-all control comes up here to join them rather than riding
+      // on a second header that repeats them. It sits left of the totals so
+      // the numbers stay the rightmost thing on every row, at every depth.
+      const foldSlot = head.createSpan({ cls: "terminus-inbox-fold-slot" });
       const stats = head.createSpan({ cls: "terminus-inbox-turn-stats" });
       stats.createSpan({ text: fileCount(turn.changes.length) });
       stats.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
@@ -1171,17 +1504,26 @@ export class AgentInboxView extends ItemView {
       head.addEventListener("click", toggle);
       makeActivatable(head, toggle, () => undefined);
       head.setAttr("aria-expanded", String(!folded));
+      // Under the header, not inside the body: it summarises the turn, so
+      // it should still be readable while the turn is folded shut.
+      this.renderTurnOverlapNote(turnEl, card.token, turn.changes);
       if (folded) return;
 
-      const body = section.createDiv({ cls: "terminus-inbox-turn-body" });
+      const body = turnEl.createDiv({ cls: "terminus-inbox-turn-body" });
+      // Every folder key under this turn, so one control folds them all.
+      const keys: string[] = [];
+      const done = () => {
+        if (keys.length > 0) this.renderFoldAll(foldSlot, keys);
+      };
       // A turn with no subagent of its own doesn't need a "Lead" row to
       // hang its files off: everything in it is the lead's.
       if (turn.subagents.length === 0) {
-        this.renderChangeList(body.createDiv({ cls: "terminus-inbox-changes" }), turn.leadChanges, card, null, scope);
+        keys.push(...this.renderChangeList(body.createDiv({ cls: "terminus-inbox-changes" }), turn.leadChanges, card, null, scope, true));
+        done();
         return;
       }
       if (turn.leadChanges.length > 0) {
-        this.renderAgent(body, card, {
+        keys.push(...this.renderAgent(body, card, {
           agentId: null,
           mark: { kind: "lead", icon: "bot", label: "Lead session" },
           name: "Lead",
@@ -1189,9 +1531,25 @@ export class AgentInboxView extends ItemView {
           details: [],
           changes: turn.leadChanges,
           scope,
-        });
+          underTurn: true,
+        }));
       }
-      for (const sub of turn.subagents) this.renderSubagent(body, card, sub, false, scope);
+      for (const sub of turn.subagents) keys.push(...this.renderSubagent(body, card, sub, false, scope, true));
+      done();
+    });
+  }
+
+  /** One control for every folder under a turn. Lives on the turn header,
+   *  which already carries that turn's totals. */
+  private renderFoldAll(host: HTMLElement, keys: string[]): void {
+    const allFolded = keys.every((key) => this.ui.collapsedFolders.has(key));
+    iconButton(host, allFolded ? "chevrons-up-down" : "chevrons-down-up", allFolded ? "Expand all folders" : "Collapse all folders", () => {
+      this.ui.userAction();
+      for (const key of keys) {
+        if (allFolded) this.ui.collapsedFolders.delete(key);
+        else this.ui.collapsedFolders.add(key);
+      }
+      this.render();
     });
   }
 
@@ -1234,8 +1592,17 @@ export class AgentInboxView extends ItemView {
   /** `owner` is the agent the rows sit under (null: the lead); a file that
    *  other agents in this session also edited says which. A long list over
    *  several folders is grouped by folder, each foldable. */
-  private renderChangeList(parent: HTMLElement, changes: PendingChange[], card: InboxCard, owner: string | null, scope = ""): void {
-    if (changes.length === 0) return;
+  private renderChangeList(
+    parent: HTMLElement,
+    changes: PendingChange[],
+    card: InboxCard,
+    owner: string | null,
+    scope = "",
+    /** A turn header above already shows these totals and hosts the
+     *  fold-all control, so no header is drawn here. */
+    underTurn = false
+  ): string[] {
+    if (changes.length === 0) return [];
     const list = parent.createDiv({ cls: "terminus-pending-list" });
     const row = (target: HTMLElement, change: PendingChange, hideFolder: boolean) => {
       const others = change.agents.filter((a) => a.token === card.token && a.agentId !== owner).map((a) => agentLabel(card, a.agentId, a.agentType));
@@ -1244,30 +1611,29 @@ export class AgentInboxView extends ItemView {
     const folders = changes.length >= TREE_MIN_FILES ? this.groupByFolder(changes) : null;
     if (!folders || folders.length < 2) {
       for (const change of changes) row(list, change, false);
-      return;
+      return [];
     }
 
     const keyOf = (folder: string) => `${card.token}|${scope}|${owner ?? ""}|${folder}`;
-    const { added, removed } = sumStats(changes);
-    const allFolded = folders.every((f) => this.ui.collapsedFolders.has(keyOf(f.folder)));
-    const head = list.createDiv({ cls: "terminus-inbox-tree-head" });
-    head.createSpan({ text: `${changes.length} changed files` });
-    head.createSpan({ cls: "terminus-diff-stat-add", text: `+${added}` });
-    head.createSpan({ cls: "terminus-diff-stat-remove", text: `-${removed}` });
-    head.createDiv({ cls: "terminus-inbox-spacer" });
-    iconButton(head, allFolded ? "chevrons-up-down" : "chevrons-down-up", allFolded ? "Expand all folders" : "Collapse all folders", () => {
-      this.ui.userAction();
-      for (const f of folders) {
-        if (allFolded) this.ui.collapsedFolders.delete(keyOf(f.folder));
-        else this.ui.collapsedFolders.add(keyOf(f.folder));
-      }
-      this.render();
-    });
+    const keys = folders.map((f) => keyOf(f.folder));
+    // Without a turn above, nothing else here counts the folders or offers
+    // to fold them, so this list says so itself -- but it still leaves the
+    // +/- totals to the one place that already has them (the card's meta
+    // line, or the turn header), rather than printing them twice.
+    if (!underTurn) {
+      const head = list.createDiv({ cls: "terminus-inbox-tree-head" });
+      head.createSpan({ text: `${folders.length} folders` });
+      head.createDiv({ cls: "terminus-inbox-spacer" });
+      this.renderFoldAll(head, keys);
+    }
 
     for (const { folder, changes: inFolder } of folders) {
       const key = keyOf(folder);
       const folded = this.ui.collapsedFolders.has(key);
-      const heading = list.createDiv({ cls: "terminus-inbox-folder" });
+      // Its own box, as the turn has, so the heading stops sticking when
+      // its folder ends rather than riding over the next one.
+      const group = list.createDiv({ cls: "terminus-inbox-folder-group" });
+      const heading = group.createDiv({ cls: "terminus-inbox-folder" });
       setIcon(heading.createSpan({ cls: "terminus-inbox-chevron" }), folded ? "chevron-right" : "chevron-down");
       iconLabel(heading, "folder", folder || "Vault root", "terminus-inbox-folder-name");
       heading.createSpan({ cls: "terminus-inbox-folder-count", text: String(inFolder.length) });
@@ -1280,8 +1646,9 @@ export class AgentInboxView extends ItemView {
       heading.addEventListener("click", toggle);
       makeActivatable(heading, toggle, () => undefined);
       heading.setAttr("aria-expanded", String(!folded));
-      if (!folded) for (const change of inFolder) row(list, change, true);
+      if (!folded) for (const change of inFolder) row(group, change, true);
     }
+    return keys;
   }
 
   /** The changes by folder, vault-relative (a file outside the vault by its
@@ -1303,6 +1670,20 @@ export class AgentInboxView extends ItemView {
 
 /** A list this long, over several folders, is grouped by folder. */
 const TREE_MIN_FILES = 6;
+
+/** The four levels that pin, outermost first: section, session, turn,
+ *  folder. Each parks under the one above it. */
+const STICKY_HEADS = ".terminus-inbox-section, .terminus-inbox-card-top, .terminus-inbox-turn-head, .terminus-inbox-folder";
+
+/** The nearest ancestor background that actually paints something. Falls
+ *  back to the sidebar surface, which is where this view lives. */
+function opaqueBackground(el: HTMLElement): string {
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    const colour = window.getComputedStyle(node).backgroundColor;
+    if (colour && colour !== "transparent" && !colour.startsWith("rgba(0, 0, 0, 0)")) return colour;
+  }
+  return "var(--background-secondary)";
+}
 
 const COST_TITLE =
   "Estimated from Terminus's built-in API price table, not a bill. On a Claude subscription, usage counts against your plan instead.";

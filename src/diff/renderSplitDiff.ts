@@ -6,7 +6,7 @@ import { renderMinimap } from "./renderDiff";
 import { computeSplitParts, HunkPart } from "./hunks";
 import { PendingChange, PendingChangesStore } from "../state/PendingChangesStore";
 import { errorMessage } from "../util/errors";
-import { confirmCollisionReject } from "../modals/collisions";
+import { confirmCollisionReject, diffBaselines } from "../modals/collisions";
 import type { FeedbackStore } from "../state/FeedbackStore";
 
 /**
@@ -14,6 +14,14 @@ import type { FeedbackStore } from "../state/FeedbackStore";
  * hosting view, so an open comment box and its text survive the re-render
  * every store change causes (Claude may still be editing the file).
  */
+/** Which left-hand side the body is drawn against, and how to change it.
+ *  Owned by the hosting view so the choice survives the re-render every
+ *  store change causes. */
+export interface CompareContext {
+  index: number;
+  onPick: (index: number) => void;
+}
+
 export interface HunkCommentContext {
   feedback: FeedbackStore;
   /** The session that gets the comments: the terminal that made the change. */
@@ -50,18 +58,62 @@ export function renderSplitDiffBody(
   app: App,
   store: PendingChangesStore,
   change: PendingChange,
-  comments?: HunkCommentContext
+  comments?: HunkCommentContext,
+  compare?: CompareContext
 ): void {
   const { diff } = change;
 
+  // More than one baseline means a second terminal edited this file, and
+  // the version it overwrote can be put in the left column instead of the
+  // original. Acting on a hunk stays bound to the original: resolveHunk
+  // splices against diff.oldText and numbers hunks from it, so indices
+  // taken from any other baseline would cut the wrong text.
+  const baselines = diffBaselines(change);
+  const picked = Math.min(Math.max(compare?.index ?? 0, 0), baselines.length - 1);
+  const left = baselines[picked] ?? { label: "Original", text: diff.oldText };
+  const actionable = picked === 0;
+
   const wrapper = container.createDiv({ cls: "terminus-split-diff-wrapper terminus-diff-body-wrapper" });
 
+  if (compare && baselines.length > 1) {
+    const bar = wrapper.createDiv({ cls: "terminus-split-diff-compare" });
+    bar.createSpan({ cls: "terminus-split-diff-compare-label", text: "Compare with" });
+    baselines.forEach((baseline, index) => {
+      const button = bar.createEl("button", {
+        cls: "terminus-split-diff-compare-option",
+        text: baseline.label,
+      });
+      button.toggleClass("is-active", index === picked);
+      button.setAttr("aria-pressed", String(index === picked));
+      button.addEventListener("click", () => compare.onPick(index));
+    });
+    if (!actionable) {
+      bar.createSpan({
+        cls: "terminus-split-diff-compare-note",
+        text: "Accept and Reject act on the original. Switch back to use them.",
+      });
+    }
+  }
+
+  // The right column is always the current file, which is the LAST
+  // contributor's work. Naming them matters once a left column can say
+  // "Before Pricing copy's edits": "Claude's edit" opposite that leaves
+  // whose version you are looking at unsaid. With a single terminal there
+  // is no one to disambiguate from, so the familiar label stays.
+  //
+  // The session, not the turn: promptIds can hold several turns for one
+  // row and newText is only the latest state, so a turn label would be
+  // wrong as soon as a session came back to the file.
+  const lastContributor = change.contributors[change.contributors.length - 1];
+  const rightLabel =
+    change.contributors.length > 1 && lastContributor ? `${lastContributor.label}'s version` : "Claude's edit";
+
   const colHeader = wrapper.createDiv({ cls: "terminus-split-diff-colheader" });
-  colHeader.createDiv({ cls: "terminus-split-diff-colheader-cell", text: "Original" });
-  colHeader.createDiv({ cls: "terminus-split-diff-colheader-cell", text: "Claude's edit" });
+  colHeader.createDiv({ cls: "terminus-split-diff-colheader-cell", text: left.label });
+  colHeader.createDiv({ cls: "terminus-split-diff-colheader-cell", text: rightLabel });
 
   const scrollBody = wrapper.createDiv({ cls: "terminus-split-diff-scroll" });
-  const parts = computeSplitParts(diff.oldText, diff.newText);
+  const parts = computeSplitParts(left.text, diff.newText);
 
   let oldLineNo = 1;
   let newLineNo = 1;
@@ -77,10 +129,10 @@ export function renderSplitDiffBody(
 
     const { oldLines, newLines } = buildHunkSides(part.oldValue, part.newValue);
     const lineSpan = (start: number, count: number) => (count > 0 ? { start, end: start + count - 1 } : null);
-    renderHunkControls(scrollBody, part, change, app, store, comments, {
+    renderHunkControls(scrollBody, part, change, app, store, actionable ? comments : undefined, {
       oldLines: lineSpan(oldLineNo, oldLines.length),
       newLines: lineSpan(newLineNo, newLines.length),
-    });
+    }, actionable);
     const rowCount = Math.max(oldLines.length, newLines.length);
     for (let k = 0; k < rowCount; k++) {
       const oldCell = oldLines[k];
@@ -96,7 +148,7 @@ export function renderSplitDiffBody(
     }
   }
 
-  renderMinimap(wrapper, scrollBody, buildDiffLines(diff.oldText, diff.newText));
+  renderMinimap(wrapper, scrollBody, buildDiffLines(left.text, diff.newText));
 }
 
 function buildHunkSides(oldValue: string, newValue: string): { oldLines: CellLine[]; newLines: CellLine[] } {
@@ -178,10 +230,20 @@ function renderHunkControls(
   app: App,
   store: PendingChangesStore,
   comments: HunkCommentContext | undefined,
-  lines: { oldLines: { start: number; end: number } | null; newLines: { start: number; end: number } | null }
+  lines: { oldLines: { start: number; end: number } | null; newLines: { start: number; end: number } | null },
+  actionable = true
 ): void {
   const bar = container.createDiv({ cls: "terminus-inline-diff-controls terminus-split-diff-hunk-controls" });
   bar.createSpan({ cls: "terminus-inline-diff-label", text: `Change ${hunk.index + 1}` });
+
+  // Against a baseline other than the original these hunks do not line up
+  // with the ones resolveHunk would cut, and a comment can carry a reject,
+  // so the whole bar goes read-only rather than offering actions that
+  // would apply somewhere else in the file.
+  if (!actionable) {
+    bar.createSpan({ cls: "terminus-split-diff-hunk-readonly", text: "View only" });
+    return;
+  }
 
   /** Resolves true once the hunk is resolved, false if cancelled or failed. */
   const resolve = async (accepted: boolean): Promise<boolean> => {

@@ -132,8 +132,16 @@ export function renderChangeRow(
     setIcon(el.createSpan({ cls: "terminus-meta-icon" }), "users");
     el.createSpan({ text: `Also edited by ${opts.alsoEditedBy.join(", ")}` });
   }
-  const collision = collisionLabel(change);
-  if (collision) warning("terminus-collision-warning", collision);
+  // Only outside the inbox. collisionLabel names contributors.slice(1),
+  // the terminals that edited after the first -- but the inbox files a row
+  // on the card of the terminal that edited it LAST (buildInbox), so here
+  // that label names the card's own session back at itself ("Also edited by
+  // Pricing copy", on Pricing copy's card). The inbox says it from the
+  // right side instead, once per turn, in renderTurnOverlapNote.
+  if (!inbox) {
+    const collision = collisionLabel(change);
+    if (collision) warning("terminus-collision-warning", collision);
+  }
   if (change.brokenBacklinks.length > 0) {
     const count = change.brokenBacklinks.length;
     warning("terminus-backlink-warning", `may break ${count} incoming ${count === 1 ? "link" : "links"}`);
