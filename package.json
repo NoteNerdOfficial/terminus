@@ -1,6 +1,6 @@
 {
   "name": "terminus",
-  "version": "1.0.42",
+  "version": "1.0.43",
   "description": "A real terminal with shell integration and beginner-friendly command help, plus a multi-agent Agent inbox for several Claude Code sessions and a review workflow for their edits: word-level diffs, undo, backlink-breakage warnings, and more.",
   "main": "main.js",
   "scripts": {
@@ -21,7 +21,7 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "diff": "^9.0.0",
-    "obsidian": "latest",
+    "obsidian": "^1.7.2",
     "terminus-node-bridge": "^1.5.0"
   },
   "devDependencies": {
