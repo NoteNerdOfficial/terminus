@@ -44,3 +44,6 @@ prototype/
 
 # Bundled test output (see scripts/buildTests.mjs)
 test/.build/
+
+# Repo-local agent instructions (personal: paths, authorship rules)
+CLAUDE.md
