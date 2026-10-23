@@ -2,6 +2,7 @@ import { ItemView, setIcon, setTooltip, ViewStateResult, WorkspaceLeaf } from "o
 import { pathBasename } from "terminus-node-bridge";
 import { HunkCommentContext, renderSplitDiffBody } from "../diff/renderSplitDiff";
 import { collisionLabel } from "../modals/collisions";
+import { owningContributor } from "../state/PendingChangesStore";
 import type TerminusPlugin from "../main";
 
 export const DIFF_SPLIT_VIEW_TYPE = "terminus-diff-split";
@@ -110,11 +111,15 @@ export class DiffSplitView extends ItemView {
       });
     }
 
-    // Comments go to the session that made the change (Multi-agent only).
-    const owner = change.contributors[0]?.token;
+    // Comments go to the session whose work is on screen (Multi-agent
+    // only): the terminal that edited the file LAST, which is the version
+    // both columns are drawn from and the card this row is filed on. For a
+    // file two terminals edited, asking the first one to change it would
+    // reach a session whose version is no longer there.
+    const owner = owningContributor(change).token;
     let comments: HunkCommentContext | undefined;
     if (this.plugin.experience === "multi-agent" && owner) {
-      const recipient = this.plugin.findTerminalView(owner)?.getDisplayText() ?? change.panelLabel;
+      const recipient = this.plugin.findTerminalView(owner)?.getDisplayText() ?? owningContributor(change).label;
       comments = {
         feedback: this.plugin.feedbackStore,
         token: owner,

@@ -7,7 +7,8 @@
  * it is most visible.
  */
 export class ClassicUiState {
-  /** Terminal groups folded to their header, by panel label. */
+  /** Terminal groups folded to their header, by the owning terminal's hook
+   *  token (see owningContributor), which is unique where its label is not. */
   readonly collapsedGroups = new Set<string>();
   /** Whether the "changed without a snapshot" list is unfolded. Folded by
    *  default: it is the footnote to the review list, not the list. */

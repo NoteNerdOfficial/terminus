@@ -1,7 +1,7 @@
 import { App } from "obsidian";
 import { pathBasename } from "terminus-node-bridge";
 import { ConfirmModal } from "./ConfirmModal";
-import type { ChangeContributor, PendingChange } from "../state/PendingChangesStore";
+import { owningContributor, type ChangeContributor, type PendingChange } from "../state/PendingChangesStore";
 
 /**
  * Cross-terminal collisions: a pending change whose file was edited by more
@@ -11,9 +11,18 @@ import type { ChangeContributor, PendingChange } from "../state/PendingChangesSt
  * and confirm before any reject that would do it.
  */
 
-/** Terminals that edited the file after the one the row belongs to. */
+/** Terminals that edited the file after the first one, whose pre-edit
+ *  snapshot is the one the row keeps and a reject restores. */
 export function laterContributors(change: PendingChange): ChangeContributor[] {
   return change.contributors.slice(1);
+}
+
+/** Terminals that edited the file other than the one it is filed under
+ *  (see owningContributor): the work the row carries besides its own
+ *  session's. "Also edited by Docs pass" for a row, or null. */
+export function otherContributorsLabel(change: PendingChange): string | null {
+  const others = change.contributors.slice(0, -1);
+  return others.length ? `Also edited by ${joinNames(others)}` : null;
 }
 
 export function hasCollision(change: PendingChange): boolean {
@@ -27,7 +36,10 @@ function joinNames(contributors: ChangeContributor[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-/** "Also edited by Docs pass" for a row or Split Diff header, or null. */
+/** "Also edited by Docs pass" for a Split Diff header, or null: the
+ *  terminals that edited after the first, which is what that header goes on
+ *  to explain a reject in terms of. A row is filed under the LAST of them,
+ *  so for a row use otherContributorsLabel instead. */
 export function collisionLabel(change: PendingChange): string | null {
   const later = laterContributors(change);
   return later.length ? `Also edited by ${joinNames(later)}` : null;
@@ -75,9 +87,42 @@ export async function confirmCollisionReject(app: App, changes: PendingChange[],
   );
 }
 
+/**
+ * Confirms before accepting ONE hunk of a file more than one terminal
+ * edited, while other hunks are still undecided.
+ *
+ * resolveHunk writes the row's baseline with the chosen hunk spliced into
+ * it, and that baseline predates the FIRST terminal's edit. So between the
+ * first Accept and the last, the file on disk holds neither terminal's work
+ * except in the hunks already decided: everything comes back as the rest are
+ * accepted, but someone who stops half way is left with a file emptied of
+ * both sessions' edits and nothing on screen saying so. Reject asks
+ * (confirmCollisionReject); this is the same warning for the direction that
+ * looks safe.
+ *
+ * `remaining` is how many hunks the row still has. One means this Accept
+ * finishes the row, which leaves the file complete, so nothing is asked.
+ */
+export async function confirmCollisionHunkAccept(app: App, change: PendingChange, remaining: number): Promise<boolean> {
+  if (!hasCollision(change) || remaining < 2) return true;
+  const first = change.contributors[0]?.label ?? change.panelLabel;
+  const others = joinNames(laterContributors(change));
+  const file = pathBasename(change.diff.filePath);
+  const rest = remaining - 1;
+  return ConfirmModal.confirm(
+    app,
+    "Accept only this change?",
+    `${others} also edited ${file} after ${first}. Until every change here is decided, the file is how it was before ` +
+      `${first}'s first edit plus the ones you accept, so the other ${rest === 1 ? "change is" : `${rest} changes are`} ` +
+      `out of the file meanwhile. Accepting ${rest === 1 ? "it puts it" : "them puts them"} back.`,
+    "Accept"
+  );
+}
+
 /** One pair of sessions that edited the same files: the one that edited
- *  first (whose card the rows are filed on, see buildInbox) and the one
- *  that edited last (whose version is the one on disk). */
+ *  first (whose pre-edit snapshot a reject restores) and the one that edited
+ *  last (whose version is the one on disk, and whose card or terminal group
+ *  the rows are filed under). */
 export interface OverlapGroup {
   first: ChangeContributor;
   /** The last contributor, whose edit is what the file now holds. */
@@ -105,25 +150,20 @@ export function groupOverlaps(changes: PendingChange[]): OverlapGroup[] {
   return [...groups.values()];
 }
 
-/** The overlapping changes a session edited but does not own: another
- *  terminal edited them afterwards, so buildInbox filed them on that
- *  terminal's card and this session's card never lists them. */
-export function changesOwnedElsewhere(changes: PendingChange[], token: string): PendingChange[] {
+/** The overlapping changes a session edited but is not filed under:
+ *  another terminal edited them afterwards, so they are listed on that
+ *  terminal's card and this session's own card never shows them. */
+export function changesOnAnotherCard(changes: PendingChange[], token: string): PendingChange[] {
   return changes.filter(
-    (c) =>
-      hasCollision(c) &&
-      c.contributors[c.contributors.length - 1]?.token !== token &&
-      c.contributors.some((x) => x.token === token)
+    (c) => hasCollision(c) && owningContributor(c).token !== token && c.contributors.some((x) => x.token === token)
   );
 }
 
-/** The overlapping changes a session owns that someone else started: the
- *  row's revertText predates this session, so rejecting reaches back past
- *  it into another terminal's work. */
-export function changesStartedElsewhere(changes: PendingChange[], token: string): PendingChange[] {
-  return changes.filter(
-    (c) => hasCollision(c) && c.contributors[c.contributors.length - 1]?.token === token
-  );
+/** The overlapping changes filed under a session that someone else started:
+ *  the row's revertText predates this session, so rejecting reaches back
+ *  past it into another terminal's work. */
+export function changesStartedByAnother(changes: PendingChange[], token: string): PendingChange[] {
+  return changes.filter((c) => hasCollision(c) && owningContributor(c).token === token);
 }
 
 
@@ -143,6 +183,10 @@ export interface DiffBaseline {
  * Labelled "Before X's edits" rather than "X's version": if the earlier
  * terminal came back and edited again after X, the snapshot is still
  * exactly what X found, but it is no longer that terminal's latest work.
+ *
+ * Only the Original survives a per-hunk resolution, which rewrites the
+ * baseline the snapshots were taken against and so drops them (see
+ * resolveHunk).
  */
 export function diffBaselines(change: PendingChange): DiffBaseline[] {
   const baselines: DiffBaseline[] = [{ label: "Original", text: change.diff.oldText }];

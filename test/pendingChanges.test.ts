@@ -3,7 +3,12 @@ import assert from "node:assert";
 import { PendingChangesStore, type RecordChangeInput } from "../src/state/PendingChangesStore";
 import type { BashToolHookPayload } from "../src/hooks/types";
 import type { DiffResult } from "../src/server/diff";
-import { diffBaselines } from "../src/modals/collisions";
+import { confirmCollisionHunkAccept, diffBaselines, otherContributorsLabel } from "../src/modals/collisions";
+import { owningContributor } from "../src/state/PendingChangesStore";
+import type { App } from "obsidian";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /**
  * Coalescing within one review window. Several edits to one file collapse
@@ -152,6 +157,17 @@ describe("pending changes: what a second terminal overwrote", () => {
     assert.equal(baselines.length, 1, "coming back to a file is not a collision");
   });
 
+  it("files the row under the terminal that edited last, and names the other", () => {
+    // What Classic's terminal groups and the inbox's cards both file by,
+    // so a shared row sits in the same place in either experience; the row
+    // itself then names the contributor its group does not.
+    record(store, { oldText: "original\n", newText: "A wrote this\n" }, first);
+    record(store, { oldText: "A wrote this\n", newText: "B wrote this\n" }, second);
+    const change = store.list()[0]!;
+    assert.equal(owningContributor(change).token, "tok-b");
+    assert.equal(otherContributorsLabel(change), "Also edited by A");
+  });
+
   it("drops a baseline identical to the original", () => {
     // B found the file exactly as it started: A's edit was reverted, or A
     // never touched the bytes B is working from. A second column showing
@@ -160,5 +176,73 @@ describe("pending changes: what a second terminal overwrote", () => {
     record(store, { oldText: "original\n", newText: "B wrote this\n" }, second);
     const baselines = diffBaselines(store.list()[0]!);
     assert.equal(baselines.length, 1);
+  });
+});
+
+/**
+ * Deciding one hunk at a time on a file two terminals edited. resolveHunk
+ * writes the row's baseline with the chosen hunk spliced in, and that
+ * baseline predates the FIRST terminal's edit, so a half-finished review
+ * leaves the file holding neither terminal's work outside the hunks already
+ * decided. confirmCollisionHunkAccept is what says so before the first
+ * Accept; these pin the state it warns about.
+ */
+describe("pending changes: deciding one hunk of a file two terminals edited", () => {
+  const first = { token: "tok-a", label: "A" };
+  const second = { token: "tok-b", label: "B" };
+  const MIDDLE = "keep 1\nkeep 2\nkeep 3\nkeep 4\nkeep 5\n";
+  const original = `top\n${MIDDLE}bottom\n`;
+  const fromA = `A top\n${MIDDLE}A bottom\n`;
+  const fromB = `B top\n${MIDDLE}B bottom\n`;
+
+  let dir: string;
+  let file: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "terminus-hunk-"));
+    file = join(dir, "note.md");
+  });
+
+  function shared(): void {
+    record(store, { filePath: file, oldText: original, newText: fromA }, first);
+    record(store, { filePath: file, oldText: fromA, newText: fromB }, second);
+  }
+
+  it("leaves the file holding neither terminal's work outside the accepted hunk", async () => {
+    shared();
+    await store.resolveHunk(file, 0, true);
+    assert.equal(
+      readFileSync(file, "utf8"),
+      `B top\n${MIDDLE}bottom\n`,
+      "B's first change is in, and the last line is back to before A"
+    );
+    assert.equal(store.list().length, 1, "the row stays until the other hunk is decided");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("stops offering what the second terminal overwrote, which no longer lines up", async () => {
+    shared();
+    assert.equal(diffBaselines(store.list()[0]!).length, 2, "both baselines before any hunk is decided");
+    await store.resolveHunk(file, 0, true);
+    const change = store.list()[0]!;
+    assert.equal(change.contributors[1]!.before, undefined, "the snapshot went with the baseline it was taken against");
+    assert.deepEqual(
+      diffBaselines(change).map((b) => b.label),
+      ["Original"],
+      "only the side that is still in step"
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("asks nothing when the accept finishes the row or no one else edited it", async () => {
+    // The asking path opens a modal, so only its two quiet cases are
+    // pinned here; the warning itself is checked in the running app.
+    const app = undefined as unknown as App;
+    shared();
+    assert.equal(await confirmCollisionHunkAccept(app, store.list()[0]!, 1), true, "the last hunk leaves the file whole");
+
+    const alone = new PendingChangesStore();
+    record(alone, { filePath: file, oldText: original, newText: fromA }, first);
+    assert.equal(await confirmCollisionHunkAccept(app, alone.list()[0]!, 2), true, "one terminal, nothing to lose");
+    rmSync(dir, { recursive: true, force: true });
   });
 });

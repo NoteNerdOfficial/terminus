@@ -201,9 +201,9 @@ describe("inbox: a file two terminals edited", () => {
     const first = inbox.finished.find((c) => c.token === "tok-a")!;
     assert.equal(first.changes.length, 0, "its own edit is on the other card now");
     assert.equal(first.turns.length, 0, "so it has no turn to show either");
-    // This is exactly the state renderOwnedElsewhere exists for: a card
-    // that edited a file, says "Nothing to review", and (once the session
-    // ends) passes dismissible().
+    // This is exactly the state renderOnAnotherCard exists for: a card
+    // that edited a file and has no row for it. It says where the row went,
+    // and keeps the card out of dismissible() until that row is reviewed.
   });
 
   it("puts it under the owning session's own turn, not the first turn overall", () => {

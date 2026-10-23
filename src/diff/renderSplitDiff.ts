@@ -3,10 +3,10 @@ import { pathBasename } from "terminus-node-bridge";
 import { diffWordsWithSpace } from "diff";
 import { buildDiffLines, buildSegments, DiffLineSegment, splitLines } from "./buildDiffLines";
 import { renderMinimap } from "./renderDiff";
-import { computeSplitParts, HunkPart } from "./hunks";
+import { computeHunks, computeSplitParts, HunkPart } from "./hunks";
 import { PendingChange, PendingChangesStore } from "../state/PendingChangesStore";
 import { errorMessage } from "../util/errors";
-import { confirmCollisionReject, diffBaselines } from "../modals/collisions";
+import { confirmCollisionHunkAccept, confirmCollisionReject, diffBaselines } from "../modals/collisions";
 import type { FeedbackStore } from "../state/FeedbackStore";
 
 /**
@@ -247,7 +247,14 @@ function renderHunkControls(
 
   /** Resolves true once the hunk is resolved, false if cancelled or failed. */
   const resolve = async (accepted: boolean): Promise<boolean> => {
-    if (!accepted && !(await confirmCollisionReject(app, [store.get(change.id) ?? change], "hunk"))) return false;
+    // The live row, not the one this bar was drawn from: another hunk may
+    // have been resolved since, which rewrites both sides of the diff.
+    const current = store.get(change.id) ?? change;
+    if (!accepted && !(await confirmCollisionReject(app, [current], "hunk"))) return false;
+    if (accepted) {
+      const remaining = computeHunks(current.diff.oldText, current.diff.newText).length;
+      if (!(await confirmCollisionHunkAccept(app, current, remaining))) return false;
+    }
     try {
       await store.resolveHunk(change.id, hunk.index, accepted);
       return true;

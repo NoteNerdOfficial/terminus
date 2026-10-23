@@ -17857,6 +17857,9 @@ function sessionIdentity(payload) {
 // src/views/PendingChangesView.ts
 var import_obsidian18 = require("obsidian");
 
+// src/state/PendingChangesStore.ts
+var import_terminus_node_bridge17 = __toESM(require_dist());
+
 // node_modules/diff/libesm/diff/base.js
 var Diff = class {
   diff(oldStr, newStr, options = {}) {
@@ -18372,6 +18375,302 @@ function tokenize2(value, options) {
   return retLines;
 }
 
+// src/diff/hunks.ts
+function computeSplitParts(oldText, newText) {
+  const diffParts = diffLines(oldText, newText);
+  const result = [];
+  let oldPos = 0;
+  let newPos = 0;
+  let hunkIndex = 0;
+  let i8 = 0;
+  while (i8 < diffParts.length) {
+    const part = diffParts[i8];
+    if (!part) break;
+    if (!part.added && !part.removed) {
+      result.push({
+        type: "context",
+        value: part.value,
+        oldStart: oldPos,
+        oldEnd: oldPos + part.value.length,
+        newStart: newPos,
+        newEnd: newPos + part.value.length
+      });
+      oldPos += part.value.length;
+      newPos += part.value.length;
+      i8++;
+      continue;
+    }
+    const nextPart = diffParts[i8 + 1];
+    if (part.removed && (nextPart == null ? void 0 : nextPart.added)) {
+      const oldValue = part.value;
+      const newValue = nextPart.value;
+      result.push({
+        type: "hunk",
+        index: hunkIndex++,
+        oldValue,
+        newValue,
+        oldStart: oldPos,
+        oldEnd: oldPos + oldValue.length,
+        newStart: newPos,
+        newEnd: newPos + newValue.length
+      });
+      oldPos += oldValue.length;
+      newPos += newValue.length;
+      i8 += 2;
+      continue;
+    }
+    if (part.removed) {
+      result.push({
+        type: "hunk",
+        index: hunkIndex++,
+        oldValue: part.value,
+        newValue: "",
+        oldStart: oldPos,
+        oldEnd: oldPos + part.value.length,
+        newStart: newPos,
+        newEnd: newPos
+      });
+      oldPos += part.value.length;
+      i8++;
+      continue;
+    }
+    result.push({
+      type: "hunk",
+      index: hunkIndex++,
+      oldValue: "",
+      newValue: part.value,
+      oldStart: oldPos,
+      oldEnd: oldPos,
+      newStart: newPos,
+      newEnd: newPos + part.value.length
+    });
+    newPos += part.value.length;
+    i8++;
+  }
+  return result;
+}
+function computeHunks(oldText, newText) {
+  return computeSplitParts(oldText, newText).filter((p2) => p2.type === "hunk");
+}
+
+// src/state/PendingChangesStore.ts
+function owningContributor(change) {
+  var _a7;
+  return (_a7 = change.contributors[change.contributors.length - 1]) != null ? _a7 : {
+    token: "",
+    label: change.panelLabel,
+    color: change.panelColor
+  };
+}
+var MAX_HISTORY = 20;
+var PendingChangesStore = class extends TypedEmitter {
+  constructor() {
+    super(...arguments);
+    this.entries = /* @__PURE__ */ new Map();
+    this.history = [];
+    this.historyIdCounter = 0;
+  }
+  /**
+   * Multiple edits to the same file within one review window merge into a
+   * single row: the FIRST edit's oldText/revertText is preserved (the true
+   * pre-turn snapshot) while newText/payload advance to the latest edit.
+   * Without this, rejecting an earlier edit after a later one landed would
+   * silently discard the later edit too, with no way to reason about it.
+   *
+   * The same holds when the later edit comes from a different terminal: its
+   * work lands in the first terminal's row, so it's added to `contributors`
+   * and the UI warns before a reject undoes it.
+   */
+  recordChange(input) {
+    var _a7, _b, _c2, _d, _e4;
+    const key = input.diff.filePath;
+    const existing = this.entries.get(key);
+    const agent = { token: input.token, agentId: (_b = (_a7 = input.agent) == null ? void 0 : _a7.id) != null ? _b : null, agentType: (_d = (_c2 = input.agent) == null ? void 0 : _c2.type) != null ? _d : null };
+    const change = existing ? {
+      ...existing.change,
+      payload: input.payload,
+      // The baseline is the first edit's: what the file was before any
+      // of them, including whether it existed at all. A later edit sees
+      // the file the first one created, so taking its existedBefore
+      // made rejecting a created-then-edited file leave it empty on
+      // disk instead of deleting it.
+      diff: {
+        ...input.diff,
+        oldText: existing.change.diff.oldText,
+        revertText: existing.change.diff.revertText,
+        existedBefore: existing.change.diff.existedBefore
+      },
+      editCount: existing.change.editCount + 1,
+      contributors: existing.change.contributors.some((c) => c.token === input.token) ? existing.change.contributors : [
+        ...existing.change.contributors,
+        // input.diff.oldText is read from disk at PreToolUse, so at
+        // this moment it IS the previous terminal's result.
+        { token: input.token, label: input.panelLabel, color: input.panelColor, before: input.diff.oldText }
+      ],
+      agents: existing.change.agents.some((a) => a.token === agent.token && a.agentId === agent.agentId) ? existing.change.agents : [...existing.change.agents, agent],
+      promptIds: input.promptId && !existing.change.promptIds.includes(input.promptId) ? [...existing.change.promptIds, input.promptId] : existing.change.promptIds
+    } : {
+      id: key,
+      payload: input.payload,
+      diff: input.diff,
+      panelLabel: input.panelLabel,
+      panelColor: input.panelColor,
+      createdAt: Date.now(),
+      editCount: 1,
+      contributors: [{ token: input.token, label: input.panelLabel, color: input.panelColor }],
+      agents: [agent],
+      promptIds: input.promptId ? [input.promptId] : [],
+      brokenBacklinks: []
+    };
+    if (change.diff.oldText === change.diff.newText) {
+      if (!existing) return;
+      this.entries.delete(key);
+      (_e4 = existing.onExternallyResolved) == null ? void 0 : _e4.call(existing, true);
+      this.emit("change");
+      return;
+    }
+    this.entries.set(key, { change, onExternallyResolved: existing == null ? void 0 : existing.onExternallyResolved });
+    this.emit("change");
+    this.emit("recorded", change);
+  }
+  /** Set separately from recordChange since computing it needs the Obsidian
+   *  App instance (see backlinks/breakage.ts) -- a no-op if the change was
+   *  already resolved before this resolves (e.g. the user accepted/rejected
+   *  before the async backlink scan finished). */
+  setBrokenBacklinks(id, brokenBacklinks) {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    entry.change = { ...entry.change, brokenBacklinks };
+    this.emit("change");
+  }
+  list() {
+    return [...this.entries.values()].map((e) => e.change).sort((a, b3) => a.createdAt - b3.createdAt);
+  }
+  get(id) {
+    var _a7;
+    return (_a7 = this.entries.get(id)) == null ? void 0 : _a7.change;
+  }
+  listHistory() {
+    return [...this.history];
+  }
+  registerInlineOverlay(id, onExternallyResolved) {
+    const entry = this.entries.get(id);
+    if (entry) entry.onExternallyResolved = onExternallyResolved;
+  }
+  unregisterInlineOverlay(id) {
+    const entry = this.entries.get(id);
+    if (entry) entry.onExternallyResolved = void 0;
+  }
+  async resolveItem(id, accepted) {
+    var _a7;
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    this.entries.delete(id);
+    if (!accepted) {
+      await this.applyOldState(entry.change.diff);
+    }
+    (_a7 = entry.onExternallyResolved) == null ? void 0 : _a7.call(entry, accepted);
+    const resolved = this.pushHistory(entry.change, accepted);
+    this.emit("change");
+    this.emit("resolved", resolved);
+  }
+  /** `filter`, when given, scopes this to a subset (e.g. one terminal's
+   *  changes) -- omit it to resolve everything, across all terminals. */
+  async resolveAll(accepted, filter) {
+    const ids = [...this.entries.values()].filter((e) => !filter || filter(e.change)).map((e) => e.change.id);
+    for (const id of ids) {
+      await this.resolveItem(id, accepted);
+    }
+  }
+  /**
+   * Per-hunk accept/reject, used by the Split Diff view. `hunkIndex` must
+   * come from computeHunks(entry.diff.oldText, entry.diff.newText) computed
+   * fresh against the CURRENT diff -- resolving a hunk mutates oldText/
+   * newText (splicing the chosen text into both, at that hunk's spot),
+   * which shifts every later hunk's offsets, so indices from a previous
+   * render are not valid after any resolveHunk call.
+   *
+   * Not supported for NotebookEdit: its oldText/newText are a display-only
+   * approximation (see buildDiff in server/diff.ts), not the real file
+   * content, so splicing them and writing the result to disk would corrupt
+   * the notebook. The Split Diff entry point is hidden for those changes;
+   * this is a second line of defense.
+   */
+  async resolveHunk(id, hunkIndex, accepted) {
+    var _a7;
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    if (entry.change.payload.tool_name === "NotebookEdit") return;
+    const { diff } = entry.change;
+    const hunk = computeHunks(diff.oldText, diff.newText)[hunkIndex];
+    if (!hunk) return;
+    const chosen = accepted ? hunk.newValue : hunk.oldValue;
+    const newOldText = diff.oldText.slice(0, hunk.oldStart) + chosen + diff.oldText.slice(hunk.oldEnd);
+    const newNewText = diff.newText.slice(0, hunk.newStart) + chosen + diff.newText.slice(hunk.newEnd);
+    if (!diff.existedBefore && newOldText === "") {
+      await (0, import_terminus_node_bridge17.deleteFileIfExists)(diff.filePath);
+    } else {
+      await (0, import_terminus_node_bridge17.writeTextFile)(diff.filePath, newOldText);
+    }
+    entry.change = {
+      ...entry.change,
+      diff: { ...diff, oldText: newOldText, newText: newNewText },
+      // ChangeContributor.before is a whole-file snapshot taken against the
+      // row's original baseline. Splicing a hunk rewrites that baseline, so
+      // the snapshot no longer lines up with either side: it would put a
+      // pre-review copy of the file opposite a partly resolved one in Split
+      // Diff's left column, and read as a baseline you could still act on.
+      // Dropping it leaves only the Original, which is always in step.
+      contributors: entry.change.contributors.map((c) => ({ ...c, before: void 0 }))
+    };
+    if (newOldText === newNewText) {
+      this.entries.delete(id);
+      (_a7 = entry.onExternallyResolved) == null ? void 0 : _a7.call(entry, true);
+      const resolved = this.pushHistory(entry.change, true);
+      this.emit("change");
+      this.emit("resolved", resolved);
+      return;
+    }
+    this.emit("change");
+  }
+  /** Reverses a past Accept (restores pre-edit content) or Reject (re-applies
+   *  the change that was rejected). Removes the entry from history. */
+  async undo(historyId) {
+    const idx = this.history.findIndex((h2) => h2.historyId === historyId);
+    if (idx === -1) return;
+    const [item] = this.history.splice(idx, 1);
+    if (!item) return;
+    if (item.accepted) {
+      await this.applyOldState(item.diff);
+    } else {
+      await this.applyNewState(item.diff);
+    }
+    this.emit("change");
+    this.emit("resolved", { ...item, accepted: !item.accepted, resolvedAt: Date.now() });
+  }
+  pushHistory(change, accepted) {
+    const resolved = {
+      ...change,
+      historyId: ++this.historyIdCounter,
+      accepted,
+      resolvedAt: Date.now()
+    };
+    this.history.unshift(resolved);
+    if (this.history.length > MAX_HISTORY) this.history.pop();
+    return resolved;
+  }
+  async applyOldState(diff) {
+    if (!diff.existedBefore) {
+      await (0, import_terminus_node_bridge17.deleteFileIfExists)(diff.filePath);
+      return;
+    }
+    await (0, import_terminus_node_bridge17.writeTextFile)(diff.filePath, diff.revertText);
+  }
+  async applyNewState(diff) {
+    await (0, import_terminus_node_bridge17.writeTextFile)(diff.filePath, diff.newText);
+  }
+};
+
 // src/diff/buildDiffLines.ts
 function buildDiffLines(oldText, newText) {
   const parts = diffLines(oldText, newText);
@@ -18509,11 +18808,11 @@ function renderDiffLine(container, line) {
 
 // src/views/changeRows.ts
 var import_obsidian17 = require("obsidian");
-var import_terminus_node_bridge23 = __toESM(require_dist());
+var import_terminus_node_bridge24 = __toESM(require_dist());
 
 // src/editor/openWithDiff.ts
 var import_obsidian12 = require("obsidian");
-var import_terminus_node_bridge18 = __toESM(require_dist());
+var import_terminus_node_bridge19 = __toESM(require_dist());
 
 // src/editor/inlineDiff.ts
 var import_state = require("@codemirror/state");
@@ -18616,86 +18915,8 @@ function buildDecorations(state, overlay) {
   return import_view.Decoration.set(ranges, true);
 }
 
-// src/diff/hunks.ts
-function computeSplitParts(oldText, newText) {
-  const diffParts = diffLines(oldText, newText);
-  const result = [];
-  let oldPos = 0;
-  let newPos = 0;
-  let hunkIndex = 0;
-  let i8 = 0;
-  while (i8 < diffParts.length) {
-    const part = diffParts[i8];
-    if (!part) break;
-    if (!part.added && !part.removed) {
-      result.push({
-        type: "context",
-        value: part.value,
-        oldStart: oldPos,
-        oldEnd: oldPos + part.value.length,
-        newStart: newPos,
-        newEnd: newPos + part.value.length
-      });
-      oldPos += part.value.length;
-      newPos += part.value.length;
-      i8++;
-      continue;
-    }
-    const nextPart = diffParts[i8 + 1];
-    if (part.removed && (nextPart == null ? void 0 : nextPart.added)) {
-      const oldValue = part.value;
-      const newValue = nextPart.value;
-      result.push({
-        type: "hunk",
-        index: hunkIndex++,
-        oldValue,
-        newValue,
-        oldStart: oldPos,
-        oldEnd: oldPos + oldValue.length,
-        newStart: newPos,
-        newEnd: newPos + newValue.length
-      });
-      oldPos += oldValue.length;
-      newPos += newValue.length;
-      i8 += 2;
-      continue;
-    }
-    if (part.removed) {
-      result.push({
-        type: "hunk",
-        index: hunkIndex++,
-        oldValue: part.value,
-        newValue: "",
-        oldStart: oldPos,
-        oldEnd: oldPos + part.value.length,
-        newStart: newPos,
-        newEnd: newPos
-      });
-      oldPos += part.value.length;
-      i8++;
-      continue;
-    }
-    result.push({
-      type: "hunk",
-      index: hunkIndex++,
-      oldValue: "",
-      newValue: part.value,
-      oldStart: oldPos,
-      oldEnd: oldPos,
-      newStart: newPos,
-      newEnd: newPos + part.value.length
-    });
-    newPos += part.value.length;
-    i8++;
-  }
-  return result;
-}
-function computeHunks(oldText, newText) {
-  return computeSplitParts(oldText, newText).filter((p2) => p2.type === "hunk");
-}
-
 // src/modals/collisions.ts
-var import_terminus_node_bridge17 = __toESM(require_dist());
+var import_terminus_node_bridge18 = __toESM(require_dist());
 
 // src/modals/ConfirmModal.ts
 var import_obsidian11 = require("obsidian");
@@ -18742,6 +18963,10 @@ var ConfirmModal = class _ConfirmModal extends import_obsidian11.Modal {
 function laterContributors(change) {
   return change.contributors.slice(1);
 }
+function otherContributorsLabel(change) {
+  const others = change.contributors.slice(0, -1);
+  return others.length ? `Also edited by ${joinNames(others)}` : null;
+}
 function hasCollision(change) {
   return change.contributors.length > 1;
 }
@@ -18762,12 +18987,12 @@ async function confirmCollisionReject(app, changes, scope = "file") {
     const change = collided[0];
     const first = (_b = (_a7 = change.contributors[0]) == null ? void 0 : _a7.label) != null ? _b : change.panelLabel;
     const others = joinNames(laterContributors(change));
-    const file = (0, import_terminus_node_bridge17.pathBasename)(change.diff.filePath);
+    const file = (0, import_terminus_node_bridge18.pathBasename)(change.diff.filePath);
     const message = scope === "hunk" ? `${others} also edited ${file} after ${first}. Rejecting this change restores its lines to how they were before ${first}'s first edit, which may undo ${others}'s edits too.` : `${others} also edited this file after ${first}. Rejecting restores it to how it was before ${first}'s first edit, which undoes ${others}'s edits too.`;
     return ConfirmModal.confirm(app, scope === "hunk" ? "Reject this change?" : `Reject ${file}?`, message, "Reject");
   }
   const SHOWN = 3;
-  const listed = collided.slice(0, SHOWN).map((c) => `${(0, import_terminus_node_bridge17.pathBasename)(c.diff.filePath)} (${joinNames(laterContributors(c))})`).join(", ");
+  const listed = collided.slice(0, SHOWN).map((c) => `${(0, import_terminus_node_bridge18.pathBasename)(c.diff.filePath)} (${joinNames(laterContributors(c))})`).join(", ");
   const more = collided.length > SHOWN ? ` and ${collided.length - SHOWN} more` : "";
   const count = changes.length;
   return ConfirmModal.confirm(
@@ -18775,6 +19000,20 @@ async function confirmCollisionReject(app, changes, scope = "file") {
     `Reject ${count} ${count === 1 ? "file" : "files"}?`,
     `${collided.length} of them ${collided.length === 1 ? "was" : "were"} also edited by another terminal: ${listed}${more}. Rejecting restores each file to how it was before the first terminal's edit, which undoes the other terminals' edits too.`,
     "Reject"
+  );
+}
+async function confirmCollisionHunkAccept(app, change, remaining) {
+  var _a7, _b;
+  if (!hasCollision(change) || remaining < 2) return true;
+  const first = (_b = (_a7 = change.contributors[0]) == null ? void 0 : _a7.label) != null ? _b : change.panelLabel;
+  const others = joinNames(laterContributors(change));
+  const file = (0, import_terminus_node_bridge18.pathBasename)(change.diff.filePath);
+  const rest = remaining - 1;
+  return ConfirmModal.confirm(
+    app,
+    "Accept only this change?",
+    `${others} also edited ${file} after ${first}. Until every change here is decided, the file is how it was before ${first}'s first edit plus the ones you accept, so the other ${rest === 1 ? "change is" : `${rest} changes are`} out of the file meanwhile. Accepting ${rest === 1 ? "it puts it" : "them puts them"} back.`,
+    "Accept"
   );
 }
 function groupOverlaps(changes) {
@@ -18791,21 +19030,13 @@ function groupOverlaps(changes) {
   }
   return [...groups.values()];
 }
-function changesOwnedElsewhere(changes, token) {
+function changesOnAnotherCard(changes, token) {
   return changes.filter(
-    (c) => {
-      var _a7;
-      return hasCollision(c) && ((_a7 = c.contributors[c.contributors.length - 1]) == null ? void 0 : _a7.token) !== token && c.contributors.some((x) => x.token === token);
-    }
+    (c) => hasCollision(c) && owningContributor(c).token !== token && c.contributors.some((x) => x.token === token)
   );
 }
-function changesStartedElsewhere(changes, token) {
-  return changes.filter(
-    (c) => {
-      var _a7;
-      return hasCollision(c) && ((_a7 = c.contributors[c.contributors.length - 1]) == null ? void 0 : _a7.token) === token;
-    }
-  );
+function changesStartedByAnother(changes, token) {
+  return changes.filter((c) => hasCollision(c) && owningContributor(c).token === token);
 }
 function diffBaselines(change) {
   const baselines = [{ label: "Original", text: change.diff.oldText }];
@@ -18821,7 +19052,7 @@ function diffBaselines(change) {
 async function openChangedFile(plugin, change) {
   var _a7, _b, _c2;
   const { app } = plugin;
-  const relPath = (0, import_terminus_node_bridge18.pathRelative)(plugin.getVaultBasePath(), change.diff.filePath);
+  const relPath = (0, import_terminus_node_bridge19.pathRelative)(plugin.getVaultBasePath(), change.diff.filePath);
   const file = relPath.startsWith("..") ? null : app.vault.getAbstractFileByPath(relPath);
   if (!(file instanceof import_obsidian12.TFile)) {
     openOutsideObsidian(change.diff.filePath);
@@ -18845,7 +19076,7 @@ async function openChangedFile(plugin, change) {
     const current = (_a8 = store.get(change.id)) != null ? _a8 : change;
     if (!accepted && !await confirmCollisionReject(plugin.app, [current])) return;
     store.resolveItem(change.id, accepted).catch((err) => {
-      new import_obsidian12.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge18.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian12.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge19.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
     });
   };
   cm.dispatch({
@@ -18871,7 +19102,7 @@ function findFirstHunkLine(change) {
 }
 async function openFileAtPath(plugin, absolutePath) {
   const { app } = plugin;
-  const relPath = (0, import_terminus_node_bridge18.pathRelative)(plugin.getVaultBasePath(), absolutePath);
+  const relPath = (0, import_terminus_node_bridge19.pathRelative)(plugin.getVaultBasePath(), absolutePath);
   const file = relPath.startsWith("..") ? null : app.vault.getAbstractFileByPath(relPath);
   if (!(file instanceof import_obsidian12.TFile)) {
     openOutsideObsidian(absolutePath);
@@ -18880,8 +19111,8 @@ async function openFileAtPath(plugin, absolutePath) {
   await app.workspace.getLeaf(true).openFile(file);
 }
 function openOutsideObsidian(absolutePath) {
-  if (!(0, import_terminus_node_bridge18.fileExistsSync)(absolutePath)) {
-    new import_obsidian12.Notice(`Terminus: couldn't find ${(0, import_terminus_node_bridge18.pathBasename)(absolutePath)} on disk.`);
+  if (!(0, import_terminus_node_bridge19.fileExistsSync)(absolutePath)) {
+    new import_obsidian12.Notice(`Terminus: couldn't find ${(0, import_terminus_node_bridge19.pathBasename)(absolutePath)} on disk.`);
     return;
   }
   openWithSystemDefaultApp(absolutePath);
@@ -18889,11 +19120,11 @@ function openOutsideObsidian(absolutePath) {
 
 // src/views/DiffSplitView.ts
 var import_obsidian14 = require("obsidian");
-var import_terminus_node_bridge20 = __toESM(require_dist());
+var import_terminus_node_bridge21 = __toESM(require_dist());
 
 // src/diff/renderSplitDiff.ts
 var import_obsidian13 = require("obsidian");
-var import_terminus_node_bridge19 = __toESM(require_dist());
+var import_terminus_node_bridge20 = __toESM(require_dist());
 var EDGE = 4;
 var MIN_HIDDEN_TO_TRUNCATE = 4;
 function renderSplitDiffBody(container, app, store, change, comments, compare) {
@@ -19025,12 +19256,17 @@ function renderHunkControls(container, hunk, change, app, store, comments, lines
   }
   const resolve = async (accepted) => {
     var _a7;
-    if (!accepted && !await confirmCollisionReject(app, [(_a7 = store.get(change.id)) != null ? _a7 : change], "hunk")) return false;
+    const current = (_a7 = store.get(change.id)) != null ? _a7 : change;
+    if (!accepted && !await confirmCollisionReject(app, [current], "hunk")) return false;
+    if (accepted) {
+      const remaining = computeHunks(current.diff.oldText, current.diff.newText).length;
+      if (!await confirmCollisionHunkAccept(app, current, remaining)) return false;
+    }
     try {
       await store.resolveHunk(change.id, hunk.index, accepted);
       return true;
     } catch (err) {
-      new import_obsidian13.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge19.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian13.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} this change in ${(0, import_terminus_node_bridge20.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`);
       return false;
     }
   };
@@ -19146,7 +19382,7 @@ var DiffSplitView = class extends import_obsidian14.ItemView {
     this.commentDrafts = /* @__PURE__ */ new Map();
     this.openComments = /* @__PURE__ */ new Set();
     this.render = () => {
-      var _a7, _b, _c2, _d, _e4;
+      var _a7, _b, _c2, _d;
       const container = this.contentEl;
       container.empty();
       if (!this.changeId) {
@@ -19162,7 +19398,7 @@ var DiffSplitView = class extends import_obsidian14.ItemView {
         return;
       }
       const header = container.createDiv({ cls: "terminus-split-diff-header" });
-      header.createSpan({ cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge20.pathBasename)(change.diff.filePath) });
+      header.createSpan({ cls: "terminus-split-diff-title", text: (0, import_terminus_node_bridge21.pathBasename)(change.diff.filePath) });
       if (change.editCount > 1) {
         header.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
       }
@@ -19174,10 +19410,10 @@ var DiffSplitView = class extends import_obsidian14.ItemView {
           text: `\u26A0 ${collision} after ${first}. Rejecting goes back to how the file was before ${first}'s first edit, so it can undo their work too.`
         });
       }
-      const owner = (_c2 = change.contributors[0]) == null ? void 0 : _c2.token;
+      const owner = owningContributor(change).token;
       let comments;
       if (this.plugin.experience === "multi-agent" && owner) {
-        const recipient = (_e4 = (_d = this.plugin.findTerminalView(owner)) == null ? void 0 : _d.getDisplayText()) != null ? _e4 : change.panelLabel;
+        const recipient = (_d = (_c2 = this.plugin.findTerminalView(owner)) == null ? void 0 : _c2.getDisplayText()) != null ? _d : owningContributor(change).label;
         comments = {
           feedback: this.plugin.feedbackStore,
           token: owner,
@@ -19213,7 +19449,7 @@ var DiffSplitView = class extends import_obsidian14.ItemView {
     return (_c2 = (_b = (_a7 = this.plugin.pendingChangesStore.get(this.changeId)) == null ? void 0 : _a7.contributors[0]) == null ? void 0 : _b.token) != null ? _c2 : null;
   }
   getDisplayText() {
-    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge20.pathBasename)(this.changeId)}` : "Split Diff";
+    return this.changeId ? `Diff: ${(0, import_terminus_node_bridge21.pathBasename)(this.changeId)}` : "Split Diff";
   }
   getIcon() {
     return "diff";
@@ -19250,7 +19486,7 @@ async function openDiffSplitView(plugin, changeId) {
 
 // src/modals/ActionLogModal.ts
 var import_obsidian15 = require("obsidian");
-var import_terminus_node_bridge21 = __toESM(require_dist());
+var import_terminus_node_bridge22 = __toESM(require_dist());
 var ActionLogModal = class extends import_obsidian15.Modal {
   constructor(app, actionLog) {
     super(app);
@@ -19290,7 +19526,7 @@ var ActionLogModal = class extends import_obsidian15.Modal {
       cls: entry.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
       text: entry.accepted ? "Kept" : "Reverted"
     });
-    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge21.pathBasename)(entry.filePath) });
+    row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge22.pathBasename)(entry.filePath) });
     row.createSpan({
       cls: "terminus-pending-edit-count",
       text: `+${entry.added} -${entry.removed}${entry.editCount > 1 ? ` \xB7 ${entry.editCount} edits` : ""}`
@@ -19300,12 +19536,12 @@ var ActionLogModal = class extends import_obsidian15.Modal {
 };
 
 // src/git/gitDiff.ts
-var import_terminus_node_bridge22 = __toESM(require_dist());
+var import_terminus_node_bridge23 = __toESM(require_dist());
 async function getGitHeadContent(vaultBasePath, absoluteFilePath) {
-  const relPath = (0, import_terminus_node_bridge22.pathRelative)(vaultBasePath, absoluteFilePath);
+  const relPath = (0, import_terminus_node_bridge23.pathRelative)(vaultBasePath, absoluteFilePath);
   if (relPath.startsWith("..")) return null;
   try {
-    const { stdout } = await (0, import_terminus_node_bridge22.execFileText)("git", ["show", `HEAD:${relPath}`], {
+    const { stdout } = await (0, import_terminus_node_bridge23.execFileText)("git", ["show", `HEAD:${relPath}`], {
       cwd: vaultBasePath,
       maxBuffer: 10 * 1024 * 1024
     });
@@ -19385,7 +19621,7 @@ function renderChangeRow(ctx, list, change, stats, opts = {}) {
   const chevron = summary.createSpan({ cls: "terminus-pending-chevron", text: "\u25B8" });
   const info = summary.createDiv({ cls: "terminus-pending-info" });
   const nameRow = info.createDiv({ cls: "terminus-pending-filename-row" });
-  nameRow.createSpan({ cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge23.pathBasename)(change.diff.filePath) });
+  nameRow.createSpan({ cls: "terminus-pending-filename", text: (0, import_terminus_node_bridge24.pathBasename)(change.diff.filePath) });
   const editCountBadge = () => {
     if (change.editCount > 1) {
       nameRow.createSpan({ cls: "terminus-pending-edit-count", text: `${change.editCount} edits` });
@@ -19396,8 +19632,8 @@ function renderChangeRow(ctx, list, change, stats, opts = {}) {
   statsEl.createSpan({ cls: "terminus-diff-stat-add", text: `+${stats.added}` });
   statsEl.createSpan({ cls: "terminus-diff-stat-remove", text: `-${stats.removed}` });
   if (!inbox) editCountBadge();
-  const vaultName = (0, import_terminus_node_bridge23.pathBasename)(ctx.plugin.getVaultBasePath());
-  const relativePath = (0, import_terminus_node_bridge23.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
+  const vaultName = (0, import_terminus_node_bridge24.pathBasename)(ctx.plugin.getVaultBasePath());
+  const relativePath = (0, import_terminus_node_bridge24.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
   if (!inbox) {
     info.createDiv({ cls: "terminus-pending-path", text: `${vaultName}/${relativePath}` });
   } else {
@@ -19420,8 +19656,8 @@ function renderChangeRow(ctx, list, change, stats, opts = {}) {
     el2.createSpan({ text: `Also edited by ${opts.alsoEditedBy.join(", ")}` });
   }
   if (!inbox) {
-    const collision = collisionLabel(change);
-    if (collision) warning("terminus-collision-warning", collision);
+    const others = otherContributorsLabel(change);
+    if (others) warning("terminus-collision-warning", others);
   }
   if (change.brokenBacklinks.length > 0) {
     const count = change.brokenBacklinks.length;
@@ -19435,7 +19671,7 @@ function renderChangeRow(ctx, list, change, stats, opts = {}) {
     if (!accepted && !await confirmCollisionReject(ctx.plugin.app, [change])) return;
     ctx.plugin.pendingChangesStore.resolveItem(change.id, accepted).catch((err) => {
       new import_obsidian17.Notice(
-        `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge23.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
+        `Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge24.pathBasename)(change.diff.filePath)}: ${errorMessage2(err)}`
       );
     });
   };
@@ -19507,7 +19743,7 @@ function renderRowBody(ctx, body, change) {
     const list = warning.createEl("ul");
     for (const link of change.brokenBacklinks) {
       list.createEl("li", {
-        text: `${(0, import_terminus_node_bridge23.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
+        text: `${(0, import_terminus_node_bridge24.pathBasename)(link.sourceFile)} \u2192 #${link.isBlock ? "^" : ""}${link.fragment}`
       });
     }
   }
@@ -19535,7 +19771,7 @@ function renderRowBody(ctx, body, change) {
     activate(1);
     if (previewRendered) return;
     previewRendered = true;
-    const relPath = (0, import_terminus_node_bridge23.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
+    const relPath = (0, import_terminus_node_bridge24.pathRelative)(ctx.plugin.getVaultBasePath(), change.diff.filePath);
     void import_obsidian17.MarkdownRenderer.render(ctx.plugin.app, change.diff.newText, previewContainer, relPath, ctx.component);
   });
   gitBtn.addEventListener("click", () => {
@@ -19590,7 +19826,7 @@ function renderHistoryRow(ctx, list, item) {
     cls: item.accepted ? "terminus-diff-stat-add" : "terminus-diff-stat-remove",
     text: item.accepted ? "Kept" : "Reverted"
   });
-  row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge23.pathBasename)(item.diff.filePath) });
+  row.createSpan({ cls: "terminus-history-filename", text: (0, import_terminus_node_bridge24.pathBasename)(item.diff.filePath) });
   row.createEl("button", { text: "Undo", cls: "terminus-btn-ghost-accent" }).addEventListener("click", () => {
     ctx.plugin.pendingChangesStore.undo(item.historyId).catch((err) => {
       new import_obsidian17.Notice(`Terminus: failed to undo: ${errorMessage2(err)}`);
@@ -19601,7 +19837,7 @@ function renderShellChangeRows(ctx, container, changes) {
   const list = container.createDiv({ cls: "terminus-inbox-shell-list" });
   const base = ctx.plugin.getVaultBasePath();
   for (const change of changes) {
-    const relative = (0, import_terminus_node_bridge23.pathRelative)(base, change.filePath);
+    const relative = (0, import_terminus_node_bridge24.pathRelative)(base, change.filePath);
     const path = relative.startsWith("..") ? change.filePath : relative;
     const row = list.createDiv({ cls: "terminus-inbox-shell-row" });
     row.createSpan({ cls: "terminus-inbox-shell-path", text: path, attr: { title: change.filePath } });
@@ -19730,9 +19966,10 @@ var PendingChangesView = class extends import_obsidian18.ItemView {
     }
     const groups = /* @__PURE__ */ new Map();
     for (const change of changes) {
-      const group = (_a7 = groups.get(change.panelLabel)) != null ? _a7 : [];
-      group.push(change);
-      groups.set(change.panelLabel, group);
+      const owner = owningContributor(change);
+      const group = (_a7 = groups.get(owner.token)) != null ? _a7 : { token: owner.token, label: owner.label, color: owner.color, changes: [] };
+      group.changes.push(change);
+      groups.set(owner.token, group);
     }
     const headerBar = header.createDiv({ cls: "terminus-pending-header-bar" });
     const headerText = headerBar.createDiv();
@@ -19753,12 +19990,12 @@ var PendingChangesView = class extends import_obsidian18.ItemView {
       () => void runBulkAction(this.rows, true, changes, () => this.plugin.pendingChangesStore.resolveAll(true))
     );
     const groupsContainer = container.createDiv({ cls: "terminus-pending-groups" });
-    for (const [panelLabel, groupChanges] of groups) {
-      this.renderTerminalGroup(groupsContainer, panelLabel, groupChanges, statsById);
+    for (const group of groups.values()) {
+      this.renderTerminalGroup(groupsContainer, group, statsById);
     }
   }
-  renderTerminalGroup(container, panelLabel, changes, statsById) {
-    var _a7, _b, _c2;
+  renderTerminalGroup(container, { token, label, color, changes }, statsById) {
+    var _a7, _b;
     let groupAdded = 0;
     let groupRemoved = 0;
     for (const change of changes) {
@@ -19767,16 +20004,15 @@ var PendingChangesView = class extends import_obsidian18.ItemView {
       groupRemoved += stats.removed;
     }
     const group = container.createDiv({ cls: "terminus-group" });
-    const panelColor = (_b = changes[0]) == null ? void 0 : _b.panelColor;
-    if (panelColor) {
+    if (color) {
       group.addClass("terminus-group-colored");
-      group.style.setProperty("--terminus-group-color", panelColor);
+      group.style.setProperty("--terminus-group-color", color);
     }
     const groupHeader = group.createDiv({ cls: "terminus-group-header" });
     const chevron = groupHeader.createSpan({ cls: "terminus-group-chevron", text: "\u25BE" });
     const groupText = groupHeader.createDiv({ cls: "terminus-group-text" });
     const groupNameRow = groupText.createDiv({ cls: "terminus-group-name-row" });
-    groupNameRow.createSpan({ text: panelLabel, cls: "terminus-group-title" });
+    groupNameRow.createSpan({ text: label, cls: "terminus-group-title" });
     groupNameRow.createSpan({ cls: "terminus-group-stat-add", text: `+${groupAdded}` });
     groupNameRow.createSpan({ cls: "terminus-group-stat-remove", text: `-${groupRemoved}` });
     groupText.createDiv({
@@ -19784,32 +20020,32 @@ var PendingChangesView = class extends import_obsidian18.ItemView {
       text: `${changes.length} ${changes.length === 1 ? "file" : "files"}`
     });
     const groupBulk = groupHeader.createDiv({ cls: "terminus-group-bulk-actions" });
-    const inGroup = (change) => change.panelLabel === panelLabel;
+    const inGroup = (change) => owningContributor(change).token === token;
     groupBulk.createEl("button", { text: "Reject all", cls: "terminus-btn-ghost" }).addEventListener(
       "click",
       (e) => {
         e.stopPropagation();
-        void runBulkAction(this.rows, false, changes, () => this.plugin.pendingChangesStore.resolveAll(false, inGroup), panelLabel);
+        void runBulkAction(this.rows, false, changes, () => this.plugin.pendingChangesStore.resolveAll(false, inGroup), label);
       }
     );
     groupBulk.createEl("button", { text: "Keep all", cls: "terminus-btn-ghost-accent" }).addEventListener(
       "click",
       (e) => {
         e.stopPropagation();
-        void runBulkAction(this.rows, true, changes, () => this.plugin.pendingChangesStore.resolveAll(true, inGroup), panelLabel);
+        void runBulkAction(this.rows, true, changes, () => this.plugin.pendingChangesStore.resolveAll(true, inGroup), label);
       }
     );
     const list = group.createDiv({ cls: "terminus-pending-list" });
     for (const change of changes) {
-      renderChangeRow(this.rows, list, change, (_c2 = statsById.get(change.id)) != null ? _c2 : { added: 0, removed: 0 });
+      renderChangeRow(this.rows, list, change, (_b = statsById.get(change.id)) != null ? _b : { added: 0, removed: 0 });
     }
-    const collapsed = this.ui.collapsedGroups.has(panelLabel);
+    const collapsed = this.ui.collapsedGroups.has(token);
     list.toggle(!collapsed);
     chevron.setText(collapsed ? "\u25B8" : "\u25BE");
     groupHeader.addEventListener("click", () => {
-      if (this.ui.collapsedGroups.has(panelLabel)) this.ui.collapsedGroups.delete(panelLabel);
-      else this.ui.collapsedGroups.add(panelLabel);
-      const nowCollapsed = this.ui.collapsedGroups.has(panelLabel);
+      if (this.ui.collapsedGroups.has(token)) this.ui.collapsedGroups.delete(token);
+      else this.ui.collapsedGroups.add(token);
+      const nowCollapsed = this.ui.collapsedGroups.has(token);
       list.toggle(!nowCollapsed);
       chevron.setText(nowCollapsed ? "\u25B8" : "\u25BE");
     });
@@ -19818,7 +20054,7 @@ var PendingChangesView = class extends import_obsidian18.ItemView {
 
 // src/views/AgentInboxView.ts
 var import_obsidian19 = require("obsidian");
-var import_terminus_node_bridge25 = __toESM(require_dist());
+var import_terminus_node_bridge26 = __toESM(require_dist());
 
 // src/state/AgentSessionStore.ts
 var MAX_SUBAGENTS = 50;
@@ -20219,7 +20455,7 @@ function truncateTo(text, max) {
 }
 
 // src/claude/transcriptUsage.ts
-var import_terminus_node_bridge24 = __toESM(require_dist());
+var import_terminus_node_bridge25 = __toESM(require_dist());
 var MILLION = 1e6;
 var LONG_PROMPT_TOKENS = 1e5;
 var US_ONLY_MULTIPLIER = 1.1;
@@ -20308,7 +20544,7 @@ var TranscriptUsageReader = class {
     this.pending.delete(path);
   }
   async readNow(path, kind) {
-    const text = await (0, import_terminus_node_bridge24.readTextFileIfExists)(path);
+    const text = await (0, import_terminus_node_bridge25.readTextFileIfExists)(path);
     if (text === null) {
       this.files.delete(path);
       return null;
@@ -20389,26 +20625,26 @@ function summarize(state) {
 }
 function subagentTranscriptPath(leadTranscriptPath, agentId) {
   if (!leadTranscriptPath.endsWith(".jsonl")) return null;
-  const session = (0, import_terminus_node_bridge24.pathBasename)(leadTranscriptPath, ".jsonl");
-  return (0, import_terminus_node_bridge24.pathJoin)((0, import_terminus_node_bridge24.pathDirname)(leadTranscriptPath), session, "subagents", `agent-${agentId}.jsonl`);
+  const session = (0, import_terminus_node_bridge25.pathBasename)(leadTranscriptPath, ".jsonl");
+  return (0, import_terminus_node_bridge25.pathJoin)((0, import_terminus_node_bridge25.pathDirname)(leadTranscriptPath), session, "subagents", `agent-${agentId}.jsonl`);
 }
 
 // src/state/inboxModel.ts
 var VISIBLE_FINISHED_SUBAGENTS = 10;
 function buildInbox(sessions, changes, feedbackTokens = /* @__PURE__ */ new Set()) {
-  var _a7, _b, _c2, _d, _e4;
+  var _a7, _b, _c2, _d;
   const changesByToken = /* @__PURE__ */ new Map();
   for (const change of changes) {
-    const owner = (_a7 = change.contributors[change.contributors.length - 1]) == null ? void 0 : _a7.token;
+    const owner = owningContributor(change).token;
     if (!owner) continue;
-    const list = (_b = changesByToken.get(owner)) != null ? _b : [];
+    const list = (_a7 = changesByToken.get(owner)) != null ? _a7 : [];
     list.push(change);
     changesByToken.set(owner, list);
   }
   const sessionTokens = new Set(sessions.map((s15) => s15.token));
   const cards = [];
   for (const session of sessions) {
-    const cardChanges = (_c2 = changesByToken.get(session.token)) != null ? _c2 : [];
+    const cardChanges = (_b = changesByToken.get(session.token)) != null ? _b : [];
     if (!session.running && cardChanges.length === 0 && !feedbackTokens.has(session.token)) continue;
     cards.push(buildCard(session.token, session, cardChanges));
   }
@@ -20420,8 +20656,8 @@ function buildInbox(sessions, changes, feedbackTokens = /* @__PURE__ */ new Set(
   }
   const inbox = { needsAttention: [], working: [], finished: [] };
   for (const card of cards) {
-    if (!card.ended && ((_d = card.session) == null ? void 0 : _d.status) === "needs-attention") inbox.needsAttention.push(card);
-    else if (!card.ended && ((_e4 = card.session) == null ? void 0 : _e4.status) === "working") inbox.working.push(card);
+    if (!card.ended && ((_c2 = card.session) == null ? void 0 : _c2.status) === "needs-attention") inbox.needsAttention.push(card);
+    else if (!card.ended && ((_d = card.session) == null ? void 0 : _d.status) === "working") inbox.working.push(card);
     else inbox.finished.push(card);
   }
   inbox.finished.sort((a, b3) => finishedRank(a) - finishedRank(b3));
@@ -20568,6 +20804,10 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     this.stuckFrame = null;
     /** The queued message being edited in place, if any. */
     this.editingQueueId = null;
+    /** Every pending change, as of the current render: the row lookups that
+     *  run per card read this instead of the store, so one render is one
+     *  read. Only valid during a render. */
+    this.allChanges = [];
     /** Whether the header's overlap popover is showing. Lives on the view,
      *  not in InboxUiState, because it is dismissed by the next click and
      *  so never needs to survive a view being closed and reopened. */
@@ -20734,12 +20974,9 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     const scrollTop = container.scrollTop;
     container.empty();
     container.addClass("terminus-pending-view", "terminus-inbox-view");
-    const full = buildInbox(
-      this.plugin.agentSessionStore.list(),
-      this.plugin.pendingChangesStore.list(),
-      this.plugin.feedbackStore.tokens()
-    );
     const allChanges = this.plugin.pendingChangesStore.list();
+    this.allChanges = allChanges;
+    const full = buildInbox(this.plugin.agentSessionStore.list(), allChanges, this.plugin.feedbackStore.tokens());
     for (const card of [...full.needsAttention, ...full.working]) this.ui.dismissed.delete(card.token);
     const scope = this.selection();
     const split = this.ui.showAll ? { scoped: full, elsewhere: [] } : scopeInbox(full, scope.inScope);
@@ -20971,7 +21208,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     var _a7, _b;
     const row = host.createEl("button", { cls: "terminus-inbox-overlap-row" });
     const name = row.createDiv({ cls: "terminus-inbox-overlap-name" });
-    const relative = (0, import_terminus_node_bridge25.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
+    const relative = (0, import_terminus_node_bridge26.pathRelative)(this.plugin.getVaultBasePath(), change.diff.filePath);
     const parts = relative.split("/");
     name.createSpan({ cls: "terminus-inbox-overlap-file", text: (_a7 = parts[parts.length - 1]) != null ? _a7 : relative });
     const folder = parts.slice(0, -1).join("/");
@@ -21013,7 +21250,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
    * terminal's work, which is the one consequence the card cannot show.
    */
   renderTurnOverlapNote(host, token, changes) {
-    const owned = changesStartedElsewhere(changes, token);
+    const owned = changesStartedByAnother(changes, token);
     if (owned.length === 0) return;
     const names = [...new Set(owned.map((c) => {
       var _a7, _b;
@@ -21029,23 +21266,19 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     });
   }
   /**
-   * On the card of a session whose overlapping edits are filed elsewhere.
-   * buildInbox puts a change on the card of the terminal that edited it
-   * FIRST, so a session that rewrote someone else's file never lists it,
-   * and a card with nothing else pending can be dismissed while that work
-   * waits. This is the only place that says so.
+   * On the card of a session whose overlapping edits are filed on another
+   * card: a later terminal edited the same files, so buildInbox put the
+   * rows there (owningContributor) and this card never lists them. Without
+   * this line the session's own edits would simply be missing from it. The
+   * card also stays undismissible while they are pending (see dismissible),
+   * so the pointer cannot be cleared away from under them.
    */
-  renderOwnedElsewhere(host, card, allChanges) {
-    const elsewhere = changesOwnedElsewhere(allChanges, card.token);
+  renderOnAnotherCard(host, card) {
+    const elsewhere = changesOnAnotherCard(this.allChanges, card.token);
     if (elsewhere.length === 0) return;
-    const owners = [
-      ...new Set(elsewhere.map((c) => {
-        var _a7, _b;
-        return (_b = (_a7 = c.contributors[c.contributors.length - 1]) == null ? void 0 : _a7.label) != null ? _b : "another session";
-      }))
-    ];
+    const owners = [...new Set(elsewhere.map((c) => owningContributor(c).label))];
     const owner = owners.length === 1 ? owners[0] : "other sessions";
-    const line = host.createDiv({ cls: "terminus-inbox-overlap-elsewhere" });
+    const line = host.createDiv({ cls: "terminus-inbox-overlap-moved" });
     (0, import_obsidian19.setIcon)(line.createSpan({ cls: "terminus-meta-icon" }), "copy");
     const text = line.createSpan();
     text.createSpan({ cls: "terminus-inbox-overlap-strong", text: fileCount(elsewhere.length) });
@@ -21151,9 +21384,13 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     return heading;
   }
   /** A finished card can be dismissed once nothing on it is waiting on
-   *  you: no pending changes (Keep or Reject them) and no queued comments. */
+   *  you: no pending changes (Keep or Reject them), no queued comments, and
+   *  none of its edits sitting on another session's card. That last one has
+   *  no rows of its own to keep the card here (a later terminal overwrote
+   *  the files, so they are filed there), and dismissing it would take away
+   *  the one line saying where this session's work went. */
   dismissible(card) {
-    return card.changes.length === 0 && this.plugin.feedbackStore.listFor(card.token).length === 0;
+    return card.changes.length === 0 && this.plugin.feedbackStore.listFor(card.token).length === 0 && changesOnAnotherCard(this.allChanges, card.token).length === 0;
   }
   dismiss(cards) {
     this.ui.userAction();
@@ -21242,7 +21479,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
       }
     }
     const workEl = el2.createDiv({ cls: "terminus-inbox-card-body" });
-    this.renderOwnedElsewhere(workEl, card, this.plugin.pendingChangesStore.list());
+    this.renderOnAnotherCard(workEl, card);
     if (card.turns.length > 1) {
       this.renderTurns(workEl, card);
       this.renderQuietAgents(workEl, card);
@@ -21595,7 +21832,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     for (const item of items) {
       const line = list.createDiv({ cls: "terminus-inbox-feedback-item" });
       const where = (_a7 = item.newLines) != null ? _a7 : item.oldLines;
-      const place = `${(0, import_terminus_node_bridge25.pathRelative)(base, item.filePath)}${where ? `:${where.start}` : ""}`;
+      const place = `${(0, import_terminus_node_bridge26.pathRelative)(base, item.filePath)}${where ? `:${where.start}` : ""}`;
       line.createSpan({ cls: "terminus-inbox-feedback-place", text: place });
       if (item.rejected) line.createSpan({ cls: "terminus-diff-stat-remove", text: "rejected" });
       line.createSpan({ cls: "terminus-inbox-feedback-text", text: item.comment, attr: { title: item.comment } });
@@ -21627,7 +21864,7 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     if (!session) return null;
     if (!card.ended && session.status === "working") {
       if (!session.currentFile) return "Working\u2026";
-      return `Editing ${(0, import_terminus_node_bridge25.pathRelative)(this.plugin.getVaultBasePath(), session.currentFile)}\u2026`;
+      return `Editing ${(0, import_terminus_node_bridge26.pathRelative)(this.plugin.getVaultBasePath(), session.currentFile)}\u2026`;
     }
     return session.lastMessage === null ? null : plainPreview(session.lastMessage);
   }
@@ -21952,7 +22189,7 @@ Time between turns, while Claude waited on you, isn't counted.`
     const base = this.plugin.getVaultBasePath();
     const byFolder = /* @__PURE__ */ new Map();
     for (const change of changes) {
-      const relative = (0, import_terminus_node_bridge25.pathRelative)(base, change.diff.filePath);
+      const relative = (0, import_terminus_node_bridge26.pathRelative)(base, change.diff.filePath);
       const path = relative.startsWith("..") ? change.diff.filePath : relative;
       const folder = path.split("/").slice(0, -1).join("/");
       const list = (_a7 = byFolder.get(folder)) != null ? _a7 : [];
@@ -22114,7 +22351,7 @@ function formatClock(at3) {
 
 // src/views/TerminusSidebarView.ts
 var import_obsidian21 = require("obsidian");
-var import_terminus_node_bridge26 = __toESM(require_dist());
+var import_terminus_node_bridge27 = __toESM(require_dist());
 
 // src/pluginVersion.ts
 var import_obsidian20 = require("obsidian");
@@ -22849,7 +23086,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     const lines = [];
     const base = this.plugin.getVaultBasePath();
     if (session.status === "working") {
-      lines.push(session.currentFile ? `Editing ${(0, import_terminus_node_bridge26.pathRelative)(base, session.currentFile)}\u2026` : "Working\u2026");
+      lines.push(session.currentFile ? `Editing ${(0, import_terminus_node_bridge27.pathRelative)(base, session.currentFile)}\u2026` : "Working\u2026");
     } else if (session.status === "needs-attention" && session.needsMessage) {
       lines.push(session.needsMessage);
     } else if (session.lastMessage) {
@@ -22862,7 +23099,7 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     });
     if (files.length > 0) {
       lines.push("", `${files.length} to review:`);
-      for (const change of files.slice(0, 5)) lines.push(`  ${(0, import_terminus_node_bridge26.pathRelative)(base, change.diff.filePath)}`);
+      for (const change of files.slice(0, 5)) lines.push(`  ${(0, import_terminus_node_bridge27.pathRelative)(base, change.diff.filePath)}`);
       if (files.length > 5) lines.push(`  and ${files.length - 5} more`);
     }
     return lines.length > 0 ? lines.join("\n") : null;
@@ -22873,9 +23110,9 @@ var TerminusSidebarView = class extends import_obsidian21.ItemView {
     return session.status;
   }
   folderLabel(folder) {
-    if (!folder) return (0, import_terminus_node_bridge26.pathBasename)(this.plugin.getVaultBasePath());
-    const relative = (0, import_terminus_node_bridge26.pathRelative)(this.plugin.getVaultBasePath(), folder);
-    return relative.startsWith("..") ? folder : relative || (0, import_terminus_node_bridge26.pathBasename)(folder);
+    if (!folder) return (0, import_terminus_node_bridge27.pathBasename)(this.plugin.getVaultBasePath());
+    const relative = (0, import_terminus_node_bridge27.pathRelative)(this.plugin.getVaultBasePath(), folder);
+    return relative.startsWith("..") ? folder : relative || (0, import_terminus_node_bridge27.pathBasename)(folder);
   }
 };
 var BRANCH_TTL_MS = 6e4;
@@ -23597,207 +23834,6 @@ var ResumeQueue = class {
   dispose() {
     for (const timer of this.timers) window.clearTimeout(timer);
     this.timers.clear();
-  }
-};
-
-// src/state/PendingChangesStore.ts
-var import_terminus_node_bridge27 = __toESM(require_dist());
-var MAX_HISTORY = 20;
-var PendingChangesStore = class extends TypedEmitter {
-  constructor() {
-    super(...arguments);
-    this.entries = /* @__PURE__ */ new Map();
-    this.history = [];
-    this.historyIdCounter = 0;
-  }
-  /**
-   * Multiple edits to the same file within one review window merge into a
-   * single row: the FIRST edit's oldText/revertText is preserved (the true
-   * pre-turn snapshot) while newText/payload advance to the latest edit.
-   * Without this, rejecting an earlier edit after a later one landed would
-   * silently discard the later edit too, with no way to reason about it.
-   *
-   * The same holds when the later edit comes from a different terminal: its
-   * work lands in the first terminal's row, so it's added to `contributors`
-   * and the UI warns before a reject undoes it.
-   */
-  recordChange(input) {
-    var _a7, _b, _c2, _d, _e4;
-    const key = input.diff.filePath;
-    const existing = this.entries.get(key);
-    const agent = { token: input.token, agentId: (_b = (_a7 = input.agent) == null ? void 0 : _a7.id) != null ? _b : null, agentType: (_d = (_c2 = input.agent) == null ? void 0 : _c2.type) != null ? _d : null };
-    const change = existing ? {
-      ...existing.change,
-      payload: input.payload,
-      // The baseline is the first edit's: what the file was before any
-      // of them, including whether it existed at all. A later edit sees
-      // the file the first one created, so taking its existedBefore
-      // made rejecting a created-then-edited file leave it empty on
-      // disk instead of deleting it.
-      diff: {
-        ...input.diff,
-        oldText: existing.change.diff.oldText,
-        revertText: existing.change.diff.revertText,
-        existedBefore: existing.change.diff.existedBefore
-      },
-      editCount: existing.change.editCount + 1,
-      contributors: existing.change.contributors.some((c) => c.token === input.token) ? existing.change.contributors : [
-        ...existing.change.contributors,
-        // input.diff.oldText is read from disk at PreToolUse, so at
-        // this moment it IS the previous terminal's result.
-        { token: input.token, label: input.panelLabel, color: input.panelColor, before: input.diff.oldText }
-      ],
-      agents: existing.change.agents.some((a) => a.token === agent.token && a.agentId === agent.agentId) ? existing.change.agents : [...existing.change.agents, agent],
-      promptIds: input.promptId && !existing.change.promptIds.includes(input.promptId) ? [...existing.change.promptIds, input.promptId] : existing.change.promptIds
-    } : {
-      id: key,
-      payload: input.payload,
-      diff: input.diff,
-      panelLabel: input.panelLabel,
-      panelColor: input.panelColor,
-      createdAt: Date.now(),
-      editCount: 1,
-      contributors: [{ token: input.token, label: input.panelLabel, color: input.panelColor }],
-      agents: [agent],
-      promptIds: input.promptId ? [input.promptId] : [],
-      brokenBacklinks: []
-    };
-    if (change.diff.oldText === change.diff.newText) {
-      if (!existing) return;
-      this.entries.delete(key);
-      (_e4 = existing.onExternallyResolved) == null ? void 0 : _e4.call(existing, true);
-      this.emit("change");
-      return;
-    }
-    this.entries.set(key, { change, onExternallyResolved: existing == null ? void 0 : existing.onExternallyResolved });
-    this.emit("change");
-    this.emit("recorded", change);
-  }
-  /** Set separately from recordChange since computing it needs the Obsidian
-   *  App instance (see backlinks/breakage.ts) -- a no-op if the change was
-   *  already resolved before this resolves (e.g. the user accepted/rejected
-   *  before the async backlink scan finished). */
-  setBrokenBacklinks(id, brokenBacklinks) {
-    const entry = this.entries.get(id);
-    if (!entry) return;
-    entry.change = { ...entry.change, brokenBacklinks };
-    this.emit("change");
-  }
-  list() {
-    return [...this.entries.values()].map((e) => e.change).sort((a, b3) => a.createdAt - b3.createdAt);
-  }
-  get(id) {
-    var _a7;
-    return (_a7 = this.entries.get(id)) == null ? void 0 : _a7.change;
-  }
-  listHistory() {
-    return [...this.history];
-  }
-  registerInlineOverlay(id, onExternallyResolved) {
-    const entry = this.entries.get(id);
-    if (entry) entry.onExternallyResolved = onExternallyResolved;
-  }
-  unregisterInlineOverlay(id) {
-    const entry = this.entries.get(id);
-    if (entry) entry.onExternallyResolved = void 0;
-  }
-  async resolveItem(id, accepted) {
-    var _a7;
-    const entry = this.entries.get(id);
-    if (!entry) return;
-    this.entries.delete(id);
-    if (!accepted) {
-      await this.applyOldState(entry.change.diff);
-    }
-    (_a7 = entry.onExternallyResolved) == null ? void 0 : _a7.call(entry, accepted);
-    const resolved = this.pushHistory(entry.change, accepted);
-    this.emit("change");
-    this.emit("resolved", resolved);
-  }
-  /** `filter`, when given, scopes this to a subset (e.g. one terminal's
-   *  changes) -- omit it to resolve everything, across all terminals. */
-  async resolveAll(accepted, filter) {
-    const ids = [...this.entries.values()].filter((e) => !filter || filter(e.change)).map((e) => e.change.id);
-    for (const id of ids) {
-      await this.resolveItem(id, accepted);
-    }
-  }
-  /**
-   * Per-hunk accept/reject, used by the Split Diff view. `hunkIndex` must
-   * come from computeHunks(entry.diff.oldText, entry.diff.newText) computed
-   * fresh against the CURRENT diff -- resolving a hunk mutates oldText/
-   * newText (splicing the chosen text into both, at that hunk's spot),
-   * which shifts every later hunk's offsets, so indices from a previous
-   * render are not valid after any resolveHunk call.
-   *
-   * Not supported for NotebookEdit: its oldText/newText are a display-only
-   * approximation (see buildDiff in server/diff.ts), not the real file
-   * content, so splicing them and writing the result to disk would corrupt
-   * the notebook. The Split Diff entry point is hidden for those changes;
-   * this is a second line of defense.
-   */
-  async resolveHunk(id, hunkIndex, accepted) {
-    var _a7;
-    const entry = this.entries.get(id);
-    if (!entry) return;
-    if (entry.change.payload.tool_name === "NotebookEdit") return;
-    const { diff } = entry.change;
-    const hunk = computeHunks(diff.oldText, diff.newText)[hunkIndex];
-    if (!hunk) return;
-    const chosen = accepted ? hunk.newValue : hunk.oldValue;
-    const newOldText = diff.oldText.slice(0, hunk.oldStart) + chosen + diff.oldText.slice(hunk.oldEnd);
-    const newNewText = diff.newText.slice(0, hunk.newStart) + chosen + diff.newText.slice(hunk.newEnd);
-    if (!diff.existedBefore && newOldText === "") {
-      await (0, import_terminus_node_bridge27.deleteFileIfExists)(diff.filePath);
-    } else {
-      await (0, import_terminus_node_bridge27.writeTextFile)(diff.filePath, newOldText);
-    }
-    entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
-    if (newOldText === newNewText) {
-      this.entries.delete(id);
-      (_a7 = entry.onExternallyResolved) == null ? void 0 : _a7.call(entry, true);
-      const resolved = this.pushHistory(entry.change, true);
-      this.emit("change");
-      this.emit("resolved", resolved);
-      return;
-    }
-    this.emit("change");
-  }
-  /** Reverses a past Accept (restores pre-edit content) or Reject (re-applies
-   *  the change that was rejected). Removes the entry from history. */
-  async undo(historyId) {
-    const idx = this.history.findIndex((h2) => h2.historyId === historyId);
-    if (idx === -1) return;
-    const [item] = this.history.splice(idx, 1);
-    if (!item) return;
-    if (item.accepted) {
-      await this.applyOldState(item.diff);
-    } else {
-      await this.applyNewState(item.diff);
-    }
-    this.emit("change");
-    this.emit("resolved", { ...item, accepted: !item.accepted, resolvedAt: Date.now() });
-  }
-  pushHistory(change, accepted) {
-    const resolved = {
-      ...change,
-      historyId: ++this.historyIdCounter,
-      accepted,
-      resolvedAt: Date.now()
-    };
-    this.history.unshift(resolved);
-    if (this.history.length > MAX_HISTORY) this.history.pop();
-    return resolved;
-  }
-  async applyOldState(diff) {
-    if (!diff.existedBefore) {
-      await (0, import_terminus_node_bridge27.deleteFileIfExists)(diff.filePath);
-      return;
-    }
-    await (0, import_terminus_node_bridge27.writeTextFile)(diff.filePath, diff.revertText);
-  }
-  async applyNewState(diff) {
-    await (0, import_terminus_node_bridge27.writeTextFile)(diff.filePath, diff.newText);
   }
 };
 
@@ -24641,7 +24677,8 @@ var InboxUiState = class {
 // src/state/ClassicUiState.ts
 var ClassicUiState = class {
   constructor() {
-    /** Terminal groups folded to their header, by panel label. */
+    /** Terminal groups folded to their header, by the owning terminal's hook
+     *  token (see owningContributor), which is unique where its label is not. */
     this.collapsedGroups = /* @__PURE__ */ new Set();
     /** Whether the "changed without a snapshot" list is unfolded. Folded by
      *  default: it is the footnote to the review list, not the list. */

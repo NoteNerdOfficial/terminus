@@ -6,7 +6,7 @@ import { openChangedFile, openFileAtPath } from "../editor/openWithDiff";
 import { openDiffSplitView } from "./DiffSplitView";
 import { ActionLogModal } from "../modals/ActionLogModal";
 import { ConfirmModal } from "../modals/ConfirmModal";
-import { collisionLabel, confirmCollisionReject, hasCollision } from "../modals/collisions";
+import { confirmCollisionReject, hasCollision, otherContributorsLabel } from "../modals/collisions";
 import { getGitHeadContent } from "../git/gitDiff";
 import { describeStatus } from "../git/gitStatus";
 import { makeActivatable } from "./uiHelpers";
@@ -132,15 +132,15 @@ export function renderChangeRow(
     setIcon(el.createSpan({ cls: "terminus-meta-icon" }), "users");
     el.createSpan({ text: `Also edited by ${opts.alsoEditedBy.join(", ")}` });
   }
-  // Only outside the inbox. collisionLabel names contributors.slice(1),
-  // the terminals that edited after the first -- but the inbox files a row
-  // on the card of the terminal that edited it LAST (buildInbox), so here
-  // that label names the card's own session back at itself ("Also edited by
-  // Pricing copy", on Pricing copy's card). The inbox says it from the
-  // right side instead, once per turn, in renderTurnOverlapNote.
+  // Only outside the inbox. Classic's terminal group and the inbox's card
+  // both file a row under the terminal that edited it LAST
+  // (owningContributor), so this names the OTHER contributors: the sessions
+  // whose work the row also carries, which is what the group it sits in
+  // does not already say. The inbox says the same thing from the right
+  // side instead, once per turn, in renderTurnOverlapNote.
   if (!inbox) {
-    const collision = collisionLabel(change);
-    if (collision) warning("terminus-collision-warning", collision);
+    const others = otherContributorsLabel(change);
+    if (others) warning("terminus-collision-warning", others);
   }
   if (change.brokenBacklinks.length > 0) {
     const count = change.brokenBacklinks.length;

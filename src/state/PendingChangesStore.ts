@@ -22,7 +22,12 @@ export interface ChangeContributor {
    *
    *  Carries buildDiff's caveat for NotebookEdit, whose oldText is a
    *  display-only approximation; the Split Diff entry point is hidden for
-   *  those changes, so it is never shown. */
+   *  those changes, so it is never shown.
+   *
+   *  A whole extra copy of the file, kept only while the row is pending and
+   *  only for a file more than one terminal edited, which is in line with
+   *  the three copies (oldText, newText, revertText) every row already
+   *  holds. resolveHunk drops it: see the comment there. */
   before?: string;
 }
 
@@ -65,6 +70,26 @@ export interface PendingChange {
    *  Obsidian App instance, which this store deliberately doesn't depend
    *  on -- keeps this class's core logic plain and independently testable). */
   brokenBacklinks: BrokenBacklink[];
+}
+
+/**
+ * The terminal a row is filed under: the one that edited the file LAST,
+ * whose version the file on disk now holds and whose work the row's diff
+ * shows. Classic's terminal groups and the Agent inbox's cards both file by
+ * this, so a file two terminals edited sits in the same place whichever
+ * experience you review it in.
+ *
+ * panelLabel/panelColor are the FIRST contributor's, so they are only the
+ * fallback here, for a row somehow recorded without contributors at all.
+ */
+export function owningContributor(change: PendingChange): ChangeContributor {
+  return (
+    change.contributors[change.contributors.length - 1] ?? {
+      token: "",
+      label: change.panelLabel,
+      color: change.panelColor,
+    }
+  );
 }
 
 export interface ResolvedChange extends PendingChange {
@@ -303,7 +328,17 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
       await writeTextFile(diff.filePath, newOldText);
     }
 
-    entry.change = { ...entry.change, diff: { ...diff, oldText: newOldText, newText: newNewText } };
+    entry.change = {
+      ...entry.change,
+      diff: { ...diff, oldText: newOldText, newText: newNewText },
+      // ChangeContributor.before is a whole-file snapshot taken against the
+      // row's original baseline. Splicing a hunk rewrites that baseline, so
+      // the snapshot no longer lines up with either side: it would put a
+      // pre-review copy of the file opposite a partly resolved one in Split
+      // Diff's left column, and read as a baseline you could still act on.
+      // Dropping it leaves only the Original, which is always in step.
+      contributors: entry.change.contributors.map((c) => ({ ...c, before: undefined })),
+    };
 
     if (newOldText === newNewText) {
       // Every hunk has now been decided one way or the other -- finalize

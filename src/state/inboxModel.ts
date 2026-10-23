@@ -1,5 +1,5 @@
 import type { AgentSession, SubagentRun, TurnRecord } from "./AgentSessionStore";
-import type { PendingChange } from "./PendingChangesStore";
+import { owningContributor, type PendingChange } from "./PendingChangesStore";
 
 /** A subagent's row on a card, with the pending changes it made. */
 export interface InboxSubagent {
@@ -65,9 +65,10 @@ export const VISIBLE_FINISHED_SUBAGENTS = 10;
 
 /**
  * Sorts sessions and pending changes into the inbox's sections. A change
- * goes on the card of the terminal that edited it LAST, under the lead or
- * the subagent that made that edit, because the last edit is the one the
- * file on disk now holds and so the one the row's diff shows.
+ * goes on the card of the terminal that edited it LAST (owningContributor,
+ * which Classic's terminal groups file by too), under the lead or the
+ * subagent that made that edit, because the last edit is the one the file
+ * on disk now holds and so the one the row's diff shows.
  *
  * Note this is not the terminal the row's revertText belongs to: rejecting
  * restores the state before the FIRST terminal's edit (see
@@ -81,7 +82,7 @@ export const VISIBLE_FINISHED_SUBAGENTS = 10;
 export function buildInbox(sessions: AgentSession[], changes: PendingChange[], feedbackTokens: ReadonlySet<string> = new Set()): Inbox {
   const changesByToken = new Map<string, PendingChange[]>();
   for (const change of changes) {
-    const owner = change.contributors[change.contributors.length - 1]?.token;
+    const owner = owningContributor(change).token;
     if (!owner) continue;
     const list = changesByToken.get(owner) ?? [];
     list.push(change);

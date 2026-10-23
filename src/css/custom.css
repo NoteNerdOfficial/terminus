@@ -3818,9 +3818,11 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
 }
 
 /* On the card of the session whose overlapping edits are filed on another
-   card. Boxed, because it is about files that are NOT in the list below
-   it, and an unboxed line there would read as a caption for them. */
-.terminus-inbox-overlap-elsewhere {
+   card (renderOnAnotherCard -- nothing to do with the Elsewhere section,
+   which lists cards outside the selected group). Boxed, because it is about
+   files that are NOT in the list below it, and an unboxed line there would
+   read as a caption for them. */
+.terminus-inbox-overlap-moved {
   display: flex;
   align-items: flex-start;
   gap: 6px;
@@ -3833,7 +3835,7 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
   line-height: 1.45;
 }
 
-.terminus-inbox-overlap-elsewhere .terminus-meta-icon {
+.terminus-inbox-overlap-moved .terminus-meta-icon {
   color: var(--text-faint);
   margin-top: 1px;
 }

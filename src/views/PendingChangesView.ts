@@ -1,5 +1,5 @@
 import { ItemView, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
-import { PendingChange } from "../state/PendingChangesStore";
+import { owningContributor, PendingChange } from "../state/PendingChangesStore";
 import type { ShellChange } from "../state/AgentSessionStore";
 import { computeDiffStats } from "../diff/renderDiff";
 import {
@@ -14,6 +14,17 @@ import type { ClassicUiState } from "../state/ClassicUiState";
 import type TerminusPlugin from "../main";
 
 export const PENDING_CHANGES_VIEW_TYPE = "terminus-pending-changes";
+
+/** One terminal's section of the panel: the terminal the rows are filed
+ *  under (see owningContributor) and the rows themselves. */
+interface TerminalGroup {
+  /** The owning terminal's hook token, which is what the group is keyed by:
+   *  unique, unlike its label. */
+  token: string;
+  label: string;
+  color: string | null;
+  changes: PendingChange[];
+}
 
 export class PendingChangesView extends ItemView {
   /** What the shell-change list looked like at the last render; see
@@ -153,14 +164,20 @@ export class PendingChangesView extends ItemView {
     }
 
     // Multiple terminals can each run their own claude session concurrently
-    // -- group by originating terminal so it's clear which session made
-    // which changes, while keeping this one unified panel (not one per
-    // terminal).
-    const groups = new Map<string, PendingChange[]>();
+    // -- group by terminal so it's clear which session made which changes,
+    // while keeping this one unified panel (not one per terminal).
+    //
+    // By the terminal that edited the file LAST, not the one that recorded
+    // the row first: that is the version on disk and the one the row's diff
+    // shows (see owningContributor). The Agent inbox files the same row on
+    // the same session's card, so switching experience never moves a row
+    // from one session to another.
+    const groups = new Map<string, TerminalGroup>();
     for (const change of changes) {
-      const group = groups.get(change.panelLabel) ?? [];
-      group.push(change);
-      groups.set(change.panelLabel, group);
+      const owner = owningContributor(change);
+      const group = groups.get(owner.token) ?? { token: owner.token, label: owner.label, color: owner.color, changes: [] };
+      group.changes.push(change);
+      groups.set(owner.token, group);
     }
 
     const headerBar = header.createDiv({ cls: "terminus-pending-header-bar" });
@@ -188,15 +205,14 @@ export class PendingChangesView extends ItemView {
     );
 
     const groupsContainer = container.createDiv({ cls: "terminus-pending-groups" });
-    for (const [panelLabel, groupChanges] of groups) {
-      this.renderTerminalGroup(groupsContainer, panelLabel, groupChanges, statsById);
+    for (const group of groups.values()) {
+      this.renderTerminalGroup(groupsContainer, group, statsById);
     }
   }
 
   private renderTerminalGroup(
     container: HTMLElement,
-    panelLabel: string,
-    changes: PendingChange[],
+    { token, label, color, changes }: TerminalGroup,
     statsById: Map<string, { added: number; removed: number }>
   ): void {
     let groupAdded = 0;
@@ -208,16 +224,15 @@ export class PendingChangesView extends ItemView {
     }
 
     const group = container.createDiv({ cls: "terminus-group" });
-    // Snapshot from whichever change in the group recorded it first -- same
-    // "cosmetic, point-in-time" caveat as panelLabel itself: if the
-    // terminal's color changes mid-session, already-pending entries keep
+    // The owning terminal's colour, snapshotted when it first edited one of
+    // these files -- "cosmetic, point-in-time", same caveat as its label: if
+    // the terminal's color changes mid-session, already-pending entries keep
     // whatever color they were recorded with. Rendered as an edge strip
     // (matching the terminal tab's own color indicator) spanning the whole
     // group card, not just its header row.
-    const panelColor = changes[0]?.panelColor;
-    if (panelColor) {
+    if (color) {
       group.addClass("terminus-group-colored");
-      group.style.setProperty("--terminus-group-color", panelColor);
+      group.style.setProperty("--terminus-group-color", color);
     }
     const groupHeader = group.createDiv({ cls: "terminus-group-header" });
     const chevron = groupHeader.createSpan({ cls: "terminus-group-chevron", text: "▾" });
@@ -227,7 +242,7 @@ export class PendingChangesView extends ItemView {
     // everything crammed into one row.
     const groupText = groupHeader.createDiv({ cls: "terminus-group-text" });
     const groupNameRow = groupText.createDiv({ cls: "terminus-group-name-row" });
-    groupNameRow.createSpan({ text: panelLabel, cls: "terminus-group-title" });
+    groupNameRow.createSpan({ text: label, cls: "terminus-group-title" });
     groupNameRow.createSpan({ cls: "terminus-group-stat-add", text: `+${groupAdded}` });
     groupNameRow.createSpan({ cls: "terminus-group-stat-remove", text: `-${groupRemoved}` });
     groupText.createDiv({
@@ -241,19 +256,19 @@ export class PendingChangesView extends ItemView {
     // default for "review everything", with per-terminal control still
     // one click away rather than competing for attention.
     const groupBulk = groupHeader.createDiv({ cls: "terminus-group-bulk-actions" });
-    const inGroup = (change: PendingChange) => change.panelLabel === panelLabel;
+    const inGroup = (change: PendingChange) => owningContributor(change).token === token;
     groupBulk.createEl("button", { text: "Reject all", cls: "terminus-btn-ghost" }).addEventListener(
       "click",
       (e) => {
         e.stopPropagation();
-        void runBulkAction(this.rows, false, changes, () => this.plugin.pendingChangesStore.resolveAll(false, inGroup), panelLabel);
+        void runBulkAction(this.rows, false, changes, () => this.plugin.pendingChangesStore.resolveAll(false, inGroup), label);
       }
     );
     groupBulk.createEl("button", { text: "Keep all", cls: "terminus-btn-ghost-accent" }).addEventListener(
       "click",
       (e) => {
         e.stopPropagation();
-        void runBulkAction(this.rows, true, changes, () => this.plugin.pendingChangesStore.resolveAll(true, inGroup), panelLabel);
+        void runBulkAction(this.rows, true, changes, () => this.plugin.pendingChangesStore.resolveAll(true, inGroup), label);
       }
     );
 
@@ -268,13 +283,13 @@ export class PendingChangesView extends ItemView {
     // collapsed set lives on the view, not in this closure: the panel
     // re-renders on every store change, and a local would have sprung every
     // group back open each time Claude recorded another edit.
-    const collapsed = this.ui.collapsedGroups.has(panelLabel);
+    const collapsed = this.ui.collapsedGroups.has(token);
     list.toggle(!collapsed);
     chevron.setText(collapsed ? "▸" : "▾");
     groupHeader.addEventListener("click", () => {
-      if (this.ui.collapsedGroups.has(panelLabel)) this.ui.collapsedGroups.delete(panelLabel);
-      else this.ui.collapsedGroups.add(panelLabel);
-      const nowCollapsed = this.ui.collapsedGroups.has(panelLabel);
+      if (this.ui.collapsedGroups.has(token)) this.ui.collapsedGroups.delete(token);
+      else this.ui.collapsedGroups.add(token);
+      const nowCollapsed = this.ui.collapsedGroups.has(token);
       list.toggle(!nowCollapsed);
       chevron.setText(nowCollapsed ? "▸" : "▾");
     });

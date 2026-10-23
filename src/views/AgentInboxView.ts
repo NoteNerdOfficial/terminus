@@ -2,8 +2,8 @@ import { ItemView, Menu, Platform, setIcon, setTooltip, WorkspaceLeaf } from "ob
 import { pathRelative } from "terminus-node-bridge";
 import { activeTime, type AgentSession, type SubagentRun } from "../state/AgentSessionStore";
 import { addUsage, formatModelName, totalTokens, UsageTotals } from "../claude/transcriptUsage";
-import { PendingChange } from "../state/PendingChangesStore";
-import { changesOwnedElsewhere, changesStartedElsewhere, groupOverlaps, hasCollision } from "../modals/collisions";
+import { owningContributor, PendingChange } from "../state/PendingChangesStore";
+import { changesOnAnotherCard, changesStartedByAnother, groupOverlaps, hasCollision } from "../modals/collisions";
 import { buildInbox, InboxCard, InboxSubagent, InboxTurn, scopeInbox } from "../state/inboxModel";
 import type { InboxUiState } from "../state/InboxUiState";
 import { TerminalView } from "./TerminalView";
@@ -41,6 +41,10 @@ export class AgentInboxView extends ItemView {
   private stuckFrame: number | null = null;
   /** The queued message being edited in place, if any. */
   private editingQueueId: number | null = null;
+  /** Every pending change, as of the current render: the row lookups that
+   *  run per card read this instead of the store, so one render is one
+   *  read. Only valid during a render. */
+  private allChanges: PendingChange[] = [];
   /** Whether the header's overlap popover is showing. Lives on the view,
    *  not in InboxUiState, because it is dismissed by the next click and
    *  so never needs to survive a view being closed and reopened. */
@@ -259,12 +263,13 @@ export class AgentInboxView extends ItemView {
     // terminus-pending-view brings the Pending Changes row styles with it.
     container.addClass("terminus-pending-view", "terminus-inbox-view");
 
-    const full = buildInbox(
-      this.plugin.agentSessionStore.list(),
-      this.plugin.pendingChangesStore.list(),
-      this.plugin.feedbackStore.tokens()
-    );
+    // One read of the store per render, shared by buildInbox, the header's
+    // overlap chip and the per-card lookups (dismissible,
+    // renderOnAnotherCard): list() copies and sorts, and those run once per
+    // card.
     const allChanges = this.plugin.pendingChangesStore.list();
+    this.allChanges = allChanges;
+    const full = buildInbox(this.plugin.agentSessionStore.list(), allChanges, this.plugin.feedbackStore.tokens());
     // A dismissed card stays away until its session starts another turn
     // (it leaves Finished), or gets something to review again.
     for (const card of [...full.needsAttention, ...full.working]) this.ui.dismissed.delete(card.token);
@@ -563,7 +568,7 @@ export class AgentInboxView extends ItemView {
    * terminal's work, which is the one consequence the card cannot show.
    */
   private renderTurnOverlapNote(host: HTMLElement, token: string, changes: PendingChange[]): void {
-    const owned = changesStartedElsewhere(changes, token);
+    const owned = changesStartedByAnother(changes, token);
     if (owned.length === 0) return;
     const names = [...new Set(owned.map((c) => c.contributors[0]?.label ?? "another session"))];
     const who = names.length === 1 ? names[0] : "Earlier sessions";
@@ -579,20 +584,19 @@ export class AgentInboxView extends ItemView {
   }
 
   /**
-   * On the card of a session whose overlapping edits are filed elsewhere.
-   * buildInbox puts a change on the card of the terminal that edited it
-   * FIRST, so a session that rewrote someone else's file never lists it,
-   * and a card with nothing else pending can be dismissed while that work
-   * waits. This is the only place that says so.
+   * On the card of a session whose overlapping edits are filed on another
+   * card: a later terminal edited the same files, so buildInbox put the
+   * rows there (owningContributor) and this card never lists them. Without
+   * this line the session's own edits would simply be missing from it. The
+   * card also stays undismissible while they are pending (see dismissible),
+   * so the pointer cannot be cleared away from under them.
    */
-  private renderOwnedElsewhere(host: HTMLElement, card: InboxCard, allChanges: PendingChange[]): void {
-    const elsewhere = changesOwnedElsewhere(allChanges, card.token);
+  private renderOnAnotherCard(host: HTMLElement, card: InboxCard): void {
+    const elsewhere = changesOnAnotherCard(this.allChanges, card.token);
     if (elsewhere.length === 0) return;
-    const owners = [
-      ...new Set(elsewhere.map((c) => c.contributors[c.contributors.length - 1]?.label ?? "another session")),
-    ];
+    const owners = [...new Set(elsewhere.map((c) => owningContributor(c).label))];
     const owner = owners.length === 1 ? owners[0] : "other sessions";
-    const line = host.createDiv({ cls: "terminus-inbox-overlap-elsewhere" });
+    const line = host.createDiv({ cls: "terminus-inbox-overlap-moved" });
     setIcon(line.createSpan({ cls: "terminus-meta-icon" }), "copy");
     const text = line.createSpan();
     text.createSpan({ cls: "terminus-inbox-overlap-strong", text: fileCount(elsewhere.length) });
@@ -725,9 +729,17 @@ export class AgentInboxView extends ItemView {
   }
 
   /** A finished card can be dismissed once nothing on it is waiting on
-   *  you: no pending changes (Keep or Reject them) and no queued comments. */
+   *  you: no pending changes (Keep or Reject them), no queued comments, and
+   *  none of its edits sitting on another session's card. That last one has
+   *  no rows of its own to keep the card here (a later terminal overwrote
+   *  the files, so they are filed there), and dismissing it would take away
+   *  the one line saying where this session's work went. */
   private dismissible(card: InboxCard): boolean {
-    return card.changes.length === 0 && this.plugin.feedbackStore.listFor(card.token).length === 0;
+    return (
+      card.changes.length === 0 &&
+      this.plugin.feedbackStore.listFor(card.token).length === 0 &&
+      changesOnAnotherCard(this.allChanges, card.token).length === 0
+    );
   }
 
   private dismiss(cards: InboxCard[]): void {
@@ -836,7 +848,7 @@ export class AgentInboxView extends ItemView {
     // below a rule and on the alternate surface, as a group card's
     // terminals are in the sidebar.
     const workEl = el.createDiv({ cls: "terminus-inbox-card-body" });
-    this.renderOwnedElsewhere(workEl, card, this.plugin.pendingChangesStore.list());
+    this.renderOnAnotherCard(workEl, card);
     // Changes from several requests waiting together is where "which of
     // these did I ask for?" gets hard, so each turn then gets a header with
     // the prompt that caused it. A single turn needs none: the card is it.
