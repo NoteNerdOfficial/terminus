@@ -21,6 +21,8 @@ import { buildDiff, DiffResult } from "../server/diff";
 import { detectBacklinkBreakage } from "../backlinks/breakage";
 import { CommandTracker, TrackedCommand } from "../terminal/CommandTracker";
 import { CwdTracker } from "../terminal/CwdTracker";
+import { registerOscHandlerSafe } from "../terminal/oscHandler";
+import { parseOscNotification } from "../notify/notifyRules";
 import { WikiLinkAutocomplete } from "../terminal/WikiLinkAutocomplete";
 import { registerTerminalLinks } from "../terminal/TerminalLinks";
 import { openTerminalColorPicker } from "../terminal/TerminalColorPicker";
@@ -185,6 +187,7 @@ export class TerminalView extends ItemView {
   private cwdTracker: CwdTracker | null = null;
   private wikiLinkAutocomplete: WikiLinkAutocomplete | null = null;
   private terminalLinks: { dispose(): void } | null = null;
+  private oscNotifyHandlers: Array<{ dispose(): void }> = [];
   private readonly failureBadges = new Map<number, IDecoration>();
   private readonly token: string;
   private restoredScrollback: string | null = null;
@@ -227,8 +230,11 @@ export class TerminalView extends ItemView {
    *  prompt to type (unsent) once Claude's session starts -- "Start Claude
    *  on this note". Taken from the opening view state and never saved, so
    *  a restart doesn't launch it again. */
-  private launch: { command: string; prompt?: string } | null = null;
+  private launch: { command: string; prompt?: string; submit?: boolean } | null = null;
   private pendingPrompt: string | null = null;
+  /** Press Enter after typing pendingPrompt: a task an agent delegated
+   *  (agent API), which nobody is there to send by hand. */
+  private submitPendingPrompt = false;
   /** The Claude session running here, and the folder Claude finds it by
    *  (Multi-agent). Saved in view state from SessionStart until the user
    *  ends it, so a restart -- including a crash -- can pick it back up. */
@@ -405,6 +411,17 @@ export class TerminalView extends ItemView {
     // restart resumes wherever the shell happened to be at the *last*
     // incidental layout save, not the cwd the user actually left it in.
     this.cwdTracker = new CwdTracker(this.term, () => this.app.workspace.requestSaveLayout());
+
+    // Desktop notifications a program asks for (OSC 9, OSC 777): a long
+    // build's `printf '\e]9;done\a'`, or another agent CLI's own.
+    const term = this.term;
+    this.oscNotifyHandlers = [9, 777].map((ident) =>
+      registerOscHandlerSafe(term, ident, (data) => {
+        const notification = parseOscNotification(ident, data);
+        if (notification) this.plugin.notifier.fromTerminal(this.token, notification.title, notification.body);
+        return true;
+      })
+    );
 
     // Registered after cwdTracker: relative paths in output are resolved
     // against the shell's live cwd, which is what that tracker holds.
@@ -600,6 +617,9 @@ export class TerminalView extends ItemView {
     // the full text of every file that command named. PostToolUse always
     // lands well before Stop, so nothing live is dropped here.
     this.shellSnapshots.clear();
+    // In full, before the store's status change below can wake an agent
+    // waiting on this turn: the store keeps only a preview.
+    this.plugin.agentApi.recordResult(this.token, message);
     if (failed) this.plugin.agentSessionStore.turnFailed(this.token, message, identity, Date.now(), promptId);
     else this.plugin.agentSessionStore.turnEnded(this.token, message, identity, Date.now(), false, promptId);
     void this.plugin.refreshUsage(this.token);
@@ -972,8 +992,48 @@ export class TerminalView extends ItemView {
   private typePendingPrompt(): void {
     const prompt = this.pendingPrompt;
     if (!prompt) return;
+    const submit = this.submitPendingPrompt;
     this.pendingPrompt = null;
-    window.setTimeout(() => this.typeIntoInput(prompt), 300);
+    this.submitPendingPrompt = false;
+    window.setTimeout(() => {
+      if (!this.typeIntoInput(prompt) || !submit) return;
+      window.setTimeout(() => this.submitInput(), 250);
+    }, 300);
+  }
+
+  /** The id the agent API shows for this terminal ("t3"). Not a secret,
+   *  unlike the token; unique while Obsidian runs. */
+  get publicId(): string {
+    return `t${this.terminalNumber}`;
+  }
+
+  /** The terminal's text, oldest first, with lines the terminal wrapped
+   *  joined back into the line the program wrote. The active buffer: a
+   *  full-screen program (Claude Code's TUI) shows its own screen there. */
+  readLines(): string[] {
+    const buffer = this.term?.buffer.active;
+    if (!buffer) return [];
+    const lines: string[] = [];
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (!line) continue;
+      const text = line.translateToString(true);
+      if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text;
+      else lines.push(text);
+    }
+    return lines;
+  }
+
+  /** The folder the shell is in now, as far as shell integration says. */
+  get shellCwd(): string | null {
+    return this.cwdTracker?.getCwd() ?? this.restoredCwd ?? this.spawnCwd;
+  }
+
+  /** Types a command line and presses Enter (agent API `run`). */
+  runCommand(command: string): boolean {
+    if (!this.pty) return false;
+    this.pty.write(`${command.replace(/[\r\n]+/g, " ")}\r`);
+    return true;
   }
 
   /** The hook/review token: how the Agent inbox matches sessions and
@@ -1092,6 +1152,8 @@ export class TerminalView extends ItemView {
     this.webglAddon?.dispose();
     this.webglAddon = null;
     this.plugin.reviewServer.unregister(this.token);
+    for (const handler of this.oscNotifyHandlers) handler.dispose();
+    this.oscNotifyHandlers = [];
     // Closing the terminal ends its session even if SessionEnd never comes.
     this.plugin.agentSessionStore.sessionEnded(this.token);
     this.plugin.groups.onTerminalClosed();
@@ -1205,13 +1267,17 @@ export class TerminalView extends ItemView {
       groupId?: unknown;
       autoName?: unknown;
       autoNameSource?: unknown;
-      launch?: { command?: unknown; prompt?: unknown };
+      launch?: { command?: unknown; prompt?: unknown; submit?: unknown };
       claudeSession?: { id?: unknown; cwd?: unknown };
       steerQueue?: unknown;
     } | null;
     const launch = typedState?.launch;
     if (launch && typeof launch.command === "string" && launch.command) {
-      this.launch = { command: launch.command, prompt: typeof launch.prompt === "string" ? launch.prompt : undefined };
+      this.launch = {
+        command: launch.command,
+        prompt: typeof launch.prompt === "string" ? launch.prompt : undefined,
+        submit: launch.submit === true,
+      };
     }
     const scrollback = typedState?.scrollback;
     if (typeof scrollback === "string" && scrollback.length > 0) {
@@ -1349,6 +1415,12 @@ export class TerminalView extends ItemView {
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
+        // The agent API's command-line client and this terminal's public id
+        // (see agentApi/). Always set; the API itself refuses while agent
+        // control is off.
+        TERMINUS_CLI: pathJoin(resourcesDir, "terminus"),
+        TERMINUS_PYTHON: pythonBin,
+        TERMINUS_TERMINAL_ID: this.publicId,
         ...getShellIntegrationEnv(shell, resourcesDir),
       },
     });
@@ -1377,6 +1449,7 @@ export class TerminalView extends ItemView {
       if (this.startResume()) return;
       const command = this.launch?.command ?? this.plugin.settings.startupCommand.trim();
       this.pendingPrompt = this.launch?.prompt ?? null;
+      this.submitPendingPrompt = this.launch?.submit === true;
       this.launch = null;
       if (command) this.pty?.write(`${command}\r`);
     });

@@ -97,8 +97,39 @@ export interface MultiAgentSettings {
   checkForUpdates: boolean;
 }
 
+export type NotificationDelivery = "off" | "in-app" | "system";
+
+export const NOTIFICATION_DELIVERY_LABELS: Record<NotificationDelivery, string> = {
+  off: "Off",
+  "in-app": "In Obsidian",
+  system: "System notification",
+};
+
+/** When a session needs the user or finishes while they're looking
+ *  elsewhere (see notify/Notifier.ts). Shared by both experiences. */
+export interface NotificationSettings {
+  delivery: NotificationDelivery;
+  /** Claude asked for permission or a decision. */
+  needsInput: boolean;
+  /** Claude finished a turn. */
+  finished: boolean;
+  /** A short tone with each notification, different for the two kinds. */
+  sound: boolean;
+}
+
+/** Lets agents in Terminus terminals drive Terminus through its local API
+ *  (see agentApi/AgentApi.ts). Multi-agent only, and off unless the user
+ *  turns it on. */
+export interface AgentControlSettings {
+  enabled: boolean;
+  /** How many terminals one agent may have open that it opened itself. */
+  maxOpenedTerminals: number;
+}
+
 export interface TerminusSettings {
   experience: Experience;
+  notifications: NotificationSettings;
+  agentControl: AgentControlSettings;
   /** Each mode's own settings, kept while the other mode is selected so
    *  switching back finds them as they were. */
   classic: ClassicSettings;
@@ -135,6 +166,9 @@ export interface TerminusSettings {
    *  starts in it, and an existing one that never chose is moved to it once
    *  (see main.ts's applyMultiAgentDefault). */
   hasSeenMultiAgentDefault: boolean;
+  /** The one-time "What's new" for notifications and agent control (see
+   *  main.ts's announceAgentFeatures). A new install starts with it set. */
+  hasSeenAgentFeaturesNews: boolean;
   /** Multi-agent's terminal groups (see GroupStore). Kept while Classic is
    *  selected, like the per-mode settings. */
   groups: GroupsData;
@@ -159,8 +193,25 @@ export const DEFAULT_MULTI_AGENT_SETTINGS: MultiAgentSettings = {
   checkForUpdates: false,
 };
 
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  delivery: "in-app",
+  needsInput: true,
+  finished: true,
+  sound: false,
+};
+
+export const DEFAULT_AGENT_CONTROL_SETTINGS: AgentControlSettings = {
+  enabled: false,
+  maxOpenedTerminals: 4,
+};
+
+export const MIN_AGENT_OPENED_TERMINALS = 1;
+export const MAX_AGENT_OPENED_TERMINALS = 12;
+
 export const DEFAULT_SETTINGS: TerminusSettings = {
   experience: "multi-agent",
+  notifications: DEFAULT_NOTIFICATION_SETTINGS,
+  agentControl: DEFAULT_AGENT_CONTROL_SETTINGS,
   classic: DEFAULT_CLASSIC_SETTINGS,
   multiAgent: DEFAULT_MULTI_AGENT_SETTINGS,
   fontSize: 13,
@@ -181,6 +232,7 @@ export const DEFAULT_SETTINGS: TerminusSettings = {
   hasSeenWelcome: false,
   hasSeenMultiAgentInvite: false,
   hasSeenMultiAgentDefault: false,
+  hasSeenAgentFeaturesNews: false,
   groups: DEFAULT_GROUPS_DATA,
 };
 
@@ -205,7 +257,7 @@ interface LegacyMultiAgentSettings {
  */
 export function resolveSettings(saved: unknown): TerminusSettings {
   const data = (typeof saved === "object" && saved !== null ? saved : {}) as Partial<TerminusSettings> & LegacyFlatSettings;
-  const { autoRevealPendingChanges, autoRevealDelayMs, classic, multiAgent, groups, ...rest } = data;
+  const { autoRevealPendingChanges, autoRevealDelayMs, classic, multiAgent, groups, notifications, agentControl, ...rest } = data;
 
   const legacyClassic: Partial<ClassicSettings> = {};
   if (autoRevealPendingChanges !== undefined) legacyClassic.autoRevealPendingChanges = autoRevealPendingChanges;
@@ -226,6 +278,8 @@ export function resolveSettings(saved: unknown): TerminusSettings {
     ...rest,
     classic: { ...DEFAULT_CLASSIC_SETTINGS, ...legacyClassic, ...classic },
     multiAgent: { ...DEFAULT_MULTI_AGENT_SETTINGS, ...multiAgent },
+    notifications: { ...DEFAULT_NOTIFICATION_SETTINGS, ...notifications },
+    agentControl: { ...DEFAULT_AGENT_CONTROL_SETTINGS, ...agentControl },
     groups: resolveGroupsData(groups),
   };
 }
@@ -464,6 +518,102 @@ export class TerminusSettingTab extends PluginSettingTab {
       );
   }
 
+  private renderNotificationsSection(containerEl: HTMLElement): void {
+    const notifications = this.plugin.settings.notifications;
+    new Setting(containerEl).setName("Notifications").setHeading();
+
+    new Setting(containerEl)
+      .setName("Notify me")
+      .setDesc(
+        "When a Claude session needs you or finishes while you're looking at something else. In Obsidian shows a notice inside the app; System notification uses your operating system's notifications; if the test shows nothing, turn on notifications for Obsidian in your system settings (on a Mac: System Settings → Notifications → Obsidian). Clicking either opens the terminal. Nothing is shown for the terminal you're already looking at."
+      )
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOptions(NOTIFICATION_DELIVERY_LABELS)
+          .setValue(notifications.delivery)
+          .onChange(async (value) => {
+            notifications.delivery = value === "system" || value === "off" ? value : "in-app";
+            await this.plugin.saveSettings();
+            // In place rather than through display(), which would throw the
+            // panel back to the top (see "Log sessions to notes").
+            for (const setting of followers) setting.settingEl.toggle(value !== "off");
+          })
+      )
+      .addExtraButton((button) =>
+        button
+          .setIcon("bell-ring")
+          .setTooltip("Send a test notification")
+          .onClick(() => this.plugin.notifier.test())
+      );
+
+    // The rest only matter while notifications are on.
+    const followers: Setting[] = [];
+    followers.push(new Setting(containerEl)
+      .setName("When Claude needs input")
+      .setDesc("A permission prompt or a question waiting for your answer.")
+      .addToggle((toggle) =>
+        toggle.setValue(notifications.needsInput).onChange(async (value) => {
+          notifications.needsInput = value;
+          await this.plugin.saveSettings();
+        })
+      ));
+
+    followers.push(new Setting(containerEl)
+      .setName("When Claude finishes")
+      .setDesc("A turn ended and you haven't looked at it yet.")
+      .addToggle((toggle) =>
+        toggle.setValue(notifications.finished).onChange(async (value) => {
+          notifications.finished = value;
+          await this.plugin.saveSettings();
+        })
+      ));
+
+    followers.push(new Setting(containerEl)
+      .setName("Play a sound")
+      .setDesc("A ding with each notification: two quick ones when Claude needs you, one softer one when it's done.")
+      .addToggle((toggle) =>
+        toggle.setValue(notifications.sound).onChange(async (value) => {
+          notifications.sound = value;
+          await this.plugin.saveSettings();
+        })
+      ));
+    for (const setting of followers) setting.settingEl.toggle(notifications.delivery !== "off");
+  }
+
+  private renderAgentControlSection(containerEl: HTMLElement): void {
+    const agentControl = this.plugin.settings.agentControl;
+    new Setting(containerEl).setName("Agent control").setHeading();
+
+    new Setting(containerEl)
+      .setName("Let agents control Terminus")
+      .setDesc(
+        "Lets Claude, running in a Terminus terminal, open terminals beside it, run commands in them and read their output, send notifications, and message, wait on and delegate to other sessions in the same group. Adds a skill to .claude/skills/terminus that teaches it how. Agents can only reach terminals in their own group, can't type into a session that's waiting on a permission prompt, and can't start Claude with permission checks bypassed."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(agentControl.enabled).onChange(async (value) => {
+          await this.plugin.setAgentControl(value);
+          limitSetting.settingEl.toggle(value);
+        })
+      );
+
+    const limitSetting = new Setting(containerEl)
+      .setName("Terminals an agent may open")
+      .setDesc(
+        `How many terminals one agent can have open at once that it opened itself (${MIN_AGENT_OPENED_TERMINALS}-${MAX_AGENT_OPENED_TERMINALS}). An agent opened by another agent can't open more.`
+      )
+      .addSlider((slider) =>
+        slider
+          .setLimits(MIN_AGENT_OPENED_TERMINALS, MAX_AGENT_OPENED_TERMINALS, 1)
+          .setValue(agentControl.maxOpenedTerminals)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            agentControl.maxOpenedTerminals = value;
+            await this.plugin.saveSettings();
+          })
+      );
+    limitSetting.settingEl.toggle(agentControl.enabled);
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
@@ -605,6 +755,9 @@ export class TerminusSettingTab extends PluginSettingTab {
     } else {
       this.renderClassicSection(containerEl);
     }
+
+    this.renderNotificationsSection(containerEl);
+    if (this.plugin.experience === "multi-agent") this.renderAgentControlSection(containerEl);
 
     new Setting(containerEl).setName("Advanced").setHeading();
 

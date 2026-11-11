@@ -81,23 +81,23 @@ var require_fs = __commonJS({
       };
     })();
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.pathJoin = pathJoin13;
+    exports.pathJoin = pathJoin14;
     exports.pathBasename = pathBasename13;
     exports.pathDirname = pathDirname4;
     exports.pathRelative = pathRelative11;
     exports.fileExistsSync = fileExistsSync6;
-    exports.readTextFileIfExists = readTextFileIfExists6;
-    exports.writeTextFile = writeTextFile5;
+    exports.readTextFileIfExists = readTextFileIfExists7;
+    exports.writeTextFile = writeTextFile6;
     exports.appendTextFile = appendTextFile2;
-    exports.makeDirRecursive = makeDirRecursive4;
-    exports.deleteFileIfExists = deleteFileIfExists2;
+    exports.makeDirRecursive = makeDirRecursive5;
+    exports.deleteFileIfExists = deleteFileIfExists3;
     exports.randomHex = randomHex2;
     exports.makeExecutable = makeExecutable2;
     var fs_1 = require("fs");
     var fsPromises = __importStar(require("fs/promises"));
     var nodePath = __importStar(require("path"));
     var crypto_1 = require("crypto");
-    function pathJoin13(...segments) {
+    function pathJoin14(...segments) {
       return nodePath.join(...segments);
     }
     function pathBasename13(filePath, ext) {
@@ -115,7 +115,7 @@ var require_fs = __commonJS({
     function isEnoent(err) {
       return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
     }
-    async function readTextFileIfExists6(filePath) {
+    async function readTextFileIfExists7(filePath) {
       try {
         return await fsPromises.readFile(filePath, "utf8");
       } catch (err) {
@@ -124,16 +124,16 @@ var require_fs = __commonJS({
         throw err;
       }
     }
-    async function writeTextFile5(filePath, content) {
+    async function writeTextFile6(filePath, content) {
       await fsPromises.writeFile(filePath, content, "utf8");
     }
     async function appendTextFile2(filePath, content) {
       await fsPromises.appendFile(filePath, content, "utf8");
     }
-    async function makeDirRecursive4(dirPath) {
+    async function makeDirRecursive5(dirPath) {
       await fsPromises.mkdir(dirPath, { recursive: true });
     }
-    async function deleteFileIfExists2(filePath) {
+    async function deleteFileIfExists3(filePath) {
       try {
         await fsPromises.unlink(filePath);
       } catch (err) {
@@ -378,8 +378,8 @@ __export(main_exports, {
   default: () => TerminusPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian32 = require("obsidian");
-var import_terminus_node_bridge30 = __toESM(require_dist());
+var import_obsidian35 = require("obsidian");
+var import_terminus_node_bridge31 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
 var import_terminus_node_bridge = __toESM(require_dist());
@@ -392,6 +392,7 @@ function isBashPayload(payload) {
 // src/server/ReviewServer.ts
 var MAX_BODY_BYTES = 5 * 1024 * 1024;
 var STATUS_BODY_MAX_BYTES = 1024 * 1024;
+var API_BODY_MAX_BYTES = 256 * 1024;
 var SESSION_EVENTS = /* @__PURE__ */ new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "StopFailure"]);
 var SUBAGENT_EVENTS = /* @__PURE__ */ new Set(["SubagentStart", "SubagentStop"]);
 var AGENT_TOOLS = /* @__PURE__ */ new Set(["Agent", "Task"]);
@@ -408,6 +409,10 @@ var ReviewServer = class {
     this.server = null;
     this.panels = /* @__PURE__ */ new Map();
     this.port = 0;
+    this.apiHandler = null;
+  }
+  setApiHandler(handler) {
+    this.apiHandler = handler;
   }
   async start() {
     var _a7;
@@ -446,7 +451,7 @@ var ReviewServer = class {
   }
   async handleRequest(req, res) {
     var _a7;
-    if (req.method !== "POST" || req.url !== "/review" && req.url !== "/turn-end" && req.url !== "/notification" && req.url !== "/session-event") {
+    if (req.method !== "POST" || req.url !== "/review" && req.url !== "/turn-end" && req.url !== "/notification" && req.url !== "/session-event" && req.url !== "/api") {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
@@ -457,6 +462,22 @@ var ReviewServer = class {
     if (!panel) {
       res.writeHead(403, { "Content-Type": "text/plain" });
       res.end("unknown or expired session token");
+      return;
+    }
+    if (req.url === "/api") {
+      let request;
+      try {
+        request = JSON.parse(await readBody(req, API_BODY_MAX_BYTES));
+      } catch (e) {
+        sendJson(res, 400, { ok: false, error: { code: "invalid_request", message: "The request body must be JSON, under 256 KB" } });
+        return;
+      }
+      if (!this.apiHandler) {
+        sendJson(res, 503, { ok: false, error: { code: "unavailable", message: "Terminus is still starting" } });
+        return;
+      }
+      const { status, body: body2 } = await this.apiHandler(token, request);
+      sendJson(res, status, body2);
       return;
     }
     if (req.url === "/turn-end" || req.url === "/notification" || req.url === "/session-event") {
@@ -494,6 +515,10 @@ var ReviewServer = class {
     res.end("");
   }
 };
+function sendJson(res, status, body) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
+}
 function errorMessage(err) {
   return err instanceof Error ? err.message : String(err);
 }
@@ -1037,6 +1062,178 @@ curl -s -m 5 -o /dev/null \\
   2>/dev/null
 
 exit 0
+`, executable: true },
+  { relativePath: "terminus", content: `#!/bin/sh
+# Command-line client for the Terminus agent API -- see terminus_cli.py.
+#
+# Every Terminus terminal has TERMINUS_CLI pointing here and TERMINUS_PYTHON
+# naming the python3 Terminus itself found, so the client runs with that one
+# even when python3 isn't first on this shell's PATH.
+exec "\${TERMINUS_PYTHON:-python3}" "$(dirname "$0")/terminus_cli.py" "$@"
+`, executable: true },
+  { relativePath: "terminus_cli.py", content: `#!/usr/bin/env python3
+"""Command-line client for the Terminus agent API.
+
+Runs inside a Terminus terminal, where TERMINUS_HOOK_PORT and
+TERMINUS_HOOK_TOKEN say how to reach the plugin and which terminal is
+calling. Each subcommand is one POST /api request; the plugin decides what
+this terminal may do (see src/agentApi/AgentApi.ts). Standard library only.
+
+Prints the result as JSON on stdout (\`read\` and \`result\` print text), or an
+error as JSON on stderr with exit status 1. Usage errors exit with 2.
+"""
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+# Long waits are bounded by the server; this covers the request itself.
+REQUEST_MARGIN_SECONDS = 15
+
+
+def fail(code, message, status=1):
+    sys.stderr.write(json.dumps({"error": {"code": code, "message": message}}) + "\\n")
+    sys.exit(status)
+
+
+def call(method, params, wait_seconds=0):
+    port = os.environ.get("TERMINUS_HOOK_PORT")
+    token = os.environ.get("TERMINUS_HOOK_TOKEN")
+    if not port or not token:
+        fail("not_in_terminus", "Not running in a Terminus terminal (TERMINUS_HOOK_PORT/TERMINUS_HOOK_TOKEN unset)")
+    body = json.dumps({"method": method, "params": {k: v for k, v in params.items() if v is not None}}).encode("utf-8")
+    request = urllib.request.Request(
+        "http://127.0.0.1:%s/api" % port,
+        data=body,
+        method="POST",
+        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=wait_seconds + REQUEST_MARGIN_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        try:
+            payload = json.loads(err.read().decode("utf-8"))
+        except ValueError:
+            fail("http_%d" % err.code, "Terminus answered with HTTP %d" % err.code)
+    except (urllib.error.URLError, OSError) as err:
+        fail("unreachable", "Couldn't reach Terminus: %s. Is Obsidian still running?" % err)
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        error = (payload or {}).get("error") or {}
+        fail(error.get("code", "error"), error.get("message", "Unknown error"))
+    return payload.get("result")
+
+
+def ms(seconds):
+    return None if seconds is None else int(seconds * 1000)
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="terminus", description="Control Terminus from inside one of its terminals.")
+    # Not dest="command": that would collide with \`open --command\`.
+    sub = parser.add_subparsers(dest="subcommand", metavar="COMMAND")
+    sub.required = True
+
+    sub.add_parser("whoami", help="this terminal's id, name, group and status")
+    sub.add_parser("list", help="terminals in your group")
+
+    p = sub.add_parser("open", help="open a terminal in your group")
+    p.add_argument("--name")
+    p.add_argument("--command", help="run this once the shell is ready")
+    p.add_argument("--prompt", help="with an agent --command such as claude: the task to send it")
+    p.add_argument("--placement", choices=["tab", "split-right", "split-down"])
+    p.add_argument("--cwd")
+
+    p = sub.add_parser("run", help="run a command line in a shell terminal")
+    p.add_argument("id")
+    p.add_argument("command_line", metavar="command")
+
+    p = sub.add_parser("read", help="print a terminal's recent output")
+    p.add_argument("id")
+    p.add_argument("--lines", type=int)
+
+    p = sub.add_parser("wait-output", help="wait until a terminal's recent output contains a pattern")
+    p.add_argument("id")
+    p.add_argument("pattern")
+    p.add_argument("--regex", action="store_true")
+    p.add_argument("--lines", type=int)
+    p.add_argument("--timeout", type=float, help="seconds (default 100)")
+
+    p = sub.add_parser("close", help="close a terminal you opened")
+    p.add_argument("id")
+
+    p = sub.add_parser("notify", help="notify the user")
+    p.add_argument("body")
+    p.add_argument("--title")
+
+    p = sub.add_parser("status", help="say what you're doing, on your inbox card (no text clears it)")
+    p.add_argument("text", nargs="?", default="")
+
+    p = sub.add_parser("prompt", help="send a message to another Claude session in your group")
+    p.add_argument("id")
+    p.add_argument("text")
+    p.add_argument("--now", action="store_true", help="type it into the running turn instead of queueing it")
+
+    p = sub.add_parser("wait", help="wait for another session's status")
+    p.add_argument("id")
+    p.add_argument("--until", action="append", choices=["working", "blocked", "done", "idle", "ended"])
+    p.add_argument("--next-turn", action="store_true", help="wait for its next turn to finish")
+    p.add_argument("--timeout", type=float, help="seconds (default 100)")
+
+    p = sub.add_parser("result", help="print a session's last message")
+    p.add_argument("id")
+
+    p = sub.add_parser("delegate", help="start a new Claude session on a task; its result comes back to you")
+    p.add_argument("task")
+    p.add_argument("--name")
+    p.add_argument("--placement", choices=["tab", "split-right", "split-down"])
+
+    args = parser.parse_args()
+    timeout = getattr(args, "timeout", None)
+    wait = timeout if timeout is not None else 100
+    c = args.subcommand
+
+    if c == "whoami":
+        result = call("whoami", {})
+    elif c == "list":
+        result = call("terminal.list", {})
+    elif c == "open":
+        result = call("terminal.open", {"name": args.name, "command": args.command, "prompt": args.prompt, "placement": args.placement, "cwd": args.cwd})
+    elif c == "run":
+        result = call("terminal.run", {"id": args.id, "command": args.command_line})
+    elif c == "read":
+        sys.stdout.write(call("terminal.read", {"id": args.id, "lines": args.lines})["text"] + "\\n")
+        return
+    elif c == "wait-output":
+        result = call("terminal.wait_output", {"id": args.id, "pattern": args.pattern, "regex": args.regex or None, "lines": args.lines, "timeout_ms": ms(timeout)}, wait)
+    elif c == "close":
+        result = call("terminal.close", {"id": args.id})
+    elif c == "notify":
+        result = call("notify", {"body": args.body, "title": args.title})
+    elif c == "status":
+        result = call("status", {"text": args.text})
+    elif c == "prompt":
+        result = call("agent.prompt", {"id": args.id, "text": args.text, "mode": "steer" if args.now else "queue"})
+    elif c == "wait":
+        result = call("agent.wait", {"id": args.id, "until": args.until, "next_turn": args.next_turn or None, "timeout_ms": ms(timeout)}, wait)
+    elif c == "result":
+        result = call("agent.result", {"id": args.id})
+        sys.stdout.write("[%s] %s\\n" % (result["id"], result["status"]))
+        sys.stdout.write((result.get("message") or "(no message yet)") + "\\n")
+        return
+    elif c == "delegate":
+        result = call("agent.delegate", {"task": args.task, "name": args.name, "placement": args.placement})
+    else:
+        parser.error("unknown command")
+        return
+    sys.stdout.write(json.dumps(result, indent=2) + "\\n")
+
+
+if __name__ == "__main__":
+    main()
 `, executable: true },
   { relativePath: "shell-integration/zsh/.zshenv", content: `# Terminus shell integration (zsh).
 #
@@ -14972,6 +15169,49 @@ var CwdTracker = class {
   }
 };
 
+// src/notify/notifyRules.ts
+function wantsInput(s15) {
+  return s15.status === "needs-attention" && s15.needs !== "unread-turn";
+}
+function attentionTransition(prev, next) {
+  if (wantsInput(next) && !(prev && wantsInput(prev))) return "needs-input";
+  if (next.status === "finished-unread" && (prev == null ? void 0 : prev.status) !== "finished-unread") return "finished";
+  return null;
+}
+function stillCurrent(kind, now) {
+  if (kind === "needs-input") return wantsInput(now);
+  if (kind === "finished") return now.status === "finished-unread";
+  return true;
+}
+var MAX_OSC_TEXT = 300;
+function parseOscNotification(ident, data) {
+  var _a7;
+  if (ident === 9) {
+    if (/^\d+(;|$)/.test(data)) return null;
+    const body = clean(data);
+    return body ? { title: null, body } : null;
+  }
+  if (ident === 777) {
+    const parts = data.split(";");
+    if (parts[0] !== "notify") return null;
+    const title = clean((_a7 = parts[1]) != null ? _a7 : "");
+    const body = clean(parts.slice(2).join(";"));
+    if (!title && !body) return null;
+    return { title: title || null, body };
+  }
+  return null;
+}
+function clean(text) {
+  const printable = Array.from(text, (ch) => ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? " " : ch).join("");
+  return printable.replace(/\s+/g, " ").trim().slice(0, MAX_OSC_TEXT);
+}
+function previewText(text, max = 160) {
+  if (!text) return null;
+  const flat = text.replace(/```[\s\S]*?```/g, " ").replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim();
+  if (!flat) return null;
+  return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
+}
+
 // src/terminal/WikiLinkAutocomplete.ts
 var import_obsidian2 = require("obsidian");
 var import_terminus_node_bridge9 = __toESM(require_dist());
@@ -16669,6 +16909,7 @@ var TerminalView = class _TerminalView extends import_obsidian10.ItemView {
     this.cwdTracker = null;
     this.wikiLinkAutocomplete = null;
     this.terminalLinks = null;
+    this.oscNotifyHandlers = [];
     this.failureBadges = /* @__PURE__ */ new Map();
     this.restoredScrollback = null;
     this.scrollbackApplied = false;
@@ -16705,6 +16946,9 @@ var TerminalView = class _TerminalView extends import_obsidian10.ItemView {
      *  a restart doesn't launch it again. */
     this.launch = null;
     this.pendingPrompt = null;
+    /** Press Enter after typing pendingPrompt: a task an agent delegated
+     *  (agent API), which nobody is there to send by hand. */
+    this.submitPendingPrompt = false;
     /** The Claude session running here, and the folder Claude finds it by
      *  (Multi-agent). Saved in view state from SessionStart until the user
      *  ends it, so a restart -- including a crash -- can pick it back up. */
@@ -16822,6 +17066,14 @@ var TerminalView = class _TerminalView extends import_obsidian10.ItemView {
     );
     this.term.onTitleChange((title) => this.onTitleChange(title));
     this.cwdTracker = new CwdTracker(this.term, () => this.app.workspace.requestSaveLayout());
+    const term = this.term;
+    this.oscNotifyHandlers = [9, 777].map(
+      (ident) => registerOscHandlerSafe(term, ident, (data) => {
+        const notification = parseOscNotification(ident, data);
+        if (notification) this.plugin.notifier.fromTerminal(this.token, notification.title, notification.body);
+        return true;
+      })
+    );
     this.terminalLinks = registerTerminalLinks(this.term, {
       app: this.app,
       getCwd: () => {
@@ -16979,6 +17231,7 @@ var TerminalView = class _TerminalView extends import_obsidian10.ItemView {
     this.clearActivity();
     this.clearPendingAttention();
     this.shellSnapshots.clear();
+    this.plugin.agentApi.recordResult(this.token, message);
     if (failed) this.plugin.agentSessionStore.turnFailed(this.token, message, identity, Date.now(), promptId);
     else this.plugin.agentSessionStore.turnEnded(this.token, message, identity, Date.now(), false, promptId);
     void this.plugin.refreshUsage(this.token);
@@ -17302,8 +17555,46 @@ var TerminalView = class _TerminalView extends import_obsidian10.ItemView {
   typePendingPrompt() {
     const prompt = this.pendingPrompt;
     if (!prompt) return;
+    const submit = this.submitPendingPrompt;
     this.pendingPrompt = null;
-    window.setTimeout(() => this.typeIntoInput(prompt), 300);
+    this.submitPendingPrompt = false;
+    window.setTimeout(() => {
+      if (!this.typeIntoInput(prompt) || !submit) return;
+      window.setTimeout(() => this.submitInput(), 250);
+    }, 300);
+  }
+  /** The id the agent API shows for this terminal ("t3"). Not a secret,
+   *  unlike the token; unique while Obsidian runs. */
+  get publicId() {
+    return `t${this.terminalNumber}`;
+  }
+  /** The terminal's text, oldest first, with lines the terminal wrapped
+   *  joined back into the line the program wrote. The active buffer: a
+   *  full-screen program (Claude Code's TUI) shows its own screen there. */
+  readLines() {
+    var _a7;
+    const buffer = (_a7 = this.term) == null ? void 0 : _a7.buffer.active;
+    if (!buffer) return [];
+    const lines = [];
+    for (let i8 = 0; i8 < buffer.length; i8++) {
+      const line = buffer.getLine(i8);
+      if (!line) continue;
+      const text = line.translateToString(true);
+      if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text;
+      else lines.push(text);
+    }
+    return lines;
+  }
+  /** The folder the shell is in now, as far as shell integration says. */
+  get shellCwd() {
+    var _a7, _b, _c2;
+    return (_c2 = (_b = (_a7 = this.cwdTracker) == null ? void 0 : _a7.getCwd()) != null ? _b : this.restoredCwd) != null ? _c2 : this.spawnCwd;
+  }
+  /** Types a command line and presses Enter (agent API `run`). */
+  runCommand(command) {
+    if (!this.pty) return false;
+    this.pty.write(`${command.replace(/[\r\n]+/g, " ")}\r`);
+    return true;
   }
   /** The hook/review token: how the Agent inbox matches sessions and
    *  pending changes to this terminal. */
@@ -17395,6 +17686,8 @@ var TerminalView = class _TerminalView extends import_obsidian10.ItemView {
     (_c2 = this.webglAddon) == null ? void 0 : _c2.dispose();
     this.webglAddon = null;
     this.plugin.reviewServer.unregister(this.token);
+    for (const handler of this.oscNotifyHandlers) handler.dispose();
+    this.oscNotifyHandlers = [];
     this.plugin.agentSessionStore.sessionEnded(this.token);
     this.plugin.groups.onTerminalClosed();
     (_d = this.pty) == null ? void 0 : _d.kill();
@@ -17494,7 +17787,11 @@ var TerminalView = class _TerminalView extends import_obsidian10.ItemView {
     const typedState = state;
     const launch = typedState == null ? void 0 : typedState.launch;
     if (launch && typeof launch.command === "string" && launch.command) {
-      this.launch = { command: launch.command, prompt: typeof launch.prompt === "string" ? launch.prompt : void 0 };
+      this.launch = {
+        command: launch.command,
+        prompt: typeof launch.prompt === "string" ? launch.prompt : void 0,
+        submit: launch.submit === true
+      };
     }
     const scrollback = typedState == null ? void 0 : typedState.scrollback;
     if (typeof scrollback === "string" && scrollback.length > 0) {
@@ -17598,6 +17895,12 @@ var TerminalView = class _TerminalView extends import_obsidian10.ItemView {
         TERM: "xterm-256color",
         TERMINUS_HOOK_PORT: String(port),
         TERMINUS_HOOK_TOKEN: this.token,
+        // The agent API's command-line client and this terminal's public id
+        // (see agentApi/). Always set; the API itself refuses while agent
+        // control is off.
+        TERMINUS_CLI: (0, import_terminus_node_bridge16.pathJoin)(resourcesDir, "terminus"),
+        TERMINUS_PYTHON: pythonBin,
+        TERMINUS_TERMINAL_ID: this.publicId,
         ...getShellIntegrationEnv(shell2, resourcesDir)
       }
     });
@@ -17611,14 +17914,15 @@ var TerminalView = class _TerminalView extends import_obsidian10.ItemView {
       this.plugin.agentSessionStore.sessionEnded(this.token);
     });
     this.pty.on("ready", () => {
-      var _a8, _b2, _c3, _d2, _e4;
+      var _a8, _b2, _c3, _d2, _e4, _f;
       if (this.startupDecided) return;
       this.startupDecided = true;
       if (this.startResume()) return;
       const command = (_b2 = (_a8 = this.launch) == null ? void 0 : _a8.command) != null ? _b2 : this.plugin.settings.startupCommand.trim();
       this.pendingPrompt = (_d2 = (_c3 = this.launch) == null ? void 0 : _c3.prompt) != null ? _d2 : null;
+      this.submitPendingPrompt = ((_e4 = this.launch) == null ? void 0 : _e4.submit) === true;
       this.launch = null;
-      if (command) (_e4 = this.pty) == null ? void 0 : _e4.write(`${command}\r`);
+      if (command) (_f = this.pty) == null ? void 0 : _f.write(`${command}\r`);
     });
     this.pty.start();
   }
@@ -21863,6 +22167,8 @@ var AgentInboxView = class extends import_obsidian19.ItemView {
     const session = card.session;
     if (!session) return null;
     if (!card.ended && session.status === "working") {
+      const statusLine = this.plugin.agentApi.statusLine(session.token);
+      if (statusLine) return `${statusLine}\u2026`;
       if (!session.currentFile) return "Working\u2026";
       return `Editing ${(0, import_terminus_node_bridge26.pathRelative)(this.plugin.getVaultBasePath(), session.currentFile)}\u2026`;
     }
@@ -24951,6 +25257,11 @@ var EXPERIENCE_LABELS = {
   "multi-agent": "Multi-agent"
 };
 var MULTI_AGENT_AVAILABLE = true;
+var NOTIFICATION_DELIVERY_LABELS = {
+  off: "Off",
+  "in-app": "In Obsidian",
+  system: "System notification"
+};
 var DEFAULT_CLASSIC_SETTINGS = {
   autoRevealPendingChanges: true,
   autoRevealDelayMs: 800
@@ -24968,8 +25279,22 @@ var DEFAULT_MULTI_AGENT_SETTINGS = {
   sessionBaseFolder: "",
   checkForUpdates: false
 };
+var DEFAULT_NOTIFICATION_SETTINGS = {
+  delivery: "in-app",
+  needsInput: true,
+  finished: true,
+  sound: false
+};
+var DEFAULT_AGENT_CONTROL_SETTINGS = {
+  enabled: false,
+  maxOpenedTerminals: 4
+};
+var MIN_AGENT_OPENED_TERMINALS = 1;
+var MAX_AGENT_OPENED_TERMINALS = 12;
 var DEFAULT_SETTINGS = {
   experience: "multi-agent",
+  notifications: DEFAULT_NOTIFICATION_SETTINGS,
+  agentControl: DEFAULT_AGENT_CONTROL_SETTINGS,
   classic: DEFAULT_CLASSIC_SETTINGS,
   multiAgent: DEFAULT_MULTI_AGENT_SETTINGS,
   fontSize: 13,
@@ -24990,11 +25315,12 @@ var DEFAULT_SETTINGS = {
   hasSeenWelcome: false,
   hasSeenMultiAgentInvite: false,
   hasSeenMultiAgentDefault: false,
+  hasSeenAgentFeaturesNews: false,
   groups: DEFAULT_GROUPS_DATA
 };
 function resolveSettings(saved) {
   const data = typeof saved === "object" && saved !== null ? saved : {};
-  const { autoRevealPendingChanges, autoRevealDelayMs, classic, multiAgent, groups, ...rest } = data;
+  const { autoRevealPendingChanges, autoRevealDelayMs, classic, multiAgent, groups, notifications, agentControl, ...rest } = data;
   const legacyClassic = {};
   if (autoRevealPendingChanges !== void 0) legacyClassic.autoRevealPendingChanges = autoRevealPendingChanges;
   if (autoRevealDelayMs !== void 0) legacyClassic.autoRevealDelayMs = autoRevealDelayMs;
@@ -25009,6 +25335,8 @@ function resolveSettings(saved) {
     ...rest,
     classic: { ...DEFAULT_CLASSIC_SETTINGS, ...legacyClassic, ...classic },
     multiAgent: { ...DEFAULT_MULTI_AGENT_SETTINGS, ...multiAgent },
+    notifications: { ...DEFAULT_NOTIFICATION_SETTINGS, ...notifications },
+    agentControl: { ...DEFAULT_AGENT_CONTROL_SETTINGS, ...agentControl },
     groups: resolveGroupsData(groups)
   };
 }
@@ -25168,6 +25496,62 @@ var TerminusSettingTab = class extends import_obsidian27.PluginSettingTab {
       })
     );
   }
+  renderNotificationsSection(containerEl) {
+    const notifications = this.plugin.settings.notifications;
+    new import_obsidian27.Setting(containerEl).setName("Notifications").setHeading();
+    new import_obsidian27.Setting(containerEl).setName("Notify me").setDesc(
+      "When a Claude session needs you or finishes while you're looking at something else. In Obsidian shows a notice inside the app; System notification uses your operating system's notifications; if the test shows nothing, turn on notifications for Obsidian in your system settings (on a Mac: System Settings \u2192 Notifications \u2192 Obsidian). Clicking either opens the terminal. Nothing is shown for the terminal you're already looking at."
+    ).addDropdown(
+      (dropdown) => dropdown.addOptions(NOTIFICATION_DELIVERY_LABELS).setValue(notifications.delivery).onChange(async (value) => {
+        notifications.delivery = value === "system" || value === "off" ? value : "in-app";
+        await this.plugin.saveSettings();
+        for (const setting of followers) setting.settingEl.toggle(value !== "off");
+      })
+    ).addExtraButton(
+      (button) => button.setIcon("bell-ring").setTooltip("Send a test notification").onClick(() => this.plugin.notifier.test())
+    );
+    const followers = [];
+    followers.push(new import_obsidian27.Setting(containerEl).setName("When Claude needs input").setDesc("A permission prompt or a question waiting for your answer.").addToggle(
+      (toggle) => toggle.setValue(notifications.needsInput).onChange(async (value) => {
+        notifications.needsInput = value;
+        await this.plugin.saveSettings();
+      })
+    ));
+    followers.push(new import_obsidian27.Setting(containerEl).setName("When Claude finishes").setDesc("A turn ended and you haven't looked at it yet.").addToggle(
+      (toggle) => toggle.setValue(notifications.finished).onChange(async (value) => {
+        notifications.finished = value;
+        await this.plugin.saveSettings();
+      })
+    ));
+    followers.push(new import_obsidian27.Setting(containerEl).setName("Play a sound").setDesc("A ding with each notification: two quick ones when Claude needs you, one softer one when it's done.").addToggle(
+      (toggle) => toggle.setValue(notifications.sound).onChange(async (value) => {
+        notifications.sound = value;
+        await this.plugin.saveSettings();
+      })
+    ));
+    for (const setting of followers) setting.settingEl.toggle(notifications.delivery !== "off");
+  }
+  renderAgentControlSection(containerEl) {
+    const agentControl = this.plugin.settings.agentControl;
+    new import_obsidian27.Setting(containerEl).setName("Agent control").setHeading();
+    new import_obsidian27.Setting(containerEl).setName("Let agents control Terminus").setDesc(
+      "Lets Claude, running in a Terminus terminal, open terminals beside it, run commands in them and read their output, send notifications, and message, wait on and delegate to other sessions in the same group. Adds a skill to .claude/skills/terminus that teaches it how. Agents can only reach terminals in their own group, can't type into a session that's waiting on a permission prompt, and can't start Claude with permission checks bypassed."
+    ).addToggle(
+      (toggle) => toggle.setValue(agentControl.enabled).onChange(async (value) => {
+        await this.plugin.setAgentControl(value);
+        limitSetting.settingEl.toggle(value);
+      })
+    );
+    const limitSetting = new import_obsidian27.Setting(containerEl).setName("Terminals an agent may open").setDesc(
+      `How many terminals one agent can have open at once that it opened itself (${MIN_AGENT_OPENED_TERMINALS}-${MAX_AGENT_OPENED_TERMINALS}). An agent opened by another agent can't open more.`
+    ).addSlider(
+      (slider) => slider.setLimits(MIN_AGENT_OPENED_TERMINALS, MAX_AGENT_OPENED_TERMINALS, 1).setValue(agentControl.maxOpenedTerminals).setDynamicTooltip().onChange(async (value) => {
+        agentControl.maxOpenedTerminals = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    limitSetting.settingEl.toggle(agentControl.enabled);
+  }
   display() {
     const { containerEl } = this;
     containerEl.empty();
@@ -25241,6 +25625,8 @@ var TerminusSettingTab = class extends import_obsidian27.PluginSettingTab {
     } else {
       this.renderClassicSection(containerEl);
     }
+    this.renderNotificationsSection(containerEl);
+    if (this.plugin.experience === "multi-agent") this.renderAgentControlSection(containerEl);
     new import_obsidian27.Setting(containerEl).setName("Advanced").setHeading();
     new import_obsidian27.Setting(containerEl).setName("Shell binary override").setDesc(
       `Leave blank to auto-detect (your $SHELL, currently resolves to "${(0, import_terminus_node_bridge29.getEnvVar)("SHELL") || "/bin/zsh"}" if unset). Only needed if the terminal opens the wrong shell.`
@@ -25708,16 +26094,861 @@ var WhatsNewModal = class _WhatsNewModal extends import_obsidian31.Modal {
   }
 };
 
+// src/modals/WhatsNewAgentsModal.ts
+var import_obsidian32 = require("obsidian");
+var WhatsNewAgentsModal = class _WhatsNewAgentsModal extends import_obsidian32.Modal {
+  constructor(app, multiAgent) {
+    super(app);
+    this.multiAgent = multiAgent;
+    this.resolvePromise = null;
+  }
+  /** `multiAgent`: agent control works only there, so Classic is told how
+   *  to get it rather than shown a setting it can't use. */
+  static ask(app, multiAgent) {
+    return new Promise((resolve) => {
+      const modal = new _WhatsNewAgentsModal(app, multiAgent);
+      modal.resolvePromise = resolve;
+      modal.open();
+    });
+  }
+  onOpen() {
+    const { contentEl, modalEl } = this;
+    modalEl.addClass("terminus-whats-new-modal");
+    contentEl.createEl("h3", { text: "What's new in Terminus" });
+    contentEl.createEl("p", {
+      cls: "terminus-whats-new-lead",
+      text: "Terminus now tells you when Claude needs you, and Claude can work with Terminus itself."
+    });
+    const list = contentEl.createEl("ul", { cls: "terminus-whats-new-list" });
+    const point = (title, text) => {
+      const item = list.createEl("li");
+      item.createEl("strong", { text: title });
+      item.appendText(` ${text}`);
+    };
+    point(
+      "Notifications.",
+      "When a session asks for permission or finishes while you're looking at something else, a notice says so. Click it to jump to that terminal. On by default, inside Obsidian; switch to system notifications or add a ding in settings."
+    );
+    point(
+      "Agent control.",
+      "Let Claude open terminals beside it for a dev server or a long test run, read their output, and tell you when something needs you."
+    );
+    point(
+      "Agents working together.",
+      "Claude can message other sessions in its group, wait for them, and hand a task to a new session whose result comes back on its own."
+    );
+    contentEl.createEl("p", {
+      cls: "setting-item-description",
+      text: this.multiAgent ? "Agent control is off until you turn it on under Settings \u2192 Terminus \u2192 Agent control. It only reaches terminals in the agent's own group. This won't be shown again." : "Agent control needs the Multi-agent experience (Settings \u2192 Terminus \u2192 Experience) and is off until you turn it on. This won't be shown again."
+    });
+    const buttonRow = contentEl.createDiv({ cls: "terminus-confirm-modal-actions" });
+    buttonRow.createEl("button", { text: "Open settings" }).addEventListener("click", () => this.finish("settings"));
+    const gotIt = buttonRow.createEl("button", { text: "Got it", cls: "mod-cta" });
+    gotIt.addEventListener("click", () => this.finish("close"));
+    window.setTimeout(() => gotIt.focus(), 0);
+  }
+  onClose() {
+    this.contentEl.empty();
+    this.finish("close");
+  }
+  finish(choice) {
+    const resolve = this.resolvePromise;
+    if (!resolve) return;
+    this.resolvePromise = null;
+    resolve(choice);
+    this.close();
+  }
+};
+
+// src/notify/Notifier.ts
+var import_obsidian33 = require("obsidian");
+var DELAY_MS = 1e3;
+var MESSAGE_MIN_INTERVAL_MS = 3e3;
+var IN_APP_DURATION_MS = 8e3;
+var Notifier = class {
+  constructor(plugin) {
+    this.plugin = plugin;
+    this.last = /* @__PURE__ */ new Map();
+    this.timers = /* @__PURE__ */ new Map();
+    this.lastMessageAt = /* @__PURE__ */ new Map();
+    this.audio = null;
+  }
+  /** Every AgentSessionStore change. */
+  onSessionChange(session) {
+    const next = { status: session.status, needs: session.needs };
+    const prev = this.last.get(session.token);
+    this.last.set(session.token, next);
+    if (!session.running) {
+      this.cancel(session.token);
+      this.last.delete(session.token);
+      return;
+    }
+    const kind = attentionTransition(prev, next);
+    if (!kind || !this.wants(kind)) return;
+    this.cancel(session.token);
+    const timer = window.setTimeout(() => {
+      this.timers.delete(session.token);
+      const now = this.plugin.agentSessionStore.get(session.token);
+      if (!(now == null ? void 0 : now.running) || !stillCurrent(kind, { status: now.status, needs: now.needs })) return;
+      this.deliver(this.describe(kind, now));
+    }, DELAY_MS);
+    this.timers.set(session.token, timer);
+  }
+  /** A program in a terminal asked for one (OSC 9/777). A terminal with a
+   *  Claude session is left to the hooks, which already notify for it and
+   *  know more; Claude Code may send its own OSC 9 on top. */
+  fromTerminal(token, title, body) {
+    var _a7;
+    if ((_a7 = this.plugin.agentSessionStore.get(token)) == null ? void 0 : _a7.running) return;
+    this.message(token, title, body);
+  }
+  /** An agent asked for one through the agent API. False when it was
+   *  dropped: notifications off, or too soon after the last. */
+  message(token, title, body) {
+    var _a7, _b, _c2;
+    if (this.plugin.settings.notifications.delivery === "off") return false;
+    const now = Date.now();
+    if (now - ((_a7 = this.lastMessageAt.get(token)) != null ? _a7 : 0) < MESSAGE_MIN_INTERVAL_MS) return false;
+    this.lastMessageAt.set(token, now);
+    const name = (_c2 = (_b = this.plugin.findTerminalView(token)) == null ? void 0 : _b.getDisplayText()) != null ? _c2 : "Terminus";
+    this.deliver({ kind: "message", title: title ? `${name}: ${title}` : name, body, token });
+    return true;
+  }
+  /** The settings tab's test button: always shown, whatever is in front. */
+  test() {
+    if (this.plugin.settings.notifications.delivery === "off") {
+      new import_obsidian33.Notice("Terminus: notifications are off");
+      return;
+    }
+    this.deliver({ kind: "needs-input", title: "Terminus", body: "Notifications are working." }, true);
+  }
+  dispose() {
+    var _a7;
+    for (const timer of this.timers.values()) window.clearTimeout(timer);
+    this.timers.clear();
+    void ((_a7 = this.audio) == null ? void 0 : _a7.close());
+    this.audio = null;
+  }
+  wants(kind) {
+    const settings = this.plugin.settings.notifications;
+    if (settings.delivery === "off") return false;
+    if (kind === "needs-input") return settings.needsInput;
+    if (kind === "finished") return settings.finished;
+    return true;
+  }
+  cancel(token) {
+    const timer = this.timers.get(token);
+    if (timer === void 0) return;
+    window.clearTimeout(timer);
+    this.timers.delete(token);
+  }
+  describe(kind, session) {
+    var _a7, _b, _c2;
+    const name = (_b = (_a7 = this.plugin.findTerminalView(session.token)) == null ? void 0 : _a7.getDisplayText()) != null ? _b : "Claude";
+    if (kind === "needs-input") {
+      const body = (_c2 = session.needsMessage) != null ? _c2 : session.needs === "permission" ? "Claude needs your permission" : "Claude is waiting for your input";
+      return { kind, title: `${name} needs you`, body, token: session.token };
+    }
+    const title = session.lastTurnFailed ? `${name}: the turn failed` : `${name} finished`;
+    return { kind, title, body: previewText(session.lastMessage), token: session.token };
+  }
+  /** The user is already looking at this terminal: its own window has
+   *  focus and it's the active view. */
+  isInFront(token) {
+    const view = this.plugin.findTerminalView(token);
+    if (!view) return false;
+    const doc = view.containerEl.ownerDocument;
+    return doc.hasFocus() && this.plugin.app.workspace.getActiveViewOfType(TerminalView) === view;
+  }
+  deliver(request, force = false) {
+    var _a7;
+    if (!force && request.token && this.isInFront(request.token)) return;
+    const settings = this.plugin.settings.notifications;
+    const open = () => {
+      window.focus();
+      if (request.token) void this.plugin.focusTerminal(request.token);
+    };
+    if (settings.delivery === "system" && typeof Notification !== "undefined") {
+      const notification = new Notification(request.title, { body: (_a7 = request.body) != null ? _a7 : "", silent: true });
+      notification.onclick = open;
+    } else {
+      const fragment = createFragment((f) => {
+        const el2 = f.createDiv({ cls: "terminus-notice" });
+        el2.createDiv({ cls: "terminus-notice-title", text: request.title });
+        if (request.body) el2.createDiv({ cls: "terminus-notice-body", text: request.body });
+        if (request.token) el2.addEventListener("click", open);
+      });
+      new import_obsidian33.Notice(fragment, IN_APP_DURATION_MS);
+    }
+    if (settings.sound) this.playTone(request.kind);
+  }
+  /** A bell-like ding from WebAudio: two quick ones when Claude needs the
+   *  user, one lower and softer when it's done. Generated rather than a
+   *  sound file, which an Obsidian release can't ship. */
+  playTone(kind) {
+    var _a7;
+    try {
+      (_a7 = this.audio) != null ? _a7 : this.audio = new AudioContext();
+      const ctx = this.audio;
+      const start = ctx.currentTime + 0.01;
+      if (kind === "finished") {
+        this.ding(ctx, start, 880, 0.16);
+      } else {
+        this.ding(ctx, start, 1175, 0.18);
+        this.ding(ctx, start + 0.16, 1175, 0.14);
+      }
+    } catch (e) {
+    }
+  }
+  /**
+   * One struck-bell note: an instant attack, then each partial dying away
+   * on its own, the higher ones faster, which is what makes a ding rather
+   * than a beep. The partials are a small bell's slightly inharmonic
+   * overtones, quiet beside the fundamental.
+   */
+  ding(ctx, at3, frequency, volume) {
+    const partials = [
+      { ratio: 1, gain: 1, decay: 1.4 },
+      { ratio: 2.76, gain: 0.32, decay: 0.55 },
+      { ratio: 5.4, gain: 0.12, decay: 0.25 }
+    ];
+    for (const partial of partials) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = frequency * partial.ratio;
+      const peak = volume * partial.gain;
+      gain.gain.setValueAtTime(1e-4, at3);
+      gain.gain.exponentialRampToValueAtTime(peak, at3 + 4e-3);
+      gain.gain.exponentialRampToValueAtTime(1e-4, at3 + partial.decay);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(at3);
+      osc.stop(at3 + partial.decay + 0.05);
+    }
+  }
+};
+
+// src/agentApi/AgentApi.ts
+var import_obsidian34 = require("obsidian");
+
+// src/agentApi/policy.ts
+var ApiError = class extends Error {
+  constructor(code, message, httpStatus = 400) {
+    super(message);
+    this.code = code;
+    this.httpStatus = httpStatus;
+  }
+};
+var BYPASS_PATTERNS = [
+  /--dangerously-skip-permissions\b/,
+  /--allow-dangerously-skip-permissions\b/,
+  /--permission-mode(=|\s+)["']?bypassPermissions\b/
+];
+function bypassFlagIn(command) {
+  for (const pattern of BYPASS_PATTERNS) {
+    const match = command.match(pattern);
+    if (match) return match[0];
+  }
+  return null;
+}
+var RateLimiter = class {
+  constructor(limit, windowMs) {
+    this.limit = limit;
+    this.windowMs = windowMs;
+    this.hits = /* @__PURE__ */ new Map();
+  }
+  /** Records an action unless the caller is over the limit. */
+  take(key, now = Date.now()) {
+    var _a7;
+    const recent = ((_a7 = this.hits.get(key)) != null ? _a7 : []).filter((at3) => now - at3 < this.windowMs);
+    if (recent.length >= this.limit) {
+      this.hits.set(key, recent);
+      return false;
+    }
+    recent.push(now);
+    this.hits.set(key, recent);
+    return true;
+  }
+  forget(key) {
+    this.hits.delete(key);
+  }
+};
+var WAITABLE_STATUSES = ["working", "blocked", "done", "idle", "ended"];
+function publicStatus(session) {
+  if (!session) return "none";
+  if (!session.running) return "ended";
+  switch (session.status) {
+    case "working":
+      return "working";
+    case "needs-attention":
+      return session.needs === "unread-turn" ? "done" : "blocked";
+    case "finished-unread":
+      return "done";
+    default:
+      return "idle";
+  }
+}
+function tailLines(lines, count) {
+  let end = lines.length;
+  while (end > 0 && lines[end - 1].trim() === "") end--;
+  return lines.slice(Math.max(0, end - count), end);
+}
+function findMatchingLine(lines, pattern, regex) {
+  var _a7;
+  let test;
+  if (regex) {
+    let re3;
+    try {
+      re3 = new RegExp(pattern);
+    } catch (err) {
+      throw new ApiError("invalid_params", `Not a valid regular expression: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    test = (line) => re3.test(line);
+  } else {
+    test = (line) => line.includes(pattern);
+  }
+  return (_a7 = lines.find(test)) != null ? _a7 : null;
+}
+function asParams(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
+}
+function requireString(params, key, maxLength = 2e4) {
+  const value = params[key];
+  if (typeof value !== "string" || value.trim() === "") throw new ApiError("invalid_params", `"${key}" is required`);
+  if (value.length > maxLength) throw new ApiError("invalid_params", `"${key}" is longer than ${maxLength} characters`);
+  return value;
+}
+function optionalString(params, key, maxLength = 2e4) {
+  const value = params[key];
+  if (value === void 0 || value === null || value === "") return void 0;
+  if (typeof value !== "string") throw new ApiError("invalid_params", `"${key}" must be a string`);
+  if (value.length > maxLength) throw new ApiError("invalid_params", `"${key}" is longer than ${maxLength} characters`);
+  return value;
+}
+function optionalInt(params, key, fallback, min, max) {
+  const value = params[key];
+  if (value === void 0 || value === null) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new ApiError("invalid_params", `"${key}" must be a number`);
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+function optionalBool(params, key) {
+  return params[key] === true;
+}
+function optionalChoice(params, key, choices, fallback) {
+  const value = params[key];
+  if (value === void 0 || value === null) return fallback;
+  if (typeof value === "string" && choices.includes(value)) return value;
+  throw new ApiError("invalid_params", `"${key}" must be one of: ${choices.join(", ")}`);
+}
+
+// src/agentApi/AgentApi.ts
+var MAX_OPEN_DEPTH = 1;
+var ACTION_LIMIT = 40;
+var ACTION_WINDOW_MS = 10 * 60 * 1e3;
+var DEFAULT_WAIT_MS = 1e5;
+var MAX_WAIT_MS = 28e4;
+var OUTPUT_POLL_MS = 400;
+var MAX_RESULT_LENGTH = 1e5;
+var MAX_STATUS_LENGTH = 120;
+var PLACEMENTS = ["tab", "split-right", "split-down"];
+var AgentApi = class {
+  constructor(plugin) {
+    this.plugin = plugin;
+    this.opened = /* @__PURE__ */ new Map();
+    this.actions = new RateLimiter(ACTION_LIMIT, ACTION_WINDOW_MS);
+    /** Each terminal's last closing message in full; the session store keeps
+     *  a preview. */
+    this.results = /* @__PURE__ */ new Map();
+    /** What an agent says it's doing (`status`), shown on its inbox card
+     *  while its turn lasts. */
+    this.statusLines = /* @__PURE__ */ new Map();
+  }
+  /** Wires the API to the session store. Called once from onload. */
+  start() {
+    this.plugin.agentSessionStore.on("change", (session) => this.onSessionChange(session));
+  }
+  /** From TerminalView as each turn ends, with the closing message. */
+  recordResult(token, message) {
+    if (message === void 0) return;
+    this.results.set(token, message.length > MAX_RESULT_LENGTH ? message.slice(0, MAX_RESULT_LENGTH) : message);
+  }
+  statusLine(token) {
+    var _a7;
+    return (_a7 = this.statusLines.get(token)) != null ? _a7 : null;
+  }
+  /** Whether an agent opened this terminal, and which one. */
+  openedBy(token) {
+    var _a7, _b;
+    return (_b = (_a7 = this.opened.get(token)) == null ? void 0 : _a7.by) != null ? _b : null;
+  }
+  async handle(callerToken, request) {
+    try {
+      const { method, params } = parseRequest(request);
+      const caller = this.plugin.findTerminalView(callerToken);
+      if (!caller) throw new ApiError("forbidden", "This terminal is no longer open in Terminus", 403);
+      if (this.plugin.experience !== "multi-agent") {
+        throw new ApiError("disabled", "Agent control needs the Multi-agent experience (Terminus settings \u2192 Experience)", 403);
+      }
+      if (!this.plugin.settings.agentControl.enabled) {
+        throw new ApiError(
+          "disabled",
+          "Agent control is off. The user can turn it on in Terminus settings \u2192 Agent control \u2192 Let agents control Terminus.",
+          403
+        );
+      }
+      const result = await this.dispatch(caller, method, params);
+      return { status: 200, body: { ok: true, result } };
+    } catch (err) {
+      if (err instanceof ApiError) return { status: err.httpStatus, body: { ok: false, error: { code: err.code, message: err.message } } };
+      return { status: 500, body: { ok: false, error: { code: "internal", message: err instanceof Error ? err.message : String(err) } } };
+    }
+  }
+  dispatch(caller, method, params) {
+    switch (method) {
+      case "whoami":
+        return this.whoami(caller);
+      case "terminal.list":
+        return { terminals: this.scope(caller).map((view) => this.describe(view, caller)) };
+      case "terminal.open":
+        return this.open(caller, params);
+      case "terminal.run":
+        return this.run(caller, params);
+      case "terminal.read":
+        return this.read(caller, params);
+      case "terminal.wait_output":
+        return this.waitOutput(caller, params);
+      case "terminal.close":
+        return this.close(caller, params);
+      case "notify":
+        return this.notify(caller, params);
+      case "status":
+        return this.setStatus(caller, params);
+      case "agent.prompt":
+        return this.prompt(caller, params);
+      case "agent.wait":
+        return this.wait(caller, params);
+      case "agent.result":
+        return this.result(caller, params);
+      case "agent.delegate":
+        return this.delegate(caller, params);
+      default:
+        throw new ApiError("unknown_method", `Unknown method "${method}"`, 404);
+    }
+  }
+  // ---- Methods ----
+  whoami(caller) {
+    var _a7;
+    const group = caller.groupId ? this.plugin.groupStore.get(caller.groupId) : void 0;
+    return {
+      ...this.describe(caller, caller),
+      group: (_a7 = group == null ? void 0 : group.name) != null ? _a7 : null,
+      can_open: this.openRefusal(caller) === null,
+      max_opened_terminals: this.plugin.settings.agentControl.maxOpenedTerminals
+    };
+  }
+  async open(caller, params) {
+    var _a7, _b, _c2;
+    const command = optionalString(params, "command", 2e3);
+    const prompt = optionalString(params, "prompt");
+    if (prompt !== void 0 && command === void 0) {
+      throw new ApiError("invalid_params", '"prompt" needs a "command" that starts an agent, such as "claude"');
+    }
+    if (command !== void 0) this.refuseBypass(command);
+    const name = optionalString(params, "name", 60);
+    const child = await this.openTerminal(caller, {
+      command: command != null ? command : "",
+      prompt,
+      cwd: (_b = (_a7 = optionalString(params, "cwd", 1e3)) != null ? _a7 : caller.shellCwd) != null ? _b : void 0,
+      label: (_c2 = name != null ? name : command) != null ? _c2 : "terminal",
+      placement: optionalChoice(params, "placement", PLACEMENTS, "tab")
+    });
+    return this.describe(child, caller);
+  }
+  run(caller, params) {
+    const target = this.target(caller, params, true);
+    const command = requireString(params, "command", 2e3);
+    this.refuseBypass(command);
+    const status = publicStatus(this.plugin.agentSessionStore.get(target.hookToken));
+    if (status !== "none" && status !== "ended") {
+      throw new ApiError("agent_running", `${target.publicId} is running Claude; send it a message with "prompt" instead`, 409);
+    }
+    this.takeAction(caller);
+    if (!target.runCommand(command)) throw new ApiError("unavailable", `${target.publicId}'s shell isn't running`, 409);
+    return { id: target.publicId };
+  }
+  read(caller, params) {
+    const target = this.target(caller, params, true);
+    const lines = optionalInt(params, "lines", 80, 1, 5e3);
+    return { id: target.publicId, text: tailLines(target.readLines(), lines).join("\n") };
+  }
+  async waitOutput(caller, params) {
+    const target = this.target(caller, params, true);
+    const pattern = requireString(params, "pattern", 1e3);
+    const regex = optionalBool(params, "regex");
+    const lines = optionalInt(params, "lines", 80, 1, 5e3);
+    const timeout = optionalInt(params, "timeout_ms", DEFAULT_WAIT_MS, 1e3, MAX_WAIT_MS);
+    findMatchingLine([], pattern, regex);
+    const matched = await this.waitFor(
+      () => {
+        if (!this.plugin.findTerminalView(target.hookToken)) throw new ApiError("closed", `${target.publicId} was closed`, 410);
+        return findMatchingLine(tailLines(target.readLines(), lines), pattern, regex);
+      },
+      timeout,
+      false,
+      `Nothing matching "${pattern}" in ${target.publicId}'s last ${lines} lines`
+    );
+    return { id: target.publicId, matched_line: matched };
+  }
+  close(caller, params) {
+    var _a7;
+    const target = this.target(caller, params, false);
+    if (((_a7 = this.opened.get(target.hookToken)) == null ? void 0 : _a7.by) !== caller.hookToken) {
+      throw new ApiError("forbidden", `${target.publicId} wasn't opened by you; only the user can close it`, 403);
+    }
+    target.leaf.detach();
+    this.opened.delete(target.hookToken);
+    return { id: target.publicId, closed: true };
+  }
+  notify(caller, params) {
+    var _a7;
+    const body = requireString(params, "body", 300);
+    const title = (_a7 = optionalString(params, "title", 80)) != null ? _a7 : null;
+    return { shown: this.plugin.notifier.message(caller.hookToken, title, body) };
+  }
+  setStatus(caller, params) {
+    var _a7;
+    const text = (_a7 = optionalString(params, "text", 1e3)) == null ? void 0 : _a7.replace(/\s+/g, " ").trim();
+    if (text) this.statusLines.set(caller.hookToken, text.slice(0, MAX_STATUS_LENGTH));
+    else this.statusLines.delete(caller.hookToken);
+    this.plugin.refreshTerminusViews();
+    return { status: this.statusLine(caller.hookToken) };
+  }
+  async prompt(caller, params) {
+    const target = this.target(caller, params, false);
+    const text = requireString(params, "text");
+    const mode = optionalChoice(params, "mode", ["queue", "steer"], "queue");
+    const session = this.plugin.agentSessionStore.get(target.hookToken);
+    if (!(session == null ? void 0 : session.running)) throw new ApiError("no_agent", `${target.publicId} isn't running Claude`, 409);
+    this.takeAction(caller);
+    const message = `Message from ${caller.getDisplayText()} (Terminus terminal ${caller.publicId}):
+
+${text}`;
+    if (mode === "steer") {
+      const readiness = this.plugin.steerReadiness(target.hookToken);
+      if (!readiness.ready) throw new ApiError("agent_blocked", `${target.publicId}: ${readiness.reason}. Use mode "queue" to send it once it's free.`, 409);
+      if (!await this.plugin.sendGuidance(target.hookToken, message, true)) {
+        throw new ApiError("unavailable", `Couldn't type into ${target.publicId}`, 409);
+      }
+    } else if (!this.plugin.queueGuidance(target.hookToken, message)) {
+      throw new ApiError("unavailable", `Couldn't queue a message for ${target.publicId}`, 409);
+    }
+    return { id: target.publicId, mode, status: publicStatus(this.plugin.agentSessionStore.get(target.hookToken)) };
+  }
+  async wait(caller, params) {
+    const target = this.target(caller, params, false);
+    const timeout = optionalInt(params, "timeout_ms", DEFAULT_WAIT_MS, 1e3, MAX_WAIT_MS);
+    const nextTurn = optionalBool(params, "next_turn");
+    const until = parseUntil(params.until);
+    const since = Date.now();
+    const status = await this.waitFor(
+      () => {
+        var _a7;
+        const session = this.plugin.agentSessionStore.get(target.hookToken);
+        const now = this.plugin.findTerminalView(target.hookToken) ? publicStatus(session) : "ended";
+        if (nextTurn) {
+          if (now === "blocked" || now === "ended") return now;
+          const ended = (_a7 = session == null ? void 0 : session.lastTurnEndedAt) != null ? _a7 : 0;
+          return ended >= since && now !== "working" ? now : null;
+        }
+        return until.includes(now) ? now : null;
+      },
+      timeout,
+      true,
+      `${target.publicId} is still ${publicStatus(this.plugin.agentSessionStore.get(target.hookToken))}`
+    );
+    return { id: target.publicId, status };
+  }
+  result(caller, params) {
+    var _a7, _b, _c2;
+    const target = this.target(caller, params, false);
+    const session = this.plugin.agentSessionStore.get(target.hookToken);
+    return {
+      id: target.publicId,
+      status: publicStatus(session),
+      turn_failed: (_a7 = session == null ? void 0 : session.lastTurnFailed) != null ? _a7 : false,
+      message: (_c2 = (_b = this.results.get(target.hookToken)) != null ? _b : session == null ? void 0 : session.lastMessage) != null ? _c2 : null
+    };
+  }
+  async delegate(caller, params) {
+    var _a7, _b, _c2;
+    const task = requireString(params, "task");
+    const name = (_a7 = optionalString(params, "name", 40)) != null ? _a7 : task.replace(/\s+/g, " ").slice(0, 32);
+    const callerSession = this.plugin.agentSessionStore.get(caller.hookToken);
+    const child = await this.openTerminal(caller, {
+      command: "claude",
+      prompt: task,
+      cwd: (_c2 = (_b = callerSession == null ? void 0 : callerSession.cwd) != null ? _b : caller.shellCwd) != null ? _c2 : void 0,
+      label: name,
+      placement: optionalChoice(params, "placement", PLACEMENTS, "tab")
+    });
+    this.plugin.delegationStore.add({
+      childToken: child.hookToken,
+      parentToken: caller.hookToken,
+      task,
+      parentLabel: caller.getDisplayText(),
+      childLabel: child.getDisplayText(),
+      createdAt: Date.now(),
+      autoReturn: true
+    });
+    return { ...this.describe(child, caller), returns_result: true };
+  }
+  // ---- Shared ----
+  /** The terminals the caller may see and reach: its own group's. */
+  scope(caller) {
+    return this.plugin.groups.terminalsIn(caller.groupId);
+  }
+  target(caller, params, allowSelf) {
+    const id = requireString(params, "id", 20);
+    const target = this.scope(caller).find((view) => view.publicId === id);
+    if (!target) throw new ApiError("not_found", `No terminal ${id} in your group. "list" shows the ones you can reach.`, 404);
+    if (!allowSelf && target === caller) throw new ApiError("invalid_params", "That's your own terminal");
+    return target;
+  }
+  describe(view, caller) {
+    var _a7, _b, _c2;
+    const session = this.plugin.agentSessionStore.get(view.hookToken);
+    const openedBy = (_a7 = this.opened.get(view.hookToken)) == null ? void 0 : _a7.by;
+    return {
+      id: view.publicId,
+      name: view.getDisplayText(),
+      self: view === caller,
+      status: publicStatus(session),
+      status_line: this.statusLine(view.hookToken),
+      opened_by: openedBy ? (_c2 = (_b = this.plugin.findTerminalView(openedBy)) == null ? void 0 : _b.publicId) != null ? _c2 : null : null
+    };
+  }
+  /** Why the caller may not open another terminal, or null when it may. */
+  openRefusal(caller) {
+    var _a7, _b;
+    if (((_b = (_a7 = this.opened.get(caller.hookToken)) == null ? void 0 : _a7.depth) != null ? _b : 0) >= MAX_OPEN_DEPTH) {
+      return "A terminal opened by an agent can't open more terminals";
+    }
+    const max = this.plugin.settings.agentControl.maxOpenedTerminals;
+    const live = [...this.opened].filter(([token, record]) => record.by === caller.hookToken && this.plugin.findTerminalView(token)).length;
+    if (live >= max) return `You already have ${live} terminals open (the limit is ${max}); close one first`;
+    return null;
+  }
+  async openTerminal(caller, spec) {
+    var _a7, _b;
+    const refusal = this.openRefusal(caller);
+    if (refusal) throw new ApiError("limit", refusal, 429);
+    this.takeAction(caller);
+    const { workspace } = this.plugin.app;
+    const previous = workspace.getMostRecentLeaf();
+    const child = await this.plugin.groups.newTerminal(
+      caller.groupId,
+      false,
+      {
+        command: spec.command,
+        prompt: spec.prompt,
+        submit: spec.prompt !== void 0,
+        cwd: spec.cwd,
+        name: `${caller.getDisplayText()} \u203A ${spec.label}`
+      },
+      spec.placement
+    );
+    if (previous && previous !== (child == null ? void 0 : child.leaf)) workspace.setActiveLeaf(previous, { focus: true });
+    if (!child) throw new ApiError("unavailable", "The terminal couldn't be opened", 500);
+    this.opened.set(child.hookToken, { by: caller.hookToken, depth: ((_b = (_a7 = this.opened.get(caller.hookToken)) == null ? void 0 : _a7.depth) != null ? _b : 0) + 1 });
+    new import_obsidian34.Notice(`Terminus: ${caller.getDisplayText()} opened ${child.getDisplayText()}`);
+    return child;
+  }
+  refuseBypass(command) {
+    const flag = bypassFlagIn(command);
+    if (flag) throw new ApiError("forbidden", `Terminus doesn't let agents start anything with ${flag}`, 403);
+  }
+  takeAction(caller) {
+    if (!this.actions.take(caller.hookToken)) {
+      throw new ApiError("rate_limited", `Too many actions: at most ${ACTION_LIMIT} opens, runs, prompts and delegations per 10 minutes`, 429);
+    }
+  }
+  /**
+   * Resolves with `check()`'s first non-null value. Checked at once, then
+   * on every session change (when `onSessionChange`) and on a timer.
+   * Rejects with a timeout, or with whatever `check` throws.
+   */
+  waitFor(check, timeoutMs, onSessionChange, timeoutMessage) {
+    return new Promise((resolve, reject) => {
+      const store = this.plugin.agentSessionStore;
+      let interval = 0;
+      let timer = 0;
+      const finish2 = () => {
+        window.clearInterval(interval);
+        window.clearTimeout(timer);
+        if (onSessionChange) store.off("change", poll);
+      };
+      const poll = () => {
+        try {
+          const value = check();
+          if (value === null) return;
+          finish2();
+          resolve(value);
+        } catch (err) {
+          finish2();
+          reject(err);
+        }
+      };
+      interval = window.setInterval(poll, onSessionChange ? 1e3 : OUTPUT_POLL_MS);
+      timer = window.setTimeout(() => {
+        finish2();
+        reject(new ApiError("timeout", `${timeoutMessage} after ${Math.round(timeoutMs / 1e3)}s; call again to keep waiting`, 408));
+      }, timeoutMs);
+      if (onSessionChange) store.on("change", poll);
+      poll();
+    });
+  }
+  onSessionChange(session) {
+    if (session.status !== "working") {
+      if (this.statusLines.delete(session.token)) this.plugin.refreshTerminusViews();
+    }
+    if (!session.running && !this.plugin.findTerminalView(session.token)) {
+      this.results.delete(session.token);
+      this.actions.forget(session.token);
+    }
+    this.returnDelegatedResult(session);
+  }
+  /**
+   * A task an agent delegated (`delegate`) sends its result back on its
+   * own: once the new session's first turn is over, the result is queued
+   * for the agent that asked, which gets it as soon as it's between turns.
+   */
+  returnDelegatedResult(session) {
+    var _a7, _b;
+    const delegation = this.plugin.delegationStore.get(session.token);
+    if (!(delegation == null ? void 0 : delegation.autoReturn) || session.status === "working" || session.lastTurnEndedAt === null) return;
+    if (publicStatus(session) === "blocked") return;
+    const parent = this.plugin.findTerminalView(delegation.parentToken);
+    const child = this.plugin.findTerminalView(session.token);
+    if (!parent) return;
+    const result = (_b = (_a7 = this.results.get(session.token)) != null ? _a7 : session.lastMessage) != null ? _b : "(no message)";
+    const childName = child ? `${child.getDisplayText()} (${child.publicId})` : delegation.childLabel;
+    const outcome = session.lastTurnFailed ? "stopped with an error" : "finished";
+    const text = `${childName} ${outcome} the task you delegated: ${delegation.task.replace(/\s+/g, " ")}
+
+Its result:
+
+${result}`;
+    this.plugin.delegationStore.remove(session.token);
+    this.plugin.queueGuidance(delegation.parentToken, text);
+  }
+};
+function parseRequest(request) {
+  const body = asParams(request);
+  if (typeof body.method !== "string" || !body.method) throw new ApiError("invalid_request", 'The request needs a "method"');
+  return { method: body.method, params: asParams(body.params) };
+}
+function parseUntil(value) {
+  if (value === void 0 || value === null) return ["done", "idle", "blocked", "ended"];
+  const list = Array.isArray(value) ? value : [value];
+  const statuses = list.filter((s15) => typeof s15 === "string" && WAITABLE_STATUSES.includes(s15));
+  if (statuses.length === 0 || statuses.length !== list.length) {
+    throw new ApiError("invalid_params", `"until" takes: ${WAITABLE_STATUSES.join(", ")}`);
+  }
+  return statuses;
+}
+
+// src/agentApi/skill.ts
+var import_terminus_node_bridge30 = __toESM(require_dist());
+var MARKER = "<!-- Written by the Terminus plugin. Turning off agent control removes this file. -->";
+var SKILL_MD = `---
+name: terminus
+description: Control the Terminus terminal you're running in (an Obsidian plugin) -- open terminals beside you, run commands in them and read their output, notify the user, and message, wait on or delegate work to other Claude sessions in your group. Use when TERMINUS_CLI is set and a task would benefit from a separate terminal (a dev server, a watcher, a long test run), from parallel work in another Claude session, or from telling the user something needs them.
+---
+
+${MARKER}
+
+# Terminus
+
+You're running inside a Terminus terminal in Obsidian when \`TERMINUS_CLI\` is set. Run \`"$TERMINUS_CLI" <command>\` with your Bash tool. Every command prints JSON (\`read\` and \`result\` print text). Errors go to stderr with a code and exit 1.
+
+You can only see and reach terminals in your own group. Terminals have ids like \`t3\`; \`whoami\` shows yours.
+
+If a command fails with \`disabled\`, the user hasn't turned on agent control. Don't retry; tell them it's in Terminus settings \u2192 Agent control.
+
+## Terminals
+
+\`\`\`bash
+"$TERMINUS_CLI" whoami
+"$TERMINUS_CLI" list
+"$TERMINUS_CLI" open --name server --command "npm run dev"     # also: --placement tab|split-right|split-down, --cwd DIR
+"$TERMINUS_CLI" wait-output t5 "ready in" --timeout 60          # --regex for a regular expression
+"$TERMINUS_CLI" read t5 --lines 50
+"$TERMINUS_CLI" run t5 "npm test"                               # a shell terminal only, not one running Claude
+"$TERMINUS_CLI" close t5                                        # only terminals you opened
+\`\`\`
+
+\`wait-output\` searches the screen, which includes the command line itself: \`echo ready\` matches "ready" before it has printed anything. Match the output with \`--regex\` anchors (\`"^ready$"\`) or text the command line doesn't contain.
+
+Open a terminal for anything long-running you'd otherwise background, so the user can see it. Close what you opened when you're done with it.
+
+## Other Claude sessions
+
+\`\`\`bash
+"$TERMINUS_CLI" delegate "Summarize the notes in Projects/ into Projects/Overview.md" --name overview
+"$TERMINUS_CLI" prompt t4 "Can you check the links in Overview.md?"   # --now to steer its current turn
+"$TERMINUS_CLI" wait t4 --next-turn --timeout 100
+"$TERMINUS_CLI" result t4
+\`\`\`
+
+- \`delegate\` starts a new Claude session with the task and sends its result back to you on its own: it arrives as a new message once you're between turns. Don't poll for it; end your turn if you have nothing else to do.
+- \`prompt\` queues a message for a session, delivered once its current turn ends (\`--now\` types it into the running turn instead). The message says it came from you and your terminal id, so the other session can reply with \`prompt\`.
+- \`wait\` returns when the session is \`done\`, \`idle\`, \`blocked\` (waiting on the user) or \`ended\`; with \`--next-turn\`, when its next turn finishes. Keep \`--timeout\` under 110 seconds and call again if it times out.
+- Statuses: \`working\`, \`blocked\`, \`done\`, \`idle\`, \`ended\`, \`none\` (a plain shell).
+- Never message a session in a loop, and don't start more than one or two helpers for a task. You can't type into a session that's waiting on a permission prompt; that's the user's to answer.
+
+## Telling the user
+
+\`\`\`bash
+"$TERMINUS_CLI" status "Running the full test suite"   # shown on your inbox card until your turn ends
+"$TERMINUS_CLI" notify "Tests finished: 2 failures" --title "Tests"
+\`\`\`
+
+Notify only for something the user would want to be interrupted for.
+
+## Limits
+
+Terminus won't start anything with permission checks bypassed. A terminal you opened can't open more. Opens, runs, prompts and delegations are rate-limited.
+`;
+function skillPath(vaultBasePath) {
+  return (0, import_terminus_node_bridge30.pathJoin)(vaultBasePath, ".claude", "skills", "terminus", "SKILL.md");
+}
+async function provisionSkill(vaultBasePath, enabled) {
+  const path = skillPath(vaultBasePath);
+  const existing = await (0, import_terminus_node_bridge30.readTextFileIfExists)(path);
+  if (!enabled) {
+    if (existing == null ? void 0 : existing.includes(MARKER)) await (0, import_terminus_node_bridge30.deleteFileIfExists)(path);
+    return;
+  }
+  if (existing !== null && !existing.includes(MARKER)) return;
+  if (existing === SKILL_MD) return;
+  await (0, import_terminus_node_bridge30.makeDirRecursive)((0, import_terminus_node_bridge30.pathJoin)(vaultBasePath, ".claude", "skills", "terminus"));
+  await (0, import_terminus_node_bridge30.writeTextFile)(path, SKILL_MD);
+}
+
 // src/main.ts
 var AUTO_REVEAL_MIN_FILES = 3;
 var AUTO_REVEAL_MIN_LINES = 50;
-var TerminusPlugin = class extends import_obsidian32.Plugin {
+var TerminusPlugin = class extends import_obsidian35.Plugin {
   constructor() {
     super(...arguments);
     this.reviewServer = new ReviewServer();
     this.pendingChangesStore = new PendingChangesStore();
     /** Each terminal's Claude session status, for the Agent inbox. */
     this.agentSessionStore = new AgentSessionStore();
+    /** Tells the user when a session needs them or finishes (see notify/). */
+    this.notifier = new Notifier(this);
+    /** What agents in Terminus terminals can ask Terminus to do (agentApi/). */
+    this.agentApi = new AgentApi(this);
     /** Per-session notes in the vault, a section per turn. Off by default;
      *  see state/SessionLog.ts. */
     this.sessionLog = new SessionLog(this);
@@ -25773,13 +27004,14 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
     );
     this.addSettingTab(new TerminusSettingTab(this.app, this));
     await provisionResources(this.getPluginDir());
-    this.actionLog = new ActionLog((0, import_terminus_node_bridge30.pathJoin)(this.getPluginDir(), "action-log.json"));
+    this.actionLog = new ActionLog((0, import_terminus_node_bridge31.pathJoin)(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.steerQueue.on("change", () => {
       this.app.workspace.requestSaveLayout();
       for (const token of this.steerQueue.tokens()) this.drainSteerQueue(token);
     });
     this.agentSessionStore.on("change", (session) => {
+      this.notifier.onSessionChange(session);
       if (session.status === "working") this.clearQueueSendPending(session.token);
       this.drainSteerQueue(session.token);
       if (!session.running) void this.sessionLog.endSession(session.token);
@@ -25812,6 +27044,8 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
         if (this.shouldInviteToMultiAgent()) void this.showMultiAgentInvite();
       }, reveal.delayMs);
     });
+    this.agentApi.start();
+    this.reviewServer.setApiHandler((token, request) => this.agentApi.handle(token, request));
     await this.reviewServer.start();
     await this.provisionHooks();
     this.registerEditorExtension([inlineDiffField, inlineDiffDecorations]);
@@ -25925,6 +27159,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
       void this.revealReviewView();
       void this.showWelcomeIfFirstRun().then((showedWelcome) => {
         if (this.defaultNoticePending && !showedWelcome) this.announceMultiAgentDefault();
+        void this.announceAgentFeatures(showedWelcome || this.defaultNoticePending);
       });
       if (this.experience === "multi-agent") void this.startMultiAgentViews();
       void this.sessionLog.sweepAbandoned();
@@ -25944,6 +27179,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
   onunload() {
     this.unloading = true;
     this.resumeQueue.dispose();
+    this.notifier.dispose();
     for (const timer of this.queueSendPending.values()) window.clearTimeout(timer);
     this.queueSendPending.clear();
     if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
@@ -25988,10 +27224,49 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
           GettingStartedModal.openGuide(this.app, "Multi-agent");
         } else if (choice === "classic") {
           await this.setExperience("classic");
-          new import_obsidian32.Notice("Terminus: switched to the Classic experience. Change it any time in settings.");
+          new import_obsidian35.Notice("Terminus: switched to the Classic experience. Change it any time in settings.");
         }
       });
     }, 3e3);
+  }
+  /**
+   * The one-time "What's new" for notifications and agent control, for an
+   * install that had Terminus before them. A new install is marked as having
+   * seen it: everything in it is new to them anyway, and they get the
+   * welcome. `deferred` is a load already showing another popup; the news
+   * then waits for the next one.
+   */
+  async announceAgentFeatures(deferred) {
+    if (this.settings.hasSeenAgentFeaturesNews) return;
+    if (!this.freshInstall && deferred) return;
+    this.settings.hasSeenAgentFeaturesNews = true;
+    await this.saveSettings();
+    if (this.freshInstall) return;
+    window.setTimeout(() => {
+      if (this.isUnloading) return;
+      void WhatsNewAgentsModal.ask(this.app, this.experience === "multi-agent").then((choice) => {
+        if (choice === "settings") this.openSettingsAt("Notifications");
+      });
+    }, 3e3);
+  }
+  /** Opens Terminus's settings tab scrolled to a section heading. Obsidian
+   *  doesn't document opening its settings from a plugin, so this checks
+   *  for the method it has had for years and says where to look without it. */
+  openSettingsAt(heading) {
+    const setting = this.app.setting;
+    if (!(setting == null ? void 0 : setting.open) || !setting.openTabById) {
+      new import_obsidian35.Notice(`Terminus: open Settings \u2192 Terminus \u2192 ${heading}`);
+      return;
+    }
+    setting.open();
+    setting.openTabById(this.manifest.id);
+    window.setTimeout(() => {
+      const target = Array.from(activeDocument.querySelectorAll(".setting-item-heading")).find((el2) => {
+        var _a7;
+        return ((_a7 = el2.textContent) == null ? void 0 : _a7.trim()) === heading;
+      });
+      target == null ? void 0 : target.scrollIntoView({ block: "start" });
+    }, 100);
   }
   /** The experience actually in effect: always Classic until Multi-agent
    *  ships (see MULTI_AGENT_AVAILABLE), whatever the saved setting says. */
@@ -26002,7 +27277,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
    *  plugin since 1.9.10, and manifest.json still accepts 1.7.2, where one
    *  would sit in the vault as a file nothing can read. */
   get supportsBases() {
-    return (0, import_obsidian32.requireApiVersion)("1.9.10");
+    return (0, import_obsidian35.requireApiVersion)("1.9.10");
   }
   /** Whether subagents get their own record and their edits their own
    *  attribution: Multi-agent with "Track subagents" on. */
@@ -26102,9 +27377,28 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
       await provisionClaudeSettings(this.app, this.manifest, { experience: this.experience, trackSubagents: this.tracksSubagents });
     } catch (err) {
       console.error("Terminus: failed to provision .claude/settings.local.json", err);
-      new import_obsidian32.Notice(
+      new import_obsidian35.Notice(
         "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
       );
+    }
+    await this.provisionAgentSkill();
+  }
+  /** Agent control works only in Multi-agent, so the skill is there only
+   *  while both are on. */
+  get agentControlActive() {
+    return this.experience === "multi-agent" && this.settings.agentControl.enabled;
+  }
+  async setAgentControl(enabled) {
+    this.settings.agentControl.enabled = enabled;
+    await this.saveSettings();
+    await this.provisionAgentSkill();
+  }
+  async provisionAgentSkill() {
+    try {
+      await provisionSkill(this.getVaultBasePath(), this.agentControlActive);
+    } catch (err) {
+      console.error("Terminus: failed to write .claude/skills/terminus/SKILL.md", err);
+      if (this.agentControlActive) new import_obsidian35.Notice("Terminus: could not write the agent control skill to .claude/skills. See console.");
     }
   }
   /**
@@ -26153,7 +27447,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
     await this.saveSettings();
     if (await MultiAgentInviteModal.ask(this.app)) {
       await this.setExperience("multi-agent");
-      new import_obsidian32.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
+      new import_obsidian35.Notice("Terminus: switched to the Multi-agent experience. Change it any time in settings.");
     }
   }
   async saveSettings() {
@@ -26192,7 +27486,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
   async setRibbonIcon(iconName) {
     this.settings.ribbonIcon = iconName;
     await this.saveSettings();
-    if (this.ribbonIconEl) (0, import_obsidian32.setIcon)(this.ribbonIconEl, iconName);
+    if (this.ribbonIconEl) (0, import_obsidian35.setIcon)(this.ribbonIconEl, iconName);
   }
   forEachTerminalView(fn3) {
     for (const leaf of this.app.workspace.getLeavesOfType(TERMINUS_VIEW_TYPE)) {
@@ -26207,7 +27501,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
     const changes = this.pendingChangesStore.list();
     const count = changes.length;
     if (count === 0) {
-      new import_obsidian32.Notice("Terminus: no pending changes");
+      new import_obsidian35.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && changes.some(hasCollision)) {
@@ -26225,21 +27519,21 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
     try {
       await this.pendingChangesStore.resolveAll(accepted);
     } catch (err) {
-      new import_obsidian32.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
+      new import_obsidian35.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} all changes: ${errorMessage2(err)}`);
     }
   }
   async resolveOldestPendingChange(accepted) {
     const oldest = this.pendingChangesStore.list()[0];
     if (!oldest) {
-      new import_obsidian32.Notice("Terminus: no pending changes");
+      new import_obsidian35.Notice("Terminus: no pending changes");
       return;
     }
     if (!accepted && !await confirmCollisionReject(this.app, [oldest])) return;
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian32.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge30.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian35.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge31.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian32.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge30.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian35.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge31.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -26267,7 +27561,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
     return getHookBridgePath(this.app, this.manifest);
   }
   getPluginDir() {
-    return (0, import_terminus_node_bridge30.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return (0, import_terminus_node_bridge31.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
   /**
    * Every leaf of a view type, including ones Obsidian hasn't loaded yet
@@ -26423,7 +27717,7 @@ var TerminusPlugin = class extends import_obsidian32.Plugin {
 ${result}`)) return;
     this.delegationStore.remove(childToken);
     await this.focusTerminal(delegation.parentToken);
-    new import_obsidian32.Notice(`Terminus: result added to ${parent.getDisplayText()} \u2014 press Enter to send it`);
+    new import_obsidian35.Notice(`Terminus: result added to ${parent.getDisplayText()} \u2014 press Enter to send it`);
   }
   /**
    * Whether guidance can be typed into a session now. Unlike review
@@ -26454,10 +27748,10 @@ ${result}`)) return;
     if (!terminal.typeIntoInput(message)) return false;
     if (submit) {
       window.setTimeout(() => terminal.submitInput(), 250);
-      new import_obsidian32.Notice(`Terminus: sent to ${terminal.getDisplayText()}`);
+      new import_obsidian35.Notice(`Terminus: sent to ${terminal.getDisplayText()}`);
     } else {
       await this.focusTerminal(token);
-      new import_obsidian32.Notice(`Terminus: added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
+      new import_obsidian35.Notice(`Terminus: added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
     }
     return true;
   }
@@ -26521,13 +27815,13 @@ ${result}`)) return;
     if (items.length === 0 || !terminal || !this.feedbackReadiness(token).ready) return;
     const base = this.getVaultBasePath();
     const prompt = composeFeedbackPrompt(items, (absolute) => {
-      const relative = (0, import_terminus_node_bridge30.pathRelative)(base, absolute);
+      const relative = (0, import_terminus_node_bridge31.pathRelative)(base, absolute);
       return relative.startsWith("..") ? absolute : relative;
     });
     if (!terminal.typeIntoInput(prompt)) return;
     this.feedbackStore.clear(token);
     await this.focusTerminal(token);
-    new import_obsidian32.Notice(`Terminus: feedback added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
+    new import_obsidian35.Notice(`Terminus: feedback added to ${terminal.getDisplayText()} \u2014 press Enter to send it`);
   }
   /** Re-renders open Agent inboxes and Terminus sidebars for changes the
    *  stores don't see, such as a terminal being renamed or recoloured. */
@@ -26559,7 +27853,7 @@ ${result}`)) return;
     var _a7;
     const waiting = this.agentSessionStore.list().filter((s15) => s15.running && s15.status === "needs-attention" && this.findTerminalView(s15.token));
     if (waiting.length === 0) {
-      new import_obsidian32.Notice("Terminus: no session needs attention");
+      new import_obsidian35.Notice("Terminus: no session needs attention");
       return;
     }
     const active = (_a7 = this.app.workspace.getActiveViewOfType(TerminalView)) == null ? void 0 : _a7.hookToken;
@@ -26586,7 +27880,7 @@ ${result}`)) return;
    *  promise: Obsidian hides the menu before it runs an item's click, so
    *  "dismissed" can't be told apart from "picked" by the hide event. */
   askPlacement(evt, onPick, allowed = TERMINAL_OPEN_PLACEMENTS) {
-    const menu = new import_obsidian32.Menu();
+    const menu = new import_obsidian35.Menu();
     for (const placement of allowed) {
       menu.addItem((item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => onPick(placement)));
     }

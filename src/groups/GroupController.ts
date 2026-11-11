@@ -373,7 +373,7 @@ export class GroupController {
   async newTerminal(
     target: GroupTarget,
     focus = true,
-    launch?: { command: string; prompt?: string; cwd?: string; name?: string },
+    launch?: { command: string; prompt?: string; submit?: boolean; cwd?: string; name?: string },
     placement: OpenPlacement = "tab"
   ): Promise<TerminalView | null> {
     const { workspace } = this.plugin.app;

@@ -51,6 +51,15 @@ const MAX_BODY_BYTES = 5 * 1024 * 1024; // generous cap for a Write tool's full 
 // Status payloads are small; Stop's closing message is the largest field.
 const STATUS_BODY_MAX_BYTES = 1024 * 1024;
 
+// An agent API request is a method name and small params; a prompt or a
+// command line is the largest thing in one.
+const API_BODY_MAX_BYTES = 256 * 1024;
+
+/** Answers one agent API request (see agentApi/AgentApi.ts) for the
+ *  terminal whose token made it. Resolves to the HTTP status and the JSON
+ *  body to send back; never rejects. */
+export type ApiHandler = (callerToken: string, request: unknown) => Promise<{ status: number; body: unknown }>;
+
 const SESSION_EVENTS = new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "StopFailure"]);
 const SUBAGENT_EVENTS = new Set(["SubagentStart", "SubagentStop"]);
 const AGENT_TOOLS = new Set(["Agent", "Task"]);
@@ -80,6 +89,11 @@ export class ReviewServer {
   private server: SimpleHttpServer | null = null;
   private panels = new Map<string, RegisteredPanel>();
   private port = 0;
+  private apiHandler: ApiHandler | null = null;
+
+  setApiHandler(handler: ApiHandler | null): void {
+    this.apiHandler = handler;
+  }
 
   async start(): Promise<number> {
     if (this.server) return this.port;
@@ -123,7 +137,11 @@ export class ReviewServer {
   private async handleRequest(req: SimpleHttpRequest, res: SimpleHttpResponse): Promise<void> {
     if (
       req.method !== "POST" ||
-      (req.url !== "/review" && req.url !== "/turn-end" && req.url !== "/notification" && req.url !== "/session-event")
+      (req.url !== "/review" &&
+        req.url !== "/turn-end" &&
+        req.url !== "/notification" &&
+        req.url !== "/session-event" &&
+        req.url !== "/api")
     ) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
@@ -136,6 +154,25 @@ export class ReviewServer {
     if (!panel) {
       res.writeHead(403, { "Content-Type": "text/plain" });
       res.end("unknown or expired session token");
+      return;
+    }
+
+    // The agent API: the token says which terminal is calling, and the
+    // handler decides what that terminal may do.
+    if (req.url === "/api") {
+      let request: unknown;
+      try {
+        request = JSON.parse(await readBody(req, API_BODY_MAX_BYTES)) as unknown;
+      } catch {
+        sendJson(res, 400, { ok: false, error: { code: "invalid_request", message: "The request body must be JSON, under 256 KB" } });
+        return;
+      }
+      if (!this.apiHandler) {
+        sendJson(res, 503, { ok: false, error: { code: "unavailable", message: "Terminus is still starting" } });
+        return;
+      }
+      const { status, body } = await this.apiHandler(token, request);
+      sendJson(res, status, body);
       return;
     }
 
@@ -179,6 +216,11 @@ export class ReviewServer {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("");
   }
+}
+
+function sendJson(res: SimpleHttpResponse, status: number, body: unknown): void {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(body));
 }
 
 function errorMessage(err: unknown): string {

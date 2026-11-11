@@ -37,12 +37,14 @@ Terminus opens in the **Multi-agent experience**: an Agent inbox with a card per
 - [Both experiences](#both-experiences)
   - [Terminal](#terminal)
   - [Terminal help for beginners](#terminal-help-for-beginners)
+  - [Notifications](#notifications)
 - [Classic experience](#classic-experience)
   - [Claude Code review workflow](#claude-code-review-workflow)
 - [Multi-agent experience](#multi-agent-experience)
   - [Groups (left sidebar)](#groups-left-sidebar)
   - [Agent inbox (right sidebar)](#agent-inbox-right-sidebar)
   - [Session logs](#session-logs)
+  - [Agent control](#agent-control)
 - [Commands](#commands)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
@@ -65,6 +67,8 @@ Terminus has two experiences. They share the same terminal, the same hooks and t
 **To switch:** open **Settings → Terminus → Experience** and pick **Classic** or **Multi-agent**. Switching is instant and reversible: terminals, pending changes and every other setting carry over, and each experience keeps its own review settings.
 
 **Updating from an earlier version?** If you hadn't chosen an experience yet, Terminus moves you to Multi-agent once and shows a "What's new" popup with a short demo, a **Read the guide** button (opens the in-app guide at the Multi-agent section) and a **Switch to Classic** button. If you had already declined Multi-agent or picked Classic yourself, nothing changes.
+
+The update that adds [notifications](#notifications) and [agent control](#agent-control) shows its own "What's new" popup once, with an **Open settings** button that goes straight to them. It waits for a later start if another popup is already showing, and a new install doesn't see it.
 
 ![The Experience setting in Settings → Terminus, set to Multi-agent](screenshots/settings-experience.png)
 
@@ -90,6 +94,13 @@ Terminus has two experiences. They share the same terminal, the same hooks and t
 - **Failure badges.** A small ⚠ appears next to any command that exits non-zero.
 - **Explain this.** Click the badge for a plain-English explanation of what happened, from an isolated `claude -p` call with no file/tool access. Its result has a fixed spot above the action buttons and stays there regardless of what else you do in the popup. Both this and Suggest a fix see not just the failed command but a few commands run right before it too, so a failure that's really about an earlier step (e.g. a `git push` failing because nothing was committed yet) gets diagnosed with that context, not just the last line.
 - **Suggest a fix.** Asks Claude for its single best corrective command with a one-sentence rationale, shown below the action buttons with its own Apply/Cancel. Apply types it into your terminal's input line, unexecuted, so you review, edit, or press Enter yourself. Clicking "Suggest a fix" again gets the next-best option instead of repeating itself. Claude never runs anything on its own here.
+
+### Notifications
+
+- **Know when a session needs you.** When Claude asks for permission or a decision, or finishes a turn, while you're looking at something else, Terminus tells you: as a notice inside Obsidian (the default) or as a system notification. Clicking it opens that terminal. Nothing is shown for the terminal you're already looking at, and a prompt you answer within a second never pops anything.
+- **Seeing nothing with system notifications?** Your OS may have Obsidian's notifications switched off, which is the default on some Macs. Turn them on under **System Settings → Notifications → Obsidian** (macOS) or **Settings → System → Notifications** (Windows), then use the test button.
+- **Choose what you hear about.** Needs-input and finished can be turned on and off separately, and an optional ding sounds twice when Claude needs you and once, softer, when it's done. **Settings → Terminus → Notifications** has a test button.
+- **Any program can ask.** A command that prints the OSC 9 or OSC 777 notification sequence gets one too: `make test; printf '\e]9;Tests finished\a'`.
 
 ### Screenshots
 
@@ -206,6 +217,31 @@ Off unless you turn it on. **Settings → Terminus → Log sessions to notes** m
 
 It ships off because it is the only part of Terminus that writes your prompts to disk — the action log deliberately keeps filenames and statistics and nothing else. Prompts are recorded up to 2,000 characters.
 
+### Agent control
+
+Off unless you turn it on. **Settings → Terminus → Agent control → Let agents control Terminus** lets Claude, running in a Terminus terminal, drive Terminus itself. Terminus adds a skill to `.claude/skills/terminus` that teaches it a small command-line client, `$TERMINUS_CLI`, available in every Terminus terminal.
+
+- **Terminals beside it.** Claude can open a terminal in its own group for a dev server, a watcher or a long test run, run commands in it, read its output, wait until a line like `ready in` appears, and close it again. You see everything it starts, and focus stays where you were.
+- **Talking to other sessions.** It can message another Claude session in its group (queued until that session's turn ends, or typed into the running turn), wait for that session to finish, and read its full result. A message says which terminal it came from, so the other session can reply.
+- **Delegating.** It can start a new Claude session on a task. When that session finishes, its result is queued back to the one that asked, which picks it up as soon as it's between turns. The task shows on the sender's card like one you sent yourself.
+- **Telling you.** It can put a short status line on its inbox card while it works ("Running the full test suite…") and send you a notification.
+
+The skill teaches Claude these commands; you don't need to type them, but you can, from any Terminus terminal:
+
+| Command | What it does |
+| --- | --- |
+| `whoami`, `list` | This terminal's id and status; the terminals in its group |
+| `open [--name] [--command] [--placement] [--cwd]` | Opens a terminal in the group |
+| `run <id> <command>`, `read <id>`, `wait-output <id> <pattern>` | Runs a command in a shell terminal, prints its recent output, waits for a line to appear |
+| `close <id>` | Closes a terminal the caller opened |
+| `prompt <id> <text> [--now]`, `wait <id>`, `result <id>` | Messages another session, waits for it, prints its last reply |
+| `delegate <task>` | Starts a new Claude session on a task; the result comes back on its own |
+| `status [text]`, `notify <body> [--title]` | Sets the inbox card's status line; notifies you |
+
+Each is run as `"$TERMINUS_CLI" <command>` and prints JSON. They work only while agent control is on.
+
+**Limits.** An agent sees only the terminals in its own group. It can't type into a session that is waiting on a permission prompt, and it can't start anything with Claude's permission checks bypassed (`--dangerously-skip-permissions`, `--permission-mode bypassPermissions`). One agent can have at most four terminals open that it opened itself (configurable up to 12), and a terminal an agent opened can't open more. Opens, runs, messages and delegations are limited to 40 per 10 minutes per agent. These are guardrails rather than a sandbox: an agent can already run any shell command its permissions allow, and nothing here gives it more than that.
+
 ## Commands
 
 All of these appear in the command palette under `Terminus:`. None ship with a default hotkey — Obsidian's plugin guidelines advise against claiming key combinations on a user's behalf — so assign your own in **Settings → Hotkeys** for any you use often.
@@ -253,6 +289,10 @@ All of these appear in the command palette under `Terminus:`. None ship with a d
 **Noticing shell edits.** A `Bash` call carries no diff of its own, so it is matched on both `PreToolUse` and `PostToolUse`: the first snapshots the files the command looks like it will write, the second re-reads them, and the difference is the change. Both carry the same `tool_use_id`, which is what pairs them. That covers `>`, `>>`, heredocs, `tee`, `sed -i`, `cp`, `mv`, `touch` and `rm` — anything naming its target. A heredoc's body is stripped before the command is parsed, so a note containing `>` or quotes is never read as shell syntax. For a file written indirectly, where no path appears at all, "Detect shell changes" reads `git status` as a turn begins and again as it ends and reports whatever changed in between that no hook and no snapshot accounted for. The baseline is per turn rather than per session because that is what keeps your own edits out of the result: yours happen between turns, whereas during one Claude is the only writer. It asks git for `--show-cdup` rather than `--show-toplevel`, so a vault reached through a symlink is spelled the same way the hook payloads spell it. Outside a git repository it does nothing at all.
 
 All three hooks are added without disturbing anything already in that file, and Claude Code reads hooks at session start — so a `claude` that was already running when the plugin first provisioned them picks them up on its next start.
+
+**Notifications.** The same hook events drive them: a session's status changing into "needs input" or "finished" starts a one-second timer, and the notification is shown only if that is still the status when it fires and the terminal isn't the one you're looking at. System notifications go through the browser `Notification` API, so your OS lists them as Obsidian's. The ding is generated with WebAudio, because a plugin release can't ship a sound file.
+
+**Agent control.** Every terminal's shell gets `TERMINUS_CLI` (a small Python client in `resources/terminus_cli.py`) and `TERMINUS_TERMINAL_ID` alongside the hook port and token it already had. The client POSTs to `/api` on the same loopback server, authenticated by the terminal's own token, so the plugin always knows which terminal is asking and can scope what it may do to that terminal's group. Waiting is a long-poll on the session store, which the hooks keep current, so a wait ends as soon as the `Stop` hook lands. A delegated session's full closing message is kept for its sender, since the inbox only keeps a preview, and is queued into the sender's input through the same queue the inbox's **Queue** button uses — so the sender gets it as a new message once it's between turns, instead of having to sit in a `wait`. The skill in `.claude/skills/terminus/SKILL.md` is written while agent control is on and removed when it's turned off; a copy you've replaced with your own is left alone.
 
 **Terminal.** There's no native-addon PTY dependency (no `node-pty`, no Electron-ABI rebuild headaches). A small bundled Python script (`resources/pty_helper.py`) allocates a real pseudo-terminal via Python's stdlib and proxies bytes between the PTY and its own stdio; the plugin talks to it with a plain `child_process.spawn`. The terminal UI is `xterm.js`.
 
@@ -319,6 +359,8 @@ Anything that needs Obsidian itself — the inbox's rendering, the terminal, the
 | `src/terminal/WikiLinkAutocomplete.ts` | `[[` fuzzy note picker inside the terminal |
 | `src/terminal/TerminalColorPicker.ts`, `colorPalette.ts`, `tabHeaderColor.ts` | Color-swatch popover, preset palette, and the native-tab tint/title-refresh/needs-attention dot |
 | `src/server/ReviewServer.ts`, `diff.ts` | Local hook-bridge HTTP server, diff computation |
+| `src/notify/Notifier.ts`, `notifyRules.ts` | Notifications: delivery, sound, and the pure rules for when one is due and for OSC 9/777 |
+| `src/agentApi/AgentApi.ts`, `policy.ts`, `skill.ts` | Agent control: the `/api` methods, their guardrails, and the skill written to `.claude/skills/terminus` |
 | `src/state/PendingChangesStore.ts`, `ActionLog.ts` | In-memory pending/undo state, persisted action log |
 | `src/state/ClosedTerminalBuffer.ts` | Ring buffer backing "Rescue closed terminal" |
 | `src/hooks/provisionSettings.ts`, `provisionResources.ts`, `types.ts` | `.claude/settings.local.json` provisioning, writing `resources/` out on load, hook payload types |
@@ -330,13 +372,14 @@ Anything that needs Obsidian itself — the inbox's rendering, the terminal, the
 | `src/git/gitStatus.ts` | Per-turn `git status` snapshots behind shell-change detection |
 | `src/state/SessionLog.ts`, `sessionLogFormat.ts` | Per-session notes in the vault: the vault I/O, and the pure formatters that fix their exact wording |
 | `src/claude/headlessAssist.ts` | Standalone `claude -p` calls for explain/suggest-fix |
-| `src/modals/` | Action log, command-help, confirm, rename, rescue-terminal, and getting-started modals |
+| `src/modals/` | Action log, command-help, confirm, rename, rescue-terminal, getting-started and "What's new" modals |
 | `test/`, `scripts/buildTests.mjs` | Node `--test` suite and the esbuild step that makes it runnable (see Development) |
 | `resources/pty_helper.py` | PTY allocation helper (spawned by the plugin) |
 | `resources/hook-bridge.sh` | `PreToolUse` hook → local server bridge |
 | `resources/turn-end-bridge.sh` | `Stop` hook → local server bridge (end of turn) |
 | `resources/notification-bridge.sh` | `Notification` hook → local server bridge (needs-attention dot) |
 | `resources/shell-integration/{zsh,bash}/` | Shell rc scripts for command tracking and cwd tracking |
+| `resources/terminus`, `terminus_cli.py` | The agent control command-line client (`$TERMINUS_CLI`) |
 
 ## License
 

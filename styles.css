@@ -3923,6 +3923,21 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
   font-size: var(--font-ui-smaller);
 }
 
+/* A notification shown inside Obsidian (see notify/Notifier.ts): clicking
+   it opens the terminal it's about. */
+.terminus-notice {
+  cursor: pointer;
+}
+
+.terminus-notice-title {
+  font-weight: 600;
+}
+
+.terminus-notice-body {
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
 /**
  * Copyright (c) 2014 The xterm.js authors. All rights reserved.
  * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)

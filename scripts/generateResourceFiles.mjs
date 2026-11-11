@@ -21,6 +21,8 @@ const EMBEDDED_RESOURCE_FILES = [
   { relativePath: "turn-end-bridge.sh", executable: true },
   { relativePath: "notification-bridge.sh", executable: true },
   { relativePath: "session-event-bridge.sh", executable: true },
+  { relativePath: "terminus", executable: true },
+  { relativePath: "terminus_cli.py", executable: true },
   { relativePath: "shell-integration/zsh/.zshenv", executable: false },
   { relativePath: "shell-integration/bash/.bash_profile", executable: false },
 ];

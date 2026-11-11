@@ -13,6 +13,9 @@ export interface Delegation {
   parentLabel: string;
   childLabel: string;
   createdAt: number;
+  /** Sent by an agent through the agent API rather than by the user: the
+   *  result is queued back to the sender on its own (see AgentApi). */
+  autoReturn?: boolean;
 }
 
 type DelegationStoreEvents = {

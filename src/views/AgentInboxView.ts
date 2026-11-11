@@ -1259,6 +1259,9 @@ export class AgentInboxView extends ItemView {
     const session = card.session;
     if (!session) return null;
     if (!card.ended && session.status === "working") {
+      // What the agent itself says it's doing (agent API `status`).
+      const statusLine = this.plugin.agentApi.statusLine(session.token);
+      if (statusLine) return `${statusLine}…`;
       if (!session.currentFile) return "Working…";
       return `Editing ${pathRelative(this.plugin.getVaultBasePath(), session.currentFile)}…`;
     }

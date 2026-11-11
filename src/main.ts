@@ -36,9 +36,13 @@ import { RescueClosedTerminalModal } from "./modals/RescueClosedTerminalModal";
 import { GettingStartedModal } from "./modals/GettingStartedModal";
 import { MultiAgentInviteModal } from "./modals/MultiAgentInviteModal";
 import { WhatsNewModal } from "./modals/WhatsNewModal";
+import { WhatsNewAgentsModal } from "./modals/WhatsNewAgentsModal";
 import { computeDiffStats } from "./diff/renderDiff";
 import { inlineDiffDecorations, inlineDiffField } from "./editor/inlineDiff";
 import { errorMessage } from "./util/errors";
+import { Notifier } from "./notify/Notifier";
+import { AgentApi } from "./agentApi/AgentApi";
+import { provisionSkill } from "./agentApi/skill";
 import {
   DEFAULT_SETTINGS,
   Experience,
@@ -62,6 +66,10 @@ export default class TerminusPlugin extends Plugin {
   readonly pendingChangesStore = new PendingChangesStore();
   /** Each terminal's Claude session status, for the Agent inbox. */
   readonly agentSessionStore = new AgentSessionStore();
+  /** Tells the user when a session needs them or finishes (see notify/). */
+  readonly notifier = new Notifier(this);
+  /** What agents in Terminus terminals can ask Terminus to do (agentApi/). */
+  readonly agentApi = new AgentApi(this);
   /** Per-session notes in the vault, a section per turn. Off by default;
    *  see state/SessionLog.ts. */
   readonly sessionLog = new SessionLog(this);
@@ -140,6 +148,7 @@ export default class TerminusPlugin extends Plugin {
       for (const token of this.steerQueue.tokens()) this.drainSteerQueue(token);
     });
     this.agentSessionStore.on("change", (session) => {
+      this.notifier.onSessionChange(session);
       if (session.status === "working") this.clearQueueSendPending(session.token);
       this.drainSteerQueue(session.token);
       // SessionEnd, the shell exiting and the terminal closing all land here
@@ -185,6 +194,8 @@ export default class TerminusPlugin extends Plugin {
       }, reveal.delayMs);
     });
 
+    this.agentApi.start();
+    this.reviewServer.setApiHandler((token, request) => this.agentApi.handle(token, request));
     await this.reviewServer.start();
 
     await this.provisionHooks();
@@ -318,6 +329,8 @@ export default class TerminusPlugin extends Plugin {
         // The welcome already says Multi-agent is the default, so an install
         // that sees it doesn't get a second modal on top.
         if (this.defaultNoticePending && !showedWelcome) this.announceMultiAgentDefault();
+        // Never on top of another first-run popup: it waits for a later load.
+        void this.announceAgentFeatures(showedWelcome || this.defaultNoticePending);
       });
       if (this.experience === "multi-agent") void this.startMultiAgentViews();
       // Notes from a run that was killed rather than closed still say they
@@ -343,6 +356,7 @@ export default class TerminusPlugin extends Plugin {
   onunload(): void {
     this.unloading = true;
     this.resumeQueue.dispose();
+    this.notifier.dispose();
     for (const timer of this.queueSendPending.values()) window.clearTimeout(timer);
     this.queueSendPending.clear();
     if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
@@ -395,6 +409,46 @@ export default class TerminusPlugin extends Plugin {
         }
       });
     }, 3000);
+  }
+
+  /**
+   * The one-time "What's new" for notifications and agent control, for an
+   * install that had Terminus before them. A new install is marked as having
+   * seen it: everything in it is new to them anyway, and they get the
+   * welcome. `deferred` is a load already showing another popup; the news
+   * then waits for the next one.
+   */
+  private async announceAgentFeatures(deferred: boolean): Promise<void> {
+    if (this.settings.hasSeenAgentFeaturesNews) return;
+    if (!this.freshInstall && deferred) return;
+    this.settings.hasSeenAgentFeaturesNews = true;
+    await this.saveSettings();
+    if (this.freshInstall) return;
+    window.setTimeout(() => {
+      if (this.isUnloading) return;
+      void WhatsNewAgentsModal.ask(this.app, this.experience === "multi-agent").then((choice) => {
+        if (choice === "settings") this.openSettingsAt("Notifications");
+      });
+    }, 3000);
+  }
+
+  /** Opens Terminus's settings tab scrolled to a section heading. Obsidian
+   *  doesn't document opening its settings from a plugin, so this checks
+   *  for the method it has had for years and says where to look without it. */
+  private openSettingsAt(heading: string): void {
+    const setting = (this.app as typeof this.app & { setting?: { open?: () => void; openTabById?: (id: string) => void } }).setting;
+    if (!setting?.open || !setting.openTabById) {
+      new Notice(`Terminus: open Settings → Terminus → ${heading}`);
+      return;
+    }
+    setting.open();
+    setting.openTabById(this.manifest.id);
+    // activeDocument: settings can open in a window of its own, which is
+    // the active one by now.
+    window.setTimeout(() => {
+      const target = Array.from(activeDocument.querySelectorAll(".setting-item-heading")).find((el) => el.textContent?.trim() === heading);
+      target?.scrollIntoView({ block: "start" });
+    }, 100);
   }
 
   /** The experience actually in effect: always Classic until Multi-agent
@@ -526,6 +580,28 @@ export default class TerminusPlugin extends Plugin {
       new Notice(
         "Terminus: could not write .claude/settings.local.json -- diff review won't be wired up for claude. See console."
       );
+    }
+    await this.provisionAgentSkill();
+  }
+
+  /** Agent control works only in Multi-agent, so the skill is there only
+   *  while both are on. */
+  get agentControlActive(): boolean {
+    return this.experience === "multi-agent" && this.settings.agentControl.enabled;
+  }
+
+  async setAgentControl(enabled: boolean): Promise<void> {
+    this.settings.agentControl.enabled = enabled;
+    await this.saveSettings();
+    await this.provisionAgentSkill();
+  }
+
+  private async provisionAgentSkill(): Promise<void> {
+    try {
+      await provisionSkill(this.getVaultBasePath(), this.agentControlActive);
+    } catch (err) {
+      console.error("Terminus: failed to write .claude/skills/terminus/SKILL.md", err);
+      if (this.agentControlActive) new Notice("Terminus: could not write the agent control skill to .claude/skills. See console.");
     }
   }
 

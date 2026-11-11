@@ -1,0 +1,7 @@
+#!/bin/sh
+# Command-line client for the Terminus agent API -- see terminus_cli.py.
+#
+# Every Terminus terminal has TERMINUS_CLI pointing here and TERMINUS_PYTHON
+# naming the python3 Terminus itself found, so the client runs with that one
+# even when python3 isn't first on this shell's PATH.
+exec "${TERMINUS_PYTHON:-python3}" "$(dirname "$0")/terminus_cli.py" "$@"
