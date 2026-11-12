@@ -246,3 +246,69 @@ describe("pending changes: deciding one hunk of a file two terminals edited", ()
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("pending changes: keeping or rejecting everything at once", () => {
+  function recordMany(count: number, dir = "/vault"): string[] {
+    const paths: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const filePath = join(dir, `note-${i}.md`);
+      record(store, { filePath, oldText: `before ${i}\n`, newText: `after ${i}\n` });
+      paths.push(filePath);
+    }
+    return paths;
+  }
+
+  function countEmits(): { change: number; resolved: string[] } {
+    const counts = { change: 0, resolved: [] as string[] };
+    store.on("change", () => counts.change++);
+    store.on("resolved", (r) => counts.resolved.push(r.id));
+    return counts;
+  }
+
+  it("redraws once for the whole batch, however many files it keeps", async () => {
+    const paths = recordMany(200);
+    const counts = countEmits();
+    await store.resolveAll(true);
+    assert.equal(counts.change, 1);
+    assert.deepEqual(counts.resolved, paths);
+    assert.equal(store.list().length, 0);
+  });
+
+  it("still reports every file it kept, in order, and keeps them undoable", async () => {
+    recordMany(3);
+    await store.resolveAll(true);
+    const history = store.listHistory();
+    assert.equal(history.length, 3);
+    assert.ok(history.every((h) => h.accepted));
+  });
+
+  it("only touches the scoped subset when given a filter", async () => {
+    const paths = recordMany(4);
+    const counts = countEmits();
+    await store.resolveAll(true, (c) => c.id === paths[1] || c.id === paths[2]);
+    assert.equal(counts.change, 1);
+    assert.deepEqual(counts.resolved, [paths[1], paths[2]]);
+    assert.deepEqual(store.list().map((c) => c.id), [paths[0], paths[3]]);
+  });
+
+  it("says nothing when there was nothing to resolve", async () => {
+    const counts = countEmits();
+    await store.resolveAll(true);
+    assert.equal(counts.change, 0);
+  });
+
+  it("still redraws for the files a failing reject already reverted", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "terminus-bulk-"));
+    try {
+      const [good] = recordMany(1, dir);
+      record(store, { filePath: join(dir, "missing", "deep", "x.md"), oldText: "a\n", newText: "b\n" });
+      const counts = countEmits();
+      await assert.rejects(store.resolveAll(false));
+      assert.equal(readFileSync(good!, "utf8"), "before 0\n");
+      assert.equal(counts.change, 1);
+      assert.deepEqual(counts.resolved, [good]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

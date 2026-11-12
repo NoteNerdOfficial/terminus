@@ -18866,25 +18866,46 @@ var PendingChangesStore = class extends TypedEmitter {
     if (entry) entry.onExternallyResolved = void 0;
   }
   async resolveItem(id, accepted) {
+    const resolved = await this.settle(id, accepted);
+    if (!resolved) return;
+    this.emit("change");
+    this.emit("resolved", resolved);
+  }
+  /** `filter`, when given, scopes this to a subset (e.g. one terminal's
+   *  changes) -- omit it to resolve everything, across all terminals.
+   *
+   *  Emits "change" once for the whole batch rather than once per file:
+   *  every open review view redraws its full list on "change", so a
+   *  per-file emit meant N redraws of an up-to-N-row list and froze the
+   *  app on a long Keep all. The emits run in `finally` so a reject that
+   *  fails partway still refreshes for the files it did revert. */
+  async resolveAll(accepted, filter) {
+    const ids = [...this.entries.values()].filter((e) => !filter || filter(e.change)).map((e) => e.change.id);
+    const done = [];
+    try {
+      for (const id of ids) {
+        const resolved = await this.settle(id, accepted);
+        if (resolved) done.push(resolved);
+      }
+    } finally {
+      if (done.length > 0) {
+        this.emit("change");
+        for (const resolved of done) this.emit("resolved", resolved);
+      }
+    }
+  }
+  /** Resolves one entry without notifying anyone; callers emit. Undefined
+   *  when the entry is already gone (resolved elsewhere meanwhile). */
+  async settle(id, accepted) {
     var _a7;
     const entry = this.entries.get(id);
-    if (!entry) return;
+    if (!entry) return void 0;
     this.entries.delete(id);
     if (!accepted) {
       await this.applyOldState(entry.change.diff);
     }
     (_a7 = entry.onExternallyResolved) == null ? void 0 : _a7.call(entry, accepted);
-    const resolved = this.pushHistory(entry.change, accepted);
-    this.emit("change");
-    this.emit("resolved", resolved);
-  }
-  /** `filter`, when given, scopes this to a subset (e.g. one terminal's
-   *  changes) -- omit it to resolve everything, across all terminals. */
-  async resolveAll(accepted, filter) {
-    const ids = [...this.entries.values()].filter((e) => !filter || filter(e.change)).map((e) => e.change.id);
-    for (const id of ids) {
-      await this.resolveItem(id, accepted);
-    }
+    return this.pushHistory(entry.change, accepted);
   }
   /**
    * Per-hunk accept/reject, used by the Split Diff view. `hunkIndex` must
@@ -24761,6 +24782,8 @@ var ActionLog = class {
     this.logFilePath = logFilePath;
     this.entries = [];
     this.loaded = false;
+    this.writing = null;
+    this.queued = null;
   }
   async load() {
     if (this.loaded) return;
@@ -24773,12 +24796,16 @@ var ActionLog = class {
     }
     this.loaded = true;
   }
+  /** Resolves once a write containing this entry has reached disk. Appends
+   *  that arrive while a write is in flight (a Keep all of many files fires
+   *  one per file, synchronously) share the single write that follows it,
+   *  instead of each re-serializing and rewriting the whole file at once. */
   async append(entry) {
     this.entries.push(entry);
     if (this.entries.length > MAX_LOG_ENTRIES) {
       this.entries.splice(0, this.entries.length - MAX_LOG_ENTRIES);
     }
-    await this.persist();
+    await this.schedulePersist();
   }
   list(query) {
     var _a7;
@@ -24788,6 +24815,19 @@ var ActionLog = class {
       result = result.filter((e) => e.filePath.toLowerCase().includes(search));
     }
     return result;
+  }
+  schedulePersist() {
+    if (this.queued) return this.queued;
+    if (!this.writing) {
+      this.writing = this.persist().finally(() => this.writing = null);
+      return this.writing;
+    }
+    const after = this.writing.catch(() => void 0);
+    this.queued = after.then(() => {
+      this.queued = null;
+      return this.schedulePersist();
+    });
+    return this.queued;
   }
   async persist() {
     await (0, import_terminus_node_bridge28.makeDirRecursive)((0, import_terminus_node_bridge28.pathDirname)(this.logFilePath));

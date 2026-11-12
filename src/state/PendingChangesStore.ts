@@ -263,16 +263,8 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
   }
 
   async resolveItem(id: string, accepted: boolean): Promise<void> {
-    const entry = this.entries.get(id);
-    if (!entry) return;
-    this.entries.delete(id);
-
-    if (!accepted) {
-      await this.applyOldState(entry.change.diff);
-    }
-
-    entry.onExternallyResolved?.(accepted);
-    const resolved = this.pushHistory(entry.change, accepted);
+    const resolved = await this.settle(id, accepted);
+    if (!resolved) return;
     this.emit("change");
     // Separate from "change" (UI re-render) so listeners that only care
     // about completed outcomes -- e.g. the persistent action log -- don't
@@ -281,14 +273,44 @@ export class PendingChangesStore extends TypedEmitter<PendingChangesStoreEvents>
   }
 
   /** `filter`, when given, scopes this to a subset (e.g. one terminal's
-   *  changes) -- omit it to resolve everything, across all terminals. */
+   *  changes) -- omit it to resolve everything, across all terminals.
+   *
+   *  Emits "change" once for the whole batch rather than once per file:
+   *  every open review view redraws its full list on "change", so a
+   *  per-file emit meant N redraws of an up-to-N-row list and froze the
+   *  app on a long Keep all. The emits run in `finally` so a reject that
+   *  fails partway still refreshes for the files it did revert. */
   async resolveAll(accepted: boolean, filter?: (change: PendingChange) => boolean): Promise<void> {
     const ids = [...this.entries.values()]
       .filter((e) => !filter || filter(e.change))
       .map((e) => e.change.id);
-    for (const id of ids) {
-      await this.resolveItem(id, accepted);
+    const done: ResolvedChange[] = [];
+    try {
+      for (const id of ids) {
+        const resolved = await this.settle(id, accepted);
+        if (resolved) done.push(resolved);
+      }
+    } finally {
+      if (done.length > 0) {
+        this.emit("change");
+        for (const resolved of done) this.emit("resolved", resolved);
+      }
     }
+  }
+
+  /** Resolves one entry without notifying anyone; callers emit. Undefined
+   *  when the entry is already gone (resolved elsewhere meanwhile). */
+  private async settle(id: string, accepted: boolean): Promise<ResolvedChange | undefined> {
+    const entry = this.entries.get(id);
+    if (!entry) return undefined;
+    this.entries.delete(id);
+
+    if (!accepted) {
+      await this.applyOldState(entry.change.diff);
+    }
+
+    entry.onExternallyResolved?.(accepted);
+    return this.pushHistory(entry.change, accepted);
   }
 
   /**

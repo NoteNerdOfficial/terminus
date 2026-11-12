@@ -44,12 +44,16 @@ export class ActionLog {
     this.loaded = true;
   }
 
+  /** Resolves once a write containing this entry has reached disk. Appends
+   *  that arrive while a write is in flight (a Keep all of many files fires
+   *  one per file, synchronously) share the single write that follows it,
+   *  instead of each re-serializing and rewriting the whole file at once. */
   async append(entry: ActionLogEntry): Promise<void> {
     this.entries.push(entry);
     if (this.entries.length > MAX_LOG_ENTRIES) {
       this.entries.splice(0, this.entries.length - MAX_LOG_ENTRIES);
     }
-    await this.persist();
+    await this.schedulePersist();
   }
 
   list(query?: ActionLogQuery): ActionLogEntry[] {
@@ -59,6 +63,25 @@ export class ActionLog {
       result = result.filter((e) => e.filePath.toLowerCase().includes(search));
     }
     return result;
+  }
+
+  private writing: Promise<void> | null = null;
+  private queued: Promise<void> | null = null;
+
+  private schedulePersist(): Promise<void> {
+    if (this.queued) return this.queued;
+    if (!this.writing) {
+      this.writing = this.persist().finally(() => (this.writing = null));
+      return this.writing;
+    }
+    // A write is already under way and may predate this entry: queue one
+    // more, which every later append joins until it starts.
+    const after = this.writing.catch(() => undefined);
+    this.queued = after.then(() => {
+      this.queued = null;
+      return this.schedulePersist();
+    });
+    return this.queued;
   }
 
   private async persist(): Promise<void> {
