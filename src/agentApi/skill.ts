@@ -5,10 +5,44 @@ import { deleteFileIfExists, makeDirRecursive, pathJoin, readTextFileIfExists, w
 const MARKER = "<!-- Written by the Terminus plugin. Turning off agent control removes this file. -->";
 
 /** Taught to Claude through `.claude/skills/terminus/SKILL.md` in the vault
- *  while agent control is on. */
-export const SKILL_MD = `---
+ *  while agent control is on; the browser section only while agents may use
+ *  the browser too. */
+export function skillMarkdown(browser: boolean): string {
+  return SKILL_MD.replace("{{DESCRIPTION_BROWSER}}", browser ? DESCRIPTION_BROWSER : "").replace("{{BROWSER}}\n", browser ? BROWSER_SECTION : "");
+}
+
+const DESCRIPTION_BROWSER = " Also open a prototype or a local dev server in a browser beside you and use it like a person would (read it, click, type, screenshot) -- use it to check UI work you've built.";
+
+const BROWSER_SECTION = `## Browser
+
+A browser view beside you, for pages on this computer only: a prototype file from the vault or your working folder, or a local dev server.
+
+\`\`\`bash
+"$TERMINUS_CLI" browser open --path prototype/index.html      # or --url http://localhost:5173; --placement tab|split-right|split-down
+"$TERMINUS_CLI" browser snapshot b1                            # the page as text, with a ref for each element
+"$TERMINUS_CLI" browser click b1 e12                           # --double; --snapshot prints a fresh snapshot after
+"$TERMINUS_CLI" browser type b1 e5 "ada@example.com" --submit  # replaces the text; --append adds to it
+"$TERMINUS_CLI" browser press b1 Enter                         # Tab, Escape, ArrowDown, Shift+Tab, Control+a; --ref to focus first
+"$TERMINUS_CLI" browser select b1 e9 "Monthly"                 # a <select>, by value or label
+"$TERMINUS_CLI" browser wait b1 --text "Saved"                 # or --gone "Loading"; --timeout seconds
+"$TERMINUS_CLI" browser screenshot b1                          # prints a PNG path: Read it to see the page
+"$TERMINUS_CLI" browser console b1 --level warning             # messages since you last asked
+"$TERMINUS_CLI" browser navigate b1 --path prototype/about.html   # or --url; also: back b1, reload b1
+"$TERMINUS_CLI" browser list
+"$TERMINUS_CLI" browser close b1
+\`\`\`
+
+- Snapshot before acting, and again after anything that changes the page: refs (\`e12\`) only last until the page changes, and a stale one is refused (\`stale_ref\`).
+- Opening a \`--path\` serves the file's whole folder over http, so its relative links, scripts and \`fetch\` work. Files under a dot-folder aren't served.
+- \`screenshot\` fails with \`hidden\` while the browser is behind another tab. Don't retry; the snapshot still works, or ask the user to bring it into view.
+- Outside sites don't open, not even by a link. Check what a page does with \`snapshot\` and \`console\` rather than \`screenshot\` alone: it's cheaper and more exact.
+- Close the browser when you're done with it.
+
+`;
+
+const SKILL_MD = `---
 name: terminus
-description: Control the Terminus terminal you're running in (an Obsidian plugin) -- open terminals beside you, run commands in them and read their output, notify the user, and message, wait on or delegate work to other Claude sessions in your group. Use when TERMINUS_CLI is set and a task would benefit from a separate terminal (a dev server, a watcher, a long test run), from parallel work in another Claude session, or from telling the user something needs them.
+description: Control the Terminus terminal you're running in (an Obsidian plugin) -- open terminals beside you, run commands in them and read their output, notify the user, and message, wait on or delegate work to other Claude sessions in your group.{{DESCRIPTION_BROWSER}} Use when TERMINUS_CLI is set and a task would benefit from a separate terminal (a dev server, a watcher, a long test run), from parallel work in another Claude session, or from telling the user something needs them.
 ---
 
 ${MARKER}
@@ -61,6 +95,7 @@ Open a terminal for anything long-running you'd otherwise background, so the use
 
 Notify only for something the user would want to be interrupted for.
 
+{{BROWSER}}
 ## Limits
 
 Terminus won't start anything with permission checks bypassed. A terminal you opened can't open more. Opens, runs, prompts and delegations are rate-limited.
@@ -73,7 +108,7 @@ function skillPath(vaultBasePath: string): string {
 /** Writes the skill while agent control is on, and removes Terminus's own
  *  copy when it's off. A file the user edited keeps the marker and is
  *  overwritten on the next write; one without the marker is theirs. */
-export async function provisionSkill(vaultBasePath: string, enabled: boolean): Promise<void> {
+export async function provisionSkill(vaultBasePath: string, enabled: boolean, browser: boolean): Promise<void> {
   const path = skillPath(vaultBasePath);
   const existing = await readTextFileIfExists(path);
   if (!enabled) {
@@ -81,7 +116,8 @@ export async function provisionSkill(vaultBasePath: string, enabled: boolean): P
     return;
   }
   if (existing !== null && !existing.includes(MARKER)) return;
-  if (existing === SKILL_MD) return;
+  const content = skillMarkdown(browser);
+  if (existing === content) return;
   await makeDirRecursive(pathJoin(vaultBasePath, ".claude", "skills", "terminus"));
-  await writeTextFile(path, SKILL_MD);
+  await writeTextFile(path, content);
 }

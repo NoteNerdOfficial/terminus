@@ -58,6 +58,122 @@ def ms(seconds):
     return None if seconds is None else int(seconds * 1000)
 
 
+def add_browser_parser(sub):
+    browser = sub.add_parser("browser", help="open and drive a browser for pages on this computer")
+    bsub = browser.add_subparsers(dest="browser_command", metavar="ACTION")
+    bsub.required = True
+
+    def target(p):
+        group = p.add_mutually_exclusive_group(required=True)
+        group.add_argument("--path", help="a file or folder in the vault or your working folder")
+        group.add_argument("--url", help="a page on this computer, e.g. http://localhost:5173")
+
+    p = bsub.add_parser("open", help="open a browser beside you")
+    target(p)
+    p.add_argument("--placement", choices=["tab", "split-right", "split-down"])
+    bsub.add_parser("list", help="browsers in your group")
+    p = bsub.add_parser("navigate", help="open another page")
+    p.add_argument("id")
+    target(p)
+    for name, text in (("back", "go back a page"), ("reload", "reload the page")):
+        p = bsub.add_parser(name, help=text)
+        p.add_argument("id")
+        p.add_argument("--snapshot", action="store_true")
+    p = bsub.add_parser("snapshot", help="print the page as text, with refs to act on")
+    p.add_argument("id")
+    p = bsub.add_parser("click", help="click an element")
+    p.add_argument("id")
+    p.add_argument("ref")
+    p.add_argument("--double", action="store_true")
+    p.add_argument("--snapshot", action="store_true", help="print a fresh snapshot after")
+    p = bsub.add_parser("type", help="replace a field's text")
+    p.add_argument("id")
+    p.add_argument("ref")
+    p.add_argument("text")
+    p.add_argument("--append", action="store_true", help="add to the text instead")
+    p.add_argument("--submit", action="store_true", help="press Enter after")
+    p.add_argument("--snapshot", action="store_true")
+    p = bsub.add_parser("press", help="press a key, such as Enter, Tab or Shift+Tab")
+    p.add_argument("id")
+    p.add_argument("key")
+    p.add_argument("--ref", help="focus this element first")
+    p.add_argument("--snapshot", action="store_true")
+    p = bsub.add_parser("select", help="pick options in a <select>")
+    p.add_argument("id")
+    p.add_argument("ref")
+    p.add_argument("values", nargs="+")
+    p.add_argument("--snapshot", action="store_true")
+    p = bsub.add_parser("wait", help="wait for text to appear on the page, or to go")
+    p.add_argument("id")
+    p.add_argument("--text")
+    p.add_argument("--gone")
+    p.add_argument("--timeout", type=float, help="seconds (default 30)")
+    p = bsub.add_parser("screenshot", help="save a PNG of the page and print its path")
+    p.add_argument("id")
+    p = bsub.add_parser("console", help="console messages since you last asked")
+    p.add_argument("id")
+    p.add_argument("--level", choices=["verbose", "info", "warning", "error"])
+    p = bsub.add_parser("close", help="close a browser you opened")
+    p.add_argument("id")
+
+
+def print_with_snapshot(result):
+    """Prints an action's result as JSON, and its snapshot (if any) as text after it."""
+    snapshot = result.pop("snapshot", None) if isinstance(result, dict) else None
+    sys.stdout.write(json.dumps(result, indent=2) + "\n")
+    if snapshot is not None:
+        sys.stdout.write(snapshot + "\n")
+
+
+def run_browser(args):
+    a = args.browser_command
+    flags = {"snapshot": True} if getattr(args, "snapshot", False) else {}
+    if a == "open":
+        result = call("browser.open", {"path": args.path, "url": args.url, "placement": args.placement})
+    elif a == "list":
+        result = call("browser.list", {})
+    elif a == "navigate":
+        result = call("browser.navigate", {"id": args.id, "path": args.path, "url": args.url})
+    elif a in ("back", "reload"):
+        result = call("browser." + a, dict({"id": args.id}, **flags))
+    elif a == "snapshot":
+        result = call("browser.snapshot", {"id": args.id})
+        sys.stdout.write("[%s] %s -- %s\n" % (result["id"], result.get("title") or "(untitled)", result.get("shown_as") or result.get("url")))
+        sys.stdout.write(result["snapshot"] + "\n")
+        return
+    elif a == "click":
+        result = call("browser.click", dict({"id": args.id, "ref": args.ref, "double": args.double or None}, **flags))
+    elif a == "type":
+        result = call("browser.type", dict({"id": args.id, "ref": args.ref, "text": args.text, "append": args.append or None, "submit": args.submit or None}, **flags))
+    elif a == "press":
+        result = call("browser.press", dict({"id": args.id, "key": args.key, "ref": args.ref}, **flags))
+    elif a == "select":
+        result = call("browser.select", dict({"id": args.id, "ref": args.ref, "values": args.values}, **flags))
+    elif a == "wait":
+        if args.text is None and args.gone is None:
+            fail("invalid_params", "Give --text to wait for, or --gone", 2)
+        wait = args.timeout if args.timeout is not None else 30
+        result = call("browser.wait", {"id": args.id, "text": args.text, "gone": args.gone, "timeout_ms": ms(args.timeout)}, wait)
+    elif a == "screenshot":
+        sys.stdout.write(call("browser.screenshot", {"id": args.id})["path"] + "\n")
+        return
+    elif a == "console":
+        result = call("browser.console", {"id": args.id, "level": args.level})
+        messages = result.get("messages") or []
+        if not messages:
+            sys.stdout.write("(no new messages)\n")
+        for m in messages:
+            where = (" (%s)" % m["source"]) if m.get("source") else ""
+            sys.stdout.write("[%s] %s%s\n" % (m["level"], m["text"], where))
+        return
+    elif a == "close":
+        result = call("browser.close", {"id": args.id})
+    else:
+        fail("usage", "unknown browser action", 2)
+        return
+    print_with_snapshot(result)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="terminus", description="Control Terminus from inside one of its terminals.")
     # Not dest="command": that would collide with `open --command`.
@@ -118,7 +234,12 @@ def main():
     p.add_argument("--name")
     p.add_argument("--placement", choices=["tab", "split-right", "split-down"])
 
+    add_browser_parser(sub)
+
     args = parser.parse_args()
+    if args.subcommand == "browser":
+        run_browser(args)
+        return
     timeout = getattr(args, "timeout", None)
     wait = timeout if timeout is not None else 100
     c = args.subcommand

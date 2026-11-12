@@ -25,7 +25,7 @@
     "@xterm/xterm": "^6.0.0",
     "diff": "^9.0.0",
     "obsidian": "^1.7.2",
-    "terminus-node-bridge": "^1.5.0"
+    "terminus-node-bridge": "^1.6.0"
   },
   "devDependencies": {
     "@codemirror/state": "^6.0.0",

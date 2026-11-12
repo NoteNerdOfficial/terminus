@@ -2,6 +2,7 @@ import { Notice, type WorkspaceLeaf } from "obsidian";
 import type TerminusPlugin from "../main";
 import type { AgentSession } from "../state/AgentSessionStore";
 import type { TerminalView } from "../views/TerminalView";
+import { BrowserApi } from "./BrowserApi";
 import {
   ApiError,
   RateLimiter,
@@ -50,7 +51,7 @@ export interface ApiResponse {
 /**
  * The agent API: what an agent running in a Terminus terminal can ask
  * Terminus to do, through `POST /api` on the review server (see
- * resources/terminus_cli.py for the client and SKILL_MD for how agents
+ * resources/terminus_cli.py for the client and skillMarkdown() for how agents
  * are told about it). The caller is identified by its terminal's token,
  * which only processes started in that terminal have.
  *
@@ -67,8 +68,14 @@ export class AgentApi {
   /** What an agent says it's doing (`status`), shown on its inbox card
    *  while its turn lasts. */
   private statusLines = new Map<string, string>();
+  private browser: BrowserApi;
 
-  constructor(private plugin: TerminusPlugin) {}
+  constructor(private plugin: TerminusPlugin) {
+    this.browser = new BrowserApi(plugin, {
+      scope: (caller) => this.scope(caller),
+      takeAction: (caller) => this.takeAction(caller),
+    });
+  }
 
   /** Wires the API to the session store. Called once from onload. */
   start(): void {
@@ -142,6 +149,7 @@ export class AgentApi {
       case "agent.delegate":
         return this.delegate(caller, params);
       default:
+        if (method.startsWith("browser.")) return this.browser.handle(caller, method, params);
         throw new ApiError("unknown_method", `Unknown method "${method}"`, 404);
     }
   }
@@ -441,6 +449,7 @@ export class AgentApi {
     if (!session.running && !this.plugin.findTerminalView(session.token)) {
       this.results.delete(session.token);
       this.actions.forget(session.token);
+      this.browser.forget(session.token);
     }
     this.returnDelegatedResult(session);
   }

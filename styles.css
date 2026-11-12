@@ -3938,6 +3938,523 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
   color: var(--text-muted);
 }
 
+/* The agent browser (see browser/AgentBrowserView.ts): a strip saying which
+   agent is driving it, then the page, filling the rest of the view. While the
+   agent acts, a thin edge in its group's colour frames the page, and its own
+   cursor moves to where it acts. */
+.workspace-leaf-content[data-type="terminus-agent-browser"] .view-content.terminus-agent-browser {
+  /* The agent's group colour, or Obsidian's accent colour when it has none. */
+  --terminus-agent-accent: var(--terminus-agent-color, var(--interactive-accent));
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.terminus-agent-browser-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-1) var(--size-4-2);
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+  flex: none;
+}
+
+.terminus-agent-browser-icon {
+  display: flex;
+  color: var(--terminus-agent-accent);
+}
+
+.terminus-agent-browser-owner {
+  color: var(--text-normal);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.terminus-agent-browser-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+}
+
+.terminus-agent-browser-notice {
+  padding: var(--size-4-1) var(--size-4-2);
+  background: var(--background-modifier-error);
+  color: var(--text-on-accent);
+  font-size: var(--font-ui-smaller);
+  flex: none;
+}
+
+.terminus-agent-browser-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.terminus-agent-browser-page {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: white;
+}
+
+.terminus-agent-browser-edge,
+.terminus-agent-browser-ripples {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.terminus-agent-browser-edge {
+  box-shadow: inset 0 0 0 2px var(--terminus-agent-accent);
+  opacity: 0;
+  transition: opacity 300ms ease-out;
+}
+
+.is-agent-acting .terminus-agent-browser-edge {
+  opacity: 1;
+}
+
+.terminus-agent-browser-ripple {
+  position: absolute;
+  left: var(--terminus-cursor-x);
+  top: var(--terminus-cursor-y);
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border: 2px solid var(--terminus-agent-accent);
+  border-radius: 50%;
+  animation: terminus-agent-ripple 800ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes terminus-agent-ripple {
+  from { transform: scale(0.6); opacity: 1; }
+  to { transform: scale(3.4); opacity: 0; }
+}
+
+/* The agent's cursor (browser/agentCursor.ts), in pixel art: a pointer whose
+   tip sits on the point it acted at, a companion in the agent's colour that
+   never stands still, and a speech bubble. Nothing here takes pointer events. */
+.terminus-agent-cursor {
+  --terminus-px: 2.5px;
+  --terminus-pixel-ink: #1b1b1f;
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  pointer-events: none;
+  color: var(--terminus-agent-accent);
+  transform: translate(var(--terminus-cursor-x, 0px), var(--terminus-cursor-y, 0px));
+  transition: transform 650ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease-out;
+}
+
+.terminus-agent-cursor svg {
+  display: block;
+  overflow: visible;
+  image-rendering: pixelated;
+}
+
+.terminus-agent-cursor .px-o,
+.terminus-agent-cursor .px-e {
+  fill: var(--terminus-pixel-ink);
+}
+
+/* Body tints, all from the agent's colour: deep, body, highlight */
+.terminus-agent-cursor .px-d {
+  fill: color-mix(in srgb, currentColor 92%, white);
+}
+
+.terminus-agent-cursor .px-l {
+  fill: color-mix(in srgb, currentColor 58%, white);
+}
+
+.terminus-agent-cursor .px-w {
+  fill: color-mix(in srgb, currentColor 18%, white);
+}
+
+/* Effect colours: fixed, since they sit on the page, not on Obsidian */
+.terminus-agent-cursor .px-p { fill: #ff6f9c; opacity: 0.75; }
+.terminus-agent-cursor .px-r { fill: #e5484d; }
+.terminus-agent-cursor .px-y { fill: #f5c400; }
+.terminus-agent-cursor .px-t { fill: #4aa3ff; }
+.terminus-agent-cursor .px-g { fill: #3ccf6e; }
+.terminus-agent-cursor .px-a { fill: #a8a8b3; }
+
+/* The pointer: 8 x 8 pixels, its tip at the top-left corner */
+.terminus-agent-cursor-arrow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(8 * var(--terminus-px));
+  height: calc(8 * var(--terminus-px));
+  filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.18));
+}
+
+/* The companion: 16 x 17 pixels, drawn in a 26 x 24 area (5 pixels to
+   its left, 7 above) that leaves room for its effects. */
+.terminus-agent-cursor-buddy {
+  position: absolute;
+  left: calc(14px - 5 * var(--terminus-px));
+  top: calc(16px - 7 * var(--terminus-px));
+  width: calc(26 * var(--terminus-px));
+  height: calc(24 * var(--terminus-px));
+  transition: left 300ms ease-out;
+}
+
+.terminus-agent-cursor-buddy svg {
+  width: 100%;
+  height: 100%;
+}
+
+.terminus-agent-cursor .buddy-sprite {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: terminus-pixel-bob 800ms steps(1, end) infinite;
+}
+
+.terminus-agent-cursor.is-facing-left .buddy-sprite {
+  scale: -1 1;
+}
+
+/* Two-frame walk: the second frame of legs and arms shows half the time */
+.terminus-agent-cursor .buddy-frame-1 {
+  animation: terminus-pixel-frame 800ms steps(1, end) infinite;
+}
+
+.terminus-agent-cursor .buddy-frame-0 {
+  animation: terminus-pixel-frame-alt 800ms steps(1, end) infinite;
+}
+
+/* Faces: the plain one unless an expression or the resting state picks another */
+.terminus-agent-cursor .buddy-face,
+.terminus-agent-cursor .buddy-fx {
+  display: none;
+}
+
+.terminus-agent-cursor .buddy-face-plain {
+  display: inline;
+}
+
+.terminus-agent-cursor:is(.is-resting, .is-expr-hello, .is-expr-love, .is-expr-wow, .is-expr-cool, .is-expr-alarm, .is-expr-cross, .is-expr-sad) .buddy-face-plain {
+  display: none;
+}
+
+.terminus-agent-cursor.is-resting .buddy-face-sleepy,
+.terminus-agent-cursor:is(.is-expr-hello, .is-expr-love) .buddy-face-happy,
+.terminus-agent-cursor:is(.is-expr-wow, .is-expr-alarm) .buddy-face-wow,
+.terminus-agent-cursor.is-expr-cool .buddy-face-cool,
+.terminus-agent-cursor.is-expr-cross .buddy-face-cross,
+.terminus-agent-cursor.is-expr-sad .buddy-face-sad {
+  display: inline;
+}
+
+/* An expression wins over the resting face */
+.terminus-agent-cursor.is-resting:is(.is-expr-hello, .is-expr-love, .is-expr-wow, .is-expr-cool, .is-expr-alarm, .is-expr-cross, .is-expr-sad) .buddy-face-sleepy {
+  display: none;
+}
+
+.terminus-agent-cursor.is-resting .buddy-fx-zzz,
+.terminus-agent-cursor.is-expr-hello .buddy-fx-hello,
+.terminus-agent-cursor.is-expr-love .buddy-fx-love,
+.terminus-agent-cursor.is-expr-wow .buddy-fx-wow,
+.terminus-agent-cursor.is-expr-alarm .buddy-fx-alarm,
+.terminus-agent-cursor.is-expr-cross .buddy-fx-cross,
+.terminus-agent-cursor.is-expr-sad .buddy-fx-sad {
+  display: inline;
+}
+
+/* Hello, love and wow: cheering, both arms up and down */
+.terminus-agent-cursor .buddy-arms-up {
+  display: none;
+}
+
+.terminus-agent-cursor:is(.is-expr-hello, .is-expr-love, .is-expr-wow) .buddy-arms.buddy-frame-1 {
+  display: none;
+}
+
+.terminus-agent-cursor:is(.is-expr-hello, .is-expr-love, .is-expr-wow) .buddy-arms-up {
+  display: inline;
+  animation: terminus-pixel-frame 300ms steps(1, end) infinite;
+}
+
+.terminus-agent-cursor:is(.is-expr-hello, .is-expr-love, .is-expr-wow) .buddy-arms.buddy-frame-0 {
+  animation: terminus-pixel-frame-alt 300ms steps(1, end) infinite;
+}
+
+/* Alarm: a jolt */
+.terminus-agent-cursor.is-expr-alarm .buddy-sprite {
+  animation: terminus-pixel-jolt 300ms steps(2, end) 3;
+}
+
+.terminus-agent-cursor .buddy-fx {
+  transform-box: fill-box;
+}
+
+.terminus-agent-cursor .buddy-fx-hello,
+.terminus-agent-cursor .buddy-fx-alarm,
+.terminus-agent-cursor .buddy-fx-love {
+  animation: terminus-pixel-blink-fx 500ms steps(1, end) infinite;
+}
+
+.terminus-agent-cursor .buddy-fx-love {
+  animation: terminus-pixel-float 900ms steps(3, end) infinite;
+}
+
+.terminus-agent-cursor .buddy-fx-wow [class^="buddy-fx-part-"]:nth-child(odd) {
+  animation: terminus-pixel-blink-fx 400ms steps(1, end) infinite;
+}
+
+.terminus-agent-cursor .buddy-fx-wow [class^="buddy-fx-part-"]:nth-child(even) {
+  animation: terminus-pixel-blink-fx 400ms steps(1, end) infinite reverse;
+}
+
+.terminus-agent-cursor .buddy-fx-sad,
+.terminus-agent-cursor .buddy-fx-cross .buddy-fx-part-1 {
+  animation: terminus-pixel-drip 700ms steps(3, end) infinite;
+}
+
+.terminus-agent-cursor .buddy-fx-cross .buddy-fx-part-1 {
+  animation-name: terminus-pixel-float;
+}
+
+.terminus-agent-cursor .buddy-fx-zzz {
+  animation: terminus-pixel-zzz 1800ms steps(3, end) infinite;
+}
+
+/* Travelling: a quick march */
+.terminus-agent-cursor.is-moving .buddy-sprite {
+  animation-duration: 240ms;
+}
+
+.terminus-agent-cursor.is-moving .buddy-frame-0,
+.terminus-agent-cursor.is-moving .buddy-frame-1 {
+  animation-duration: 240ms;
+}
+
+/* Typing: arms tapping, feet planted */
+.terminus-agent-cursor.is-typing .buddy-arms.buddy-frame-0,
+.terminus-agent-cursor.is-typing .buddy-arms.buddy-frame-1 {
+  animation-duration: 180ms;
+}
+
+.terminus-agent-cursor.is-typing .buddy-legs.buddy-frame-1 {
+  animation: none;
+  opacity: 0;
+}
+
+.terminus-agent-cursor.is-typing .buddy-legs.buddy-frame-0 {
+  animation: none;
+  opacity: 1;
+}
+
+/* Reading: looks one way, then the other */
+.terminus-agent-cursor.is-reading .buddy-sprite {
+  animation: terminus-pixel-look 900ms steps(1, end) infinite;
+}
+
+/* Clicking: a hop */
+.terminus-agent-cursor.is-clicking .buddy-sprite {
+  animation: terminus-pixel-hop 520ms steps(4, end);
+}
+
+/* Resting: faded, slow, dozing */
+.terminus-agent-cursor.is-resting {
+  opacity: 0.55;
+}
+
+.terminus-agent-cursor.is-resting .buddy-sprite,
+.terminus-agent-cursor.is-resting .buddy-frame-0,
+.terminus-agent-cursor.is-resting .buddy-frame-1 {
+  animation-duration: 1800ms;
+}
+
+.terminus-agent-cursor.is-resting .terminus-agent-cursor-bubble {
+  display: none;
+}
+
+/* The speech bubble: themed, rounded, the corner nearest the companion tucked in */
+.terminus-agent-cursor-bubble {
+  position: absolute;
+  left: 60px;
+  top: 16px;
+  display: grid;
+  gap: 1px;
+  /* Sized by its text: inside the zero-size cursor it would otherwise shrink to nothing. */
+  width: max-content;
+  max-width: 320px;
+  padding: 6px 11px 7px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px 12px 12px 4px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 8px 22px -10px rgba(0, 0, 0, 0.4);
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.terminus-agent-cursor-bubble.is-new {
+  animation: terminus-agent-bubble 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.terminus-agent-cursor-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.terminus-agent-cursor-name::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--terminus-agent-accent);
+}
+
+.terminus-agent-cursor-line {
+  display: flex;
+  gap: 5px;
+  min-width: 0;
+  font-size: var(--font-ui-small);
+}
+
+.terminus-agent-cursor-doing {
+  color: var(--text-muted);
+  flex: none;
+}
+
+.terminus-agent-cursor-target {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+/* Near the right edge, the companion and bubble go to the pointer's left */
+.terminus-agent-cursor.is-flipped .terminus-agent-cursor-buddy {
+  left: -44px;
+}
+
+.terminus-agent-cursor.is-flipped .terminus-agent-cursor-bubble {
+  left: auto;
+  right: 50px;
+  border-radius: 12px 12px 4px 12px;
+}
+
+@keyframes terminus-pixel-frame {
+  0% { opacity: 0; }
+  50% { opacity: 1; }
+}
+
+@keyframes terminus-pixel-frame-alt {
+  0% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes terminus-pixel-blink-fx {
+  0% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes terminus-pixel-float {
+  0% { translate: 0 0; }
+  33% { translate: 0 -1px; }
+  66% { translate: 0 -2px; }
+  100% { translate: 0 0; }
+}
+
+@keyframes terminus-pixel-drip {
+  0% { translate: 0 0; opacity: 1; }
+  66% { translate: 0 2px; opacity: 1; }
+  100% { translate: 0 3px; opacity: 0; }
+}
+
+@keyframes terminus-pixel-jolt {
+  0% { translate: calc(-1 * var(--terminus-px)) 0; }
+  50% { translate: var(--terminus-px) 0; }
+}
+
+@keyframes terminus-pixel-bob {
+  0% { translate: 0 0; }
+  50% { translate: 0 var(--terminus-px); }
+}
+
+@keyframes terminus-pixel-look {
+  0% { scale: 1 1; }
+  50% { scale: -1 1; }
+}
+
+@keyframes terminus-pixel-hop {
+  0% { translate: 0 0; }
+  25% { translate: 0 calc(-3 * var(--terminus-px)); }
+  50% { translate: 0 calc(-4 * var(--terminus-px)); }
+  75% { translate: 0 calc(-2 * var(--terminus-px)); }
+  100% { translate: 0 0; }
+}
+
+@keyframes terminus-pixel-zzz {
+  0% { opacity: 1; translate: 0 0; }
+  33% { opacity: 1; translate: 1px -3px; }
+  66% { opacity: 0.6; translate: 2px -6px; }
+  100% { opacity: 0; translate: 2px -6px; }
+}
+
+@keyframes terminus-agent-bubble {
+  from { opacity: 0.4; transform: translateY(3px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminus-agent-cursor,
+  .terminus-agent-cursor-buddy,
+  .terminus-agent-browser-edge {
+    transition: none;
+  }
+
+  .terminus-agent-cursor .buddy-sprite,
+  .terminus-agent-cursor .buddy-frame-0,
+  .terminus-agent-cursor .buddy-frame-1,
+  .terminus-agent-cursor.is-moving .buddy-sprite,
+  .terminus-agent-cursor.is-moving .buddy-frame-0,
+  .terminus-agent-cursor.is-moving .buddy-frame-1,
+  .terminus-agent-cursor.is-reading .buddy-sprite,
+  .terminus-agent-cursor.is-clicking .buddy-sprite,
+  .terminus-agent-cursor.is-resting .buddy-sprite,
+  .terminus-agent-cursor.is-resting .buddy-frame-0,
+  .terminus-agent-cursor.is-resting .buddy-frame-1,
+  .terminus-agent-cursor .buddy-fx-zzz,
+  .terminus-agent-cursor .buddy-fx-hello,
+  .terminus-agent-cursor .buddy-fx-alarm,
+  .terminus-agent-cursor .buddy-fx-love,
+  .terminus-agent-cursor .buddy-fx-sad,
+  .terminus-agent-cursor .buddy-fx-cross .buddy-fx-part-1,
+  .terminus-agent-cursor .buddy-fx-wow [class^="buddy-fx-part-"]:nth-child(odd),
+  .terminus-agent-cursor .buddy-fx-wow [class^="buddy-fx-part-"]:nth-child(even),
+  .terminus-agent-cursor.is-expr-alarm .buddy-sprite,
+  .terminus-agent-cursor:is(.is-expr-hello, .is-expr-love, .is-expr-wow) .buddy-arms.buddy-frame-0,
+  .terminus-agent-cursor:is(.is-expr-hello, .is-expr-love, .is-expr-wow) .buddy-arms-up,
+  .terminus-agent-cursor.is-typing .buddy-arms.buddy-frame-0,
+  .terminus-agent-cursor.is-typing .buddy-arms.buddy-frame-1,
+  .terminus-agent-cursor-bubble.is-new,
+  .terminus-agent-browser-ripple {
+    animation: none;
+  }
+
+  .terminus-agent-cursor .buddy-frame-1,
+  .terminus-agent-browser-ripple {
+    opacity: 0;
+  }
+}
+
 /**
  * Copyright (c) 2014 The xterm.js authors. All rights reserved.
  * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)

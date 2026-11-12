@@ -45,6 +45,7 @@ Terminus opens in the **Multi-agent experience**: an Agent inbox with a card per
   - [Agent inbox (right sidebar)](#agent-inbox-right-sidebar)
   - [Session logs](#session-logs)
   - [Agent control](#agent-control)
+  - [Agent browser](#agent-browser)
 - [Commands](#commands)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
@@ -241,6 +242,32 @@ The skill teaches Claude these commands; you don't need to type them, but you ca
 Each is run as `"$TERMINUS_CLI" <command>` and prints JSON. They work only while agent control is on.
 
 **Limits.** An agent sees only the terminals in its own group. It can't type into a session that is waiting on a permission prompt, and it can't start anything with Claude's permission checks bypassed (`--dangerously-skip-permissions`, `--permission-mode bypassPermissions`). One agent can have at most four terminals open that it opened itself (configurable up to 12), and a terminal an agent opened can't open more. Opens, runs, messages and delegations are limited to 40 per 10 minutes per agent. These are guardrails rather than a sandbox: an agent can already run any shell command its permissions allow, and nothing here gives it more than that.
+
+### Agent browser
+
+<p align="center">
+  <img src="screenshots/agent-browser.gif" alt="An agent filling in a sign-up prototype in the agent browser: its pixel companion waves, walks to each field as it types and picks, gets cross at a covered button, cheers with a heart when the thanks message appears, puts on sunglasses for a screenshot, then dozes" width="760">
+</p>
+
+Off unless you turn it on, and only with agent control on: **Settings → Terminus → Agent control → Let agents use a browser**. An agent can then open a browser view beside its terminal and use a page the way a person would: read it, click, type, pick from a menu, wait for something to appear, read the console and take screenshots. It's for checking UI work: open the prototype it just built, or the dev server it just started, and try it.
+
+- **Prototypes from the vault.** `browser open --path prototype/index.html` serves the file's folder over a private local address, so relative links, scripts and `fetch` work as they would on a real server. Only files in the vault or the agent's working folder, and never anything under a dot-folder such as `.git` or `.obsidian`.
+- **Local dev servers.** `browser open --url http://localhost:5173` opens a server running on your computer.
+- **You can see what it does.** The agent gets its own cursor on the page, with a small pixel companion in its group's colour (or your accent colour) that walks to each element it clicks or types into and says what it's doing. It cheers when a page shows what the agent waited for, puts on sunglasses for a screenshot, looks alarmed at a console error, gets cross when an action is refused and dozes when the agent goes quiet. A thin edge frames the page while the agent acts, and the strip above names the agent driving it.
+- **Your focus stays yours.** Clicks and typing go to the page only; whatever you're typing in elsewhere keeps the keyboard.
+
+| Command | What it does |
+| --- | --- |
+| `browser open --path <file>` / `--url <localhost address>` | Opens a browser beside the agent |
+| `browser snapshot <id>` | Prints the page as text, with a ref (`e12`) for each element |
+| `browser click <id> <ref>`, `type <id> <ref> <text>`, `press <id> <key>`, `select <id> <ref> <value>` | Acts on the page; `--snapshot` prints a fresh snapshot after |
+| `browser wait <id> --text <text>` | Waits for text to appear (or `--gone` for it to go) |
+| `browser screenshot <id>`, `console <id>` | Saves a PNG and prints its path; prints console messages |
+| `browser navigate <id>`, `back <id>`, `reload <id>`, `list`, `close <id>` | Moves around; lists and closes browsers |
+
+**Why only pages on your computer.** The agent browser never opens outside websites, not even by following a link from a local page. Everything a page says goes straight to the agent, which runs with your shell permissions: a website could hide instructions for it in its text, and an agent on the open web could submit forms or type your files into a site. Keeping it to your own computer keeps the browser to what it's for, checking your own work, without opening that door. A local page can still load scripts, fonts and images from the internet, so prototypes that use a CDN work normally.
+
+**Limits.** The browser has its own session that forgets everything when Obsidian quits, so nothing you're signed in to elsewhere is shared. Every permission (camera, microphone, location, notifications, clipboard) is refused, and downloads and pop-ups are blocked. An agent can have three browsers open, and reaches only the browsers of agents in its own group. A screenshot needs the browser visible: one behind another tab can still be read and clicked, but not captured.
 
 ## Commands
 

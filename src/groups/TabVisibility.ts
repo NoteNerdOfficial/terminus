@@ -1,6 +1,7 @@
 import { WorkspaceLeaf } from "obsidian";
 import { TerminalView } from "../views/TerminalView";
 import { DiffSplitView } from "../views/DiffSplitView";
+import { AgentBrowserView } from "../browser/AgentBrowserView";
 import type TerminusPlugin from "../main";
 
 /** Leaf internals used here; none are in Obsidian's public typings. Every
@@ -48,6 +49,11 @@ export class TabVisibility {
     if (view instanceof DiffSplitView) {
       const owner = view.shownChangeOwner();
       const terminal = owner ? this.plugin.findTerminalView(owner) : null;
+      if (terminal?.groupId && store.get(terminal.groupId)) return terminal.groupId;
+    }
+    // The agent browser belongs to the group of the agent driving it.
+    if (view instanceof AgentBrowserView) {
+      const terminal = view.ownerToken ? this.plugin.findTerminalView(view.ownerToken) : null;
       if (terminal?.groupId && store.get(terminal.groupId)) return terminal.groupId;
     }
     const id = (leaf as LeafInternals).id;

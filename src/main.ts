@@ -43,6 +43,7 @@ import { errorMessage } from "./util/errors";
 import { Notifier } from "./notify/Notifier";
 import { AgentApi } from "./agentApi/AgentApi";
 import { provisionSkill } from "./agentApi/skill";
+import { AgentBrowser } from "./browser/AgentBrowser";
 import {
   DEFAULT_SETTINGS,
   Experience,
@@ -70,6 +71,8 @@ export default class TerminusPlugin extends Plugin {
   readonly notifier = new Notifier(this);
   /** What agents in Terminus terminals can ask Terminus to do (agentApi/). */
   readonly agentApi = new AgentApi(this);
+  /** Browser views agents can drive, and the folders served to them (browser/). */
+  readonly agentBrowser = new AgentBrowser(this);
   /** Per-session notes in the vault, a section per turn. Off by default;
    *  see state/SessionLog.ts. */
   readonly sessionLog = new SessionLog(this);
@@ -207,6 +210,7 @@ export default class TerminusPlugin extends Plugin {
     this.registerView(DIFF_SPLIT_VIEW_TYPE, (leaf) => new DiffSplitView(leaf, this));
     this.registerView(AGENT_INBOX_VIEW_TYPE, (leaf) => new AgentInboxView(leaf, this));
     this.registerView(TERMINUS_SIDEBAR_VIEW_TYPE, (leaf) => new TerminusSidebarView(leaf, this));
+    this.agentBrowser.register();
     this.groups.register();
 
     // Twice a day, while the sidebar that shows it is in use.
@@ -360,6 +364,7 @@ export default class TerminusPlugin extends Plugin {
     for (const timer of this.queueSendPending.values()) window.clearTimeout(timer);
     this.queueSendPending.clear();
     if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
+    this.agentBrowser.unload();
     void this.reviewServer.stop();
   }
 
@@ -593,12 +598,21 @@ export default class TerminusPlugin extends Plugin {
   async setAgentControl(enabled: boolean): Promise<void> {
     this.settings.agentControl.enabled = enabled;
     await this.saveSettings();
+    if (!enabled) this.agentBrowser.closeAll();
+    await this.provisionAgentSkill();
+  }
+
+  /** The skill teaches the browser only while agents may use it. */
+  async setAgentBrowser(enabled: boolean): Promise<void> {
+    this.settings.agentControl.browser = enabled;
+    await this.saveSettings();
+    if (!enabled) this.agentBrowser.closeAll();
     await this.provisionAgentSkill();
   }
 
   private async provisionAgentSkill(): Promise<void> {
     try {
-      await provisionSkill(this.getVaultBasePath(), this.agentControlActive);
+      await provisionSkill(this.getVaultBasePath(), this.agentControlActive, this.settings.agentControl.browser);
     } catch (err) {
       console.error("Terminus: failed to write .claude/skills/terminus/SKILL.md", err);
       if (this.agentControlActive) new Notice("Terminus: could not write the agent control skill to .claude/skills. See console.");

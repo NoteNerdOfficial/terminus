@@ -8,6 +8,7 @@ import {
   StopHookPayload,
   isBashPayload,
 } from "../hooks/types";
+import { SERVE_PREFIX } from "../browser/policy";
 
 export interface RegisteredPanel {
   /** Called synchronously within the PreToolUse hook's request/response
@@ -60,6 +61,11 @@ const API_BODY_MAX_BYTES = 256 * 1024;
  *  body to send back; never rejects. */
 export type ApiHandler = (callerToken: string, request: unknown) => Promise<{ status: number; body: unknown }>;
 
+/** Answers a GET or HEAD under /serve/: the folders the agent browser
+ *  shows (see browser/StaticSites.ts). These carry no token; the address
+ *  itself is the secret. */
+export type StaticHandler = (req: SimpleHttpRequest, res: SimpleHttpResponse) => Promise<void>;
+
 const SESSION_EVENTS = new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "StopFailure"]);
 const SUBAGENT_EVENTS = new Set(["SubagentStart", "SubagentStop"]);
 const AGENT_TOOLS = new Set(["Agent", "Task"]);
@@ -90,9 +96,14 @@ export class ReviewServer {
   private panels = new Map<string, RegisteredPanel>();
   private port = 0;
   private apiHandler: ApiHandler | null = null;
+  private staticHandler: StaticHandler | null = null;
 
   setApiHandler(handler: ApiHandler | null): void {
     this.apiHandler = handler;
+  }
+
+  setStaticHandler(handler: StaticHandler | null): void {
+    this.staticHandler = handler;
   }
 
   async start(): Promise<number> {
@@ -135,6 +146,11 @@ export class ReviewServer {
   }
 
   private async handleRequest(req: SimpleHttpRequest, res: SimpleHttpResponse): Promise<void> {
+    if (this.staticHandler && (req.method === "GET" || req.method === "HEAD") && (req.url ?? "").startsWith(SERVE_PREFIX)) {
+      await this.staticHandler(req, res);
+      return;
+    }
+
     if (
       req.method !== "POST" ||
       (req.url !== "/review" &&

@@ -43,6 +43,14 @@ describe("agent API transport", { skip: !hasPython() && "python3 not available" 
       const { method } = request as { method: string };
       if (method === "terminal.close") return { status: 403, body: { ok: false, error: { code: "forbidden", message: "not yours" } } };
       if (method === "terminal.read") return { status: 200, body: { ok: true, result: { id: "t2", text: "line one\nline two" } } };
+      if (method === "browser.snapshot") {
+        return { status: 200, body: { ok: true, result: { id: "b1", title: "Pricing", shown_as: "proto/index.html", url: "http://127.0.0.1:1/x", snapshot: '- button "Go" [ref=e1]' } } };
+      }
+      if (method === "browser.screenshot") return { status: 200, body: { ok: true, result: { id: "b1", path: "/tmp/terminus-browser/b1-1.png" } } };
+      if (method === "browser.console") {
+        return { status: 200, body: { ok: true, result: { id: "b1", messages: [{ level: "error", text: "boom", source: "app.js:3" }] } } };
+      }
+      if (method === "browser.click") return { status: 200, body: { ok: true, result: { id: "b1", request, snapshot: "- text: after" } } };
       return { status: 200, body: { ok: true, result: { token, request } } };
     });
   });
@@ -80,6 +88,37 @@ describe("agent API transport", { skip: !hasPython() && "python3 not available" 
     assert.equal(steered.request.params.mode, "steer");
     const wait = JSON.parse((await cli(["wait", "t4", "--next-turn", "--timeout", "30", "--until", "done"])).stdout) as { request: unknown };
     assert.deepEqual(wait.request, { method: "agent.wait", params: { id: "t4", until: ["done"], next_turn: true, timeout_ms: 30000 } });
+  });
+
+  it("turns browser actions into browser.* methods", async () => {
+    const open = JSON.parse((await cli(["browser", "open", "--path", "proto/index.html", "--placement", "tab"])).stdout) as { request: unknown };
+    assert.deepEqual(open.request, { method: "browser.open", params: { path: "proto/index.html", placement: "tab" } });
+    const type = JSON.parse((await cli(["browser", "type", "b1", "e5", "ada@example.com", "--submit"])).stdout) as { request: unknown };
+    assert.deepEqual(type.request, { method: "browser.type", params: { id: "b1", ref: "e5", text: "ada@example.com", submit: true } });
+    const select = JSON.parse((await cli(["browser", "select", "b1", "e9", "Monthly", "Yearly"])).stdout) as { request: unknown };
+    assert.deepEqual(select.request, { method: "browser.select", params: { id: "b1", ref: "e9", values: ["Monthly", "Yearly"] } });
+    const press = JSON.parse((await cli(["browser", "press", "b1", "Shift+Tab", "--ref", "e2"])).stdout) as { request: unknown };
+    assert.deepEqual(press.request, { method: "browser.press", params: { id: "b1", key: "Shift+Tab", ref: "e2" } });
+    const wait = JSON.parse((await cli(["browser", "wait", "b1", "--gone", "Loading", "--timeout", "5"])).stdout) as { request: unknown };
+    assert.deepEqual(wait.request, { method: "browser.wait", params: { id: "b1", gone: "Loading", timeout_ms: 5000 } });
+  });
+
+  it("needs exactly one of --path and --url to open", async () => {
+    assert.equal((await cli(["browser", "open"])).status, 2);
+    assert.equal((await cli(["browser", "open", "--path", "a.html", "--url", "http://localhost/"])).status, 2);
+  });
+
+  it("prints a browser's snapshot, screenshot path and console as text", async () => {
+    assert.equal((await cli(["browser", "snapshot", "b1"])).stdout, '[b1] Pricing -- proto/index.html\n- button "Go" [ref=e1]\n');
+    assert.equal((await cli(["browser", "screenshot", "b1"])).stdout, "/tmp/terminus-browser/b1-1.png\n");
+    assert.equal((await cli(["browser", "console", "b1"])).stdout, "[error] boom (app.js:3)\n");
+  });
+
+  it("prints an action's snapshot after its JSON", async () => {
+    const { stdout } = await cli(["browser", "click", "b1", "e1", "--snapshot"]);
+    const [json, text] = stdout.split("\n- text: ");
+    assert.deepEqual((JSON.parse(json!) as { request: unknown }).request, { method: "browser.click", params: { id: "b1", ref: "e1", snapshot: true } });
+    assert.equal(text, "after\n");
   });
 
   it("prints read's text as text", async () => {

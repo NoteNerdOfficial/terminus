@@ -124,6 +124,8 @@ export interface AgentControlSettings {
   enabled: boolean;
   /** How many terminals one agent may have open that it opened itself. */
   maxOpenedTerminals: number;
+  /** Lets agents open and drive the agent browser (agentApi/BrowserApi.ts). */
+  browser: boolean;
 }
 
 export interface TerminusSettings {
@@ -203,6 +205,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
 export const DEFAULT_AGENT_CONTROL_SETTINGS: AgentControlSettings = {
   enabled: false,
   maxOpenedTerminals: 4,
+  browser: false,
 };
 
 export const MIN_AGENT_OPENED_TERMINALS = 1;
@@ -593,6 +596,7 @@ export class TerminusSettingTab extends PluginSettingTab {
         toggle.setValue(agentControl.enabled).onChange(async (value) => {
           await this.plugin.setAgentControl(value);
           limitSetting.settingEl.toggle(value);
+          browserSetting.settingEl.toggle(value);
         })
       );
 
@@ -612,6 +616,18 @@ export class TerminusSettingTab extends PluginSettingTab {
           })
       );
     limitSetting.settingEl.toggle(agentControl.enabled);
+
+    const browserSetting = new Setting(containerEl)
+      .setName("Let agents use a browser")
+      .setDesc(
+        "Lets an agent open a browser view beside it and use it the way a person would: open a prototype from the vault or its own folder, or a page from a local server, then read it, click, type and take screenshots. Only pages on this computer (localhost) open there, never outside websites: a page's text goes straight to the agent, which runs with your shell permissions, so a site could try to instruct it, or the agent could submit forms or send your files to one. It has its own session, so nothing you're signed in to elsewhere is shared, and every permission (camera, location, notifications, clipboard) is refused."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(agentControl.browser).onChange(async (value) => {
+          await this.plugin.setAgentBrowser(value);
+        })
+      );
+    browserSetting.settingEl.toggle(agentControl.enabled);
   }
 
   display(): void {
