@@ -171,6 +171,8 @@ export interface TerminusSettings {
   /** The one-time "What's new" for notifications and agent control (see
    *  main.ts's announceAgentFeatures). A new install starts with it set. */
   hasSeenAgentFeaturesNews: boolean;
+  /** The agent browser's "What's new" (1.0.48) has been shown, or skipped on a fresh install. */
+  hasSeenBrowserNews: boolean;
   /** Multi-agent's terminal groups (see GroupStore). Kept while Classic is
    *  selected, like the per-mode settings. */
   groups: GroupsData;
@@ -236,6 +238,7 @@ export const DEFAULT_SETTINGS: TerminusSettings = {
   hasSeenMultiAgentInvite: false,
   hasSeenMultiAgentDefault: false,
   hasSeenAgentFeaturesNews: false,
+  hasSeenBrowserNews: false,
   groups: DEFAULT_GROUPS_DATA,
 };
 

@@ -36,6 +36,7 @@ import { RescueClosedTerminalModal } from "./modals/RescueClosedTerminalModal";
 import { GettingStartedModal } from "./modals/GettingStartedModal";
 import { MultiAgentInviteModal } from "./modals/MultiAgentInviteModal";
 import { WhatsNewModal } from "./modals/WhatsNewModal";
+import { WhatsNewBrowserModal } from "./modals/WhatsNewBrowserModal";
 import { WhatsNewAgentsModal } from "./modals/WhatsNewAgentsModal";
 import { computeDiffStats } from "./diff/renderDiff";
 import { inlineDiffDecorations, inlineDiffField } from "./editor/inlineDiff";
@@ -334,7 +335,9 @@ export default class TerminusPlugin extends Plugin {
         // that sees it doesn't get a second modal on top.
         if (this.defaultNoticePending && !showedWelcome) this.announceMultiAgentDefault();
         // Never on top of another first-run popup: it waits for a later load.
+        const agentNewsPending = !this.settings.hasSeenAgentFeaturesNews;
         void this.announceAgentFeatures(showedWelcome || this.defaultNoticePending);
+        void this.announceBrowserFeature(showedWelcome || this.defaultNoticePending || agentNewsPending);
       });
       if (this.experience === "multi-agent") void this.startMultiAgentViews();
       // Notes from a run that was killed rather than closed still say they
@@ -435,6 +438,34 @@ export default class TerminusPlugin extends Plugin {
         if (choice === "settings") this.openSettingsAt("Notifications");
       });
     }, 3000);
+  }
+
+  /** The agent browser's "What's new", once per install that had Terminus
+   *  before it; a new install just marks it seen. Like announceAgentFeatures,
+   *  it waits for a later load rather than open on top of another first-run
+   *  popup, that one included. */
+  private async announceBrowserFeature(deferred: boolean): Promise<void> {
+    if (this.settings.hasSeenBrowserNews) return;
+    if (!this.freshInstall && deferred) return;
+    this.settings.hasSeenBrowserNews = true;
+    await this.saveSettings();
+    if (this.freshInstall) return;
+    // An update installed from Settings → Community plugins loads Terminus
+    // while the settings window has focus, and a modal opened then lands in
+    // that window and closes with it. Waits until the main window is back.
+    let waited = 0;
+    const show = (): void => {
+      if (this.isUnloading) return;
+      if (activeDocument !== document && waited++ < 600) {
+        window.setTimeout(show, 1000);
+        return;
+      }
+      const multiAgent = this.experience === "multi-agent";
+      void WhatsNewBrowserModal.ask(this.app, multiAgent).then((choice) => {
+        if (choice === "settings") this.openSettingsAt(multiAgent ? "Agent control" : "Experience");
+      });
+    };
+    window.setTimeout(show, 3000);
   }
 
   /** Opens Terminus's settings tab scrolled to a section heading. Obsidian

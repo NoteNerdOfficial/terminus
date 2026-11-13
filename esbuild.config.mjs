@@ -97,6 +97,9 @@ const context = await esbuild.context({
   treeShaking: true,
   outfile,
   define: { TERMINUS_MULTI_AGENT_AVAILABLE: String(multiAgentAvailable) },
+  // Small images shown in the plugin (src/assets), bundled so they work
+  // offline and Terminus fetches nothing to show them.
+  loader: { ".gif": "dataurl" },
   plugins: [
     {
       name: "chmod-resources",

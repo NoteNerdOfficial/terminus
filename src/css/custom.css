@@ -3937,6 +3937,17 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
   color: var(--text-muted);
 }
 
+/* The agent browser's "What's new" animation (modals/WhatsNewBrowserModal.ts) */
+.terminus-whats-new-demo {
+  display: block;
+  width: 100%;
+  max-width: 440px;
+  height: auto;
+  margin: 4px auto 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+}
+
 /* The agent browser (see browser/AgentBrowserView.ts): a strip saying which
    agent is driving it, then the page, filling the rest of the view. While the
    agent acts, a thin edge in its group's colour frames the page, and its own
