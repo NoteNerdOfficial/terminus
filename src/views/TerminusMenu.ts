@@ -103,7 +103,15 @@ const MARGIN = 8;
 const TYPEAHEAD_MS = 700;
 
 /** The menu showing now, if any: opening another closes it. */
-let shown: TerminusMenu | null = null;
+const showing: { menu: TerminusMenu | null } = { menu: null };
+
+/** An event's target as a node, from whichever window it came from: a
+ *  popout window has its own `Node`, so a plain `instanceof` misses its
+ *  nodes. */
+function eventNode(target: EventTarget | null): Node | null {
+  const node = target as Node | null;
+  return typeof node?.instanceOf === "function" && node.instanceOf(Node) ? node : null;
+}
 
 /**
  * The button whose press just closed its own menu, and when. A press on the
@@ -157,9 +165,9 @@ export class TerminusMenu implements MenuLike {
   showAtMouseEvent(evt: MouseEvent): this {
     // A right-click's own menu (Electron's, if any) never shows over ours.
     if (evt.type === "contextmenu") evt.preventDefault();
-    const target = evt.currentTarget;
-    const button = target instanceof HTMLElement && target.tagName === "BUTTON" ? target : null;
-    const node = button ?? (evt.target instanceof Node ? evt.target : null);
+    const target = eventNode(evt.currentTarget);
+    const button = target?.instanceOf(HTMLElement) && target.tagName === "BUTTON" ? target : null;
+    const node = button ?? eventNode(evt.target);
     const doc = node?.ownerDocument ?? activeDocument;
     const fromKeyboard = evt.detail === 0;
     if (button && closedByOpener?.button === button) {
@@ -186,7 +194,7 @@ export class TerminusMenu implements MenuLike {
     const el = this.el;
     if (!el) return;
     this.el = null;
-    if (shown === this) shown = null;
+    if (showing.menu === this) showing.menu = null;
     for (const undo of this.teardown) undo();
     this.teardown = [];
     el.remove();
@@ -199,11 +207,11 @@ export class TerminusMenu implements MenuLike {
   }
 
   private show(doc: Document, at: Placement, focusFirst: boolean): this {
-    shown?.close(false);
+    showing.menu?.close(false);
     const entries = tidySeparators(this.entries);
     if (!entries.some((entry) => entry.kind === "item" && !entry.item.isLabel)) return this;
     const win = doc.defaultView ?? activeWindow;
-    this.returnFocus = doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
+    this.returnFocus = doc.activeElement?.instanceOf(HTMLElement) ? doc.activeElement : null;
 
     const el = createDiv({ cls: "terminus-menu", attr: { role: "menu", tabindex: "-1" } });
     this.el = el;
@@ -218,7 +226,7 @@ export class TerminusMenu implements MenuLike {
     top = Math.max(MARGIN, Math.min(top, win.innerHeight - MARGIN - size.height));
     el.setCssProps({ "--terminus-menu-x": `${left}px`, "--terminus-menu-y": `${top}px` });
 
-    shown = this;
+    showing.menu = this;
     this.opener?.addClass("is-menu-open");
     this.opener?.setAttr("aria-expanded", "true");
     this.listen(doc, win, el);
@@ -286,7 +294,7 @@ export class TerminusMenu implements MenuLike {
     // the time it shows (it opens on click or contextmenu), so this doesn't
     // catch its own opening.
     on(doc, "pointerdown", (evt) => {
-      const target = evt.target instanceof Node ? evt.target : null;
+      const target = eventNode(evt.target);
       if (target && el.contains(target)) return;
       if (target && this.opener?.contains(target)) closedByOpener = { button: this.opener, at: Date.now() };
       this.close(false);
@@ -295,14 +303,15 @@ export class TerminusMenu implements MenuLike {
     // that doesn't pass pointer events to this page (an agent's browser
     // view) still takes focus from the menu.
     on(el, "focusout", (evt) => {
-      const next = (evt as FocusEvent).relatedTarget;
-      if (next instanceof Node && el.contains(next)) return;
+      const next = eventNode((evt as FocusEvent).relatedTarget);
+      if (next && el.contains(next)) return;
       // Null when focus goes nowhere in particular, e.g. a press on a part
       // of the window that takes no focus; the pointerdown above has that.
       if (next) this.close(false);
     });
     on(doc, "scroll", (evt) => {
-      if (!(evt.target instanceof Node && el.contains(evt.target))) this.close(false);
+      const target = eventNode(evt.target);
+      if (!(target && el.contains(target))) this.close(false);
     }, true);
     on(win, "resize", () => this.close(false));
     on(win, "blur", () => this.close(false));

@@ -694,7 +694,11 @@ var TerminusMenuItem = class {
 };
 var MARGIN = 8;
 var TYPEAHEAD_MS = 700;
-var shown = null;
+var showing = { menu: null };
+function eventNode(target) {
+  const node = target;
+  return typeof (node == null ? void 0 : node.instanceOf) === "function" && node.instanceOf(Node) ? node : null;
+}
 var closedByOpener = null;
 var OPENER_CLICK_MS = 1e3;
 var TerminusMenu = class {
@@ -736,9 +740,9 @@ var TerminusMenu = class {
   showAtMouseEvent(evt) {
     var _a7;
     if (evt.type === "contextmenu") evt.preventDefault();
-    const target = evt.currentTarget;
-    const button = target instanceof HTMLElement && target.tagName === "BUTTON" ? target : null;
-    const node = button != null ? button : evt.target instanceof Node ? evt.target : null;
+    const target = eventNode(evt.currentTarget);
+    const button = (target == null ? void 0 : target.instanceOf(HTMLElement)) && target.tagName === "BUTTON" ? target : null;
+    const node = button != null ? button : eventNode(evt.target);
     const doc = (_a7 = node == null ? void 0 : node.ownerDocument) != null ? _a7 : activeDocument;
     const fromKeyboard = evt.detail === 0;
     if (button && (closedByOpener == null ? void 0 : closedByOpener.button) === button) {
@@ -763,7 +767,7 @@ var TerminusMenu = class {
     const el2 = this.el;
     if (!el2) return;
     this.el = null;
-    if (shown === this) shown = null;
+    if (showing.menu === this) showing.menu = null;
     for (const undo of this.teardown) undo();
     this.teardown = [];
     el2.remove();
@@ -775,12 +779,12 @@ var TerminusMenu = class {
     for (const callback of this.hideCallbacks) callback();
   }
   show(doc, at3, focusFirst) {
-    var _a7, _b, _c2;
-    shown == null ? void 0 : shown.close(false);
+    var _a7, _b, _c2, _d, _e4;
+    (_a7 = showing.menu) == null ? void 0 : _a7.close(false);
     const entries = tidySeparators(this.entries);
     if (!entries.some((entry) => entry.kind === "item" && !entry.item.isLabel)) return this;
-    const win = (_a7 = doc.defaultView) != null ? _a7 : activeWindow;
-    this.returnFocus = doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
+    const win = (_b = doc.defaultView) != null ? _b : activeWindow;
+    this.returnFocus = ((_c2 = doc.activeElement) == null ? void 0 : _c2.instanceOf(HTMLElement)) ? doc.activeElement : null;
     const el2 = createDiv({ cls: "terminus-menu", attr: { role: "menu", tabindex: "-1" } });
     this.el = el2;
     this.renderEntries(el2, entries);
@@ -791,9 +795,9 @@ var TerminusMenu = class {
     if (top + size.height > win.innerHeight - MARGIN) top = at3.flipY - size.height;
     top = Math.max(MARGIN, Math.min(top, win.innerHeight - MARGIN - size.height));
     el2.setCssProps({ "--terminus-menu-x": `${left}px`, "--terminus-menu-y": `${top}px` });
-    shown = this;
-    (_b = this.opener) == null ? void 0 : _b.addClass("is-menu-open");
-    (_c2 = this.opener) == null ? void 0 : _c2.setAttr("aria-expanded", "true");
+    showing.menu = this;
+    (_d = this.opener) == null ? void 0 : _d.addClass("is-menu-open");
+    (_e4 = this.opener) == null ? void 0 : _e4.setAttr("aria-expanded", "true");
     this.listen(doc, win, el2);
     if (focusFirst) this.moveTo(this.step(-1, 1));
     else el2.focus({ preventScroll: true });
@@ -852,18 +856,19 @@ var TerminusMenu = class {
     };
     on3(doc, "pointerdown", (evt) => {
       var _a7;
-      const target = evt.target instanceof Node ? evt.target : null;
+      const target = eventNode(evt.target);
       if (target && el2.contains(target)) return;
       if (target && ((_a7 = this.opener) == null ? void 0 : _a7.contains(target))) closedByOpener = { button: this.opener, at: Date.now() };
       this.close(false);
     }, true);
     on3(el2, "focusout", (evt) => {
-      const next = evt.relatedTarget;
-      if (next instanceof Node && el2.contains(next)) return;
+      const next = eventNode(evt.relatedTarget);
+      if (next && el2.contains(next)) return;
       if (next) this.close(false);
     });
     on3(doc, "scroll", (evt) => {
-      if (!(evt.target instanceof Node && el2.contains(evt.target))) this.close(false);
+      const target = eventNode(evt.target);
+      if (!(target && el2.contains(target))) this.close(false);
     }, true);
     on3(win, "resize", () => this.close(false));
     on3(win, "blur", () => this.close(false));
@@ -24889,8 +24894,8 @@ var BrowserDriver = class {
     const value = await this.evaluate("document.body ? document.body.innerText : ''");
     return typeof value === "string" ? value : "";
   }
-  async screenshot(shown2) {
-    if (!shown2) throw new DriverError("hidden", "The browser is behind another tab, so it can't be captured. Ask the user to bring it into view.");
+  async screenshot(shown) {
+    if (!shown) throw new DriverError("hidden", "The browser is behind another tab, so it can't be captured. Ask the user to bring it into view.");
     try {
       const png = await this.requirePage().capturePng(SCREENSHOT_TIMEOUT_MS);
       this.emit("Took", "a screenshot");
