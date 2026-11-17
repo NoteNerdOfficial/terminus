@@ -1,4 +1,5 @@
-import { ItemView, Menu, Platform, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
+import { ItemView, Platform, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
+import { TerminusMenu } from "./TerminusMenu";
 import { pathRelative } from "terminus-node-bridge";
 import { activeTime, type AgentSession, type SubagentRun } from "../state/AgentSessionStore";
 import { addUsage, formatModelName, totalTokens, UsageTotals } from "../claude/transcriptUsage";
@@ -96,7 +97,6 @@ export class AgentInboxView extends ItemView {
     // Pinned headers grow a hairline while rows pass under them; nothing
     // else here cares about scrolling, so one throttled listener does it.
     this.registerDomEvent(this.contentEl, "scroll", () => this.queueStuckPass());
-    // The overlap popover closes on the next click outside it and on
     // The pinned headers paint with the pane's colour as read at the last
     // render (see measureStickyOffsets). Switching between light and dark, or
     // changing theme or a CSS snippet, changes that colour without a render,
@@ -107,6 +107,7 @@ export class AgentInboxView extends ItemView {
     this.registerEvent(
       this.app.workspace.on("css-change", () => window.requestAnimationFrame(() => this.measureStickyOffsets(this.contentEl)))
     );
+    // The overlap popover closes on the next click outside it and on
     // Escape, like Obsidian's own menus. Registered once rather than per
     // render, and cheap: both return immediately while it is closed.
     this.registerDomEvent(document, "click", (evt) => {
@@ -679,7 +680,7 @@ export class AgentInboxView extends ItemView {
     next.addEventListener("click", () => void this.plugin.jumpToNextSessionNeedingAttention());
 
     iconButton(header, "more-horizontal", "More", (evt) => {
-      const menu = new Menu();
+      const menu = new TerminusMenu();
       const resolveEverything = (accepted: boolean) =>
         void runBulkAction(this.rows, accepted, allChanges, () => this.plugin.pendingChangesStore.resolveAll(accepted));
       menu.addItem((item) =>

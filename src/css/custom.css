@@ -1172,6 +1172,120 @@
   background-color: var(--background-modifier-border);
 }
 
+/* Terminus's own menus (see views/TerminusMenu.ts): the same surface as
+   the colour picker above, with rows like the sidebar's. Placed through
+   two custom properties set when it opens. */
+.terminus-menu {
+  position: fixed;
+  left: var(--terminus-menu-x, 0);
+  top: var(--terminus-menu-y, 0);
+  z-index: var(--layer-menu, 65);
+  min-width: 200px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 4px;
+  background-color: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  box-shadow: var(--shadow-s);
+  font-size: var(--font-ui-small);
+  outline: none;
+}
+
+.terminus-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+  cursor: pointer;
+  outline: none;
+}
+
+.terminus-menu-item.is-active {
+  background-color: var(--background-modifier-hover);
+}
+
+.terminus-menu-item.is-disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.terminus-menu-item.is-warning {
+  color: var(--text-error);
+}
+
+/* Takes a group's colour for "Move to <group>", as its folder does in the
+   sidebar. */
+.terminus-menu-icon {
+  display: inline-flex;
+  flex: none;
+  align-self: flex-start;
+  width: 16px;
+  /* Centred on the title's first line when a description follows. */
+  margin-top: 2px;
+  color: var(--terminus-menu-icon-color, var(--icon-color));
+}
+
+.terminus-menu-item.is-disabled .terminus-menu-icon {
+  color: var(--text-faint);
+}
+
+.terminus-menu-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.terminus-menu-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.terminus-menu-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-menu-description {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.terminus-menu-check {
+  display: inline-flex;
+  flex: none;
+  color: var(--interactive-accent);
+}
+
+.terminus-menu-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Names what the items below act on ("From Terminus 1"), or why there
+   are none. */
+.terminus-menu-label {
+  padding: 6px 8px 2px;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background-color: var(--background-modifier-border);
+}
+
 /* Colored terminal identity on the native tab -- applied via
    terminal/tabHeaderColor.ts, which appends a real .terminus-tab-color-bar
    div (not a ::before/::after: .workspace-tab-header already uses both of
@@ -1853,6 +1967,22 @@
 .terminus-sidebar-terminal:hover .terminus-sidebar-row-actions,
 .terminus-sidebar-terminal:focus-within .terminus-sidebar-row-actions {
   display: flex;
+}
+
+/* A row's buttons stay while one of them has its menu open (see
+   TerminusMenu's opener), so the pressed ⋯ stays beside its menu after
+   the pointer moves into the menu. */
+.terminus-sidebar-row-actions:has(.is-menu-open) {
+  display: flex;
+}
+
+.terminus-sidebar-terminal:has(.is-menu-open) .terminus-sidebar-shell-tag {
+  display: none;
+}
+
+.clickable-icon.is-menu-open {
+  color: var(--icon-color-hover);
+  background-color: var(--background-modifier-hover);
 }
 
 /* A group's summary stays: it's what says the group needs you. */

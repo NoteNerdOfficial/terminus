@@ -1,4 +1,5 @@
-import { Menu, Notice, Plugin, WorkspaceLeaf, requireApiVersion, setIcon } from "obsidian";
+import { Notice, Plugin, WorkspaceLeaf, requireApiVersion, setIcon } from "obsidian";
+import { TerminusMenu } from "./views/TerminusMenu";
 import { pathBasename, pathJoin, pathRelative } from "terminus-node-bridge";
 import { ReviewServer } from "./server/ReviewServer";
 import { provisionClaudeSettings, getVaultBasePath, getHookBridgePath } from "./hooks/provisionSettings";
@@ -1177,10 +1178,10 @@ export default class TerminusPlugin extends Plugin {
   }
 
   /** The placement menu, anchored at `evt`. A callback rather than a
-   *  promise: Obsidian hides the menu before it runs an item's click, so
+   *  promise: the menu closes before it runs an item's click, so
    *  "dismissed" can't be told apart from "picked" by the hide event. */
   private askPlacement(evt: MouseEvent, onPick: (placement: OpenPlacement) => void, allowed: OpenPlacement[] = TERMINAL_OPEN_PLACEMENTS): void {
-    const menu = new Menu();
+    const menu = new TerminusMenu();
     for (const placement of allowed) {
       menu.addItem((item) => item.setTitle(TERMINAL_PLACEMENT_LABELS[placement]).onClick(() => onPick(placement)));
     }

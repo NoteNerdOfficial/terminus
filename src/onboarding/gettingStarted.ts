@@ -161,7 +161,7 @@ Queued messages appear above the box in the order they will go. Drag to reorder,
 ### More from a card
 
 - **Send a task to a new terminal.** Opens a new Claude session beside the sender with your prompt typed in, unsent. Its result shows on the sender's card, and one click types it back into the sender's input.
-- **Fork a session.** Starts a new terminal in the same group that continues from this session's conversation.
+- **Fork a session.** Starts a new terminal in the same group that continues from this session's conversation. It is on a terminal's ⋯ button in the sidebar (or right-click the terminal there), and in a terminal tab's right-click menu.
 - **Review feedback.** Comment on a hunk in Split Diff, queue comments per session, and send them to that session between turns.
 - **Resume after a restart.** Terminals that had Claude running pick the same conversation back up when Obsidian reopens (turn off in settings).
 

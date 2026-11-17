@@ -1,4 +1,5 @@
-import { ItemView, Menu, Notice, setIcon, setTooltip, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, setIcon, setTooltip, TFile, WorkspaceLeaf } from "obsidian";
+import { TerminusMenu } from "./TerminusMenu";
 import { pathBasename, pathRelative } from "terminus-node-bridge";
 import { TerminalView } from "./TerminalView";
 import { plainPreview } from "./AgentInboxView";
@@ -269,7 +270,7 @@ export class TerminusSidebarView extends ItemView {
     row.toggleClass("is-active", active);
     this.makeDropTarget(row, group.id);
     this.makeReorderable(section, row, group.id);
-    makeActivatable(row, () => void this.plugin.groups.selectGroup(group.id), (evt) => this.showGroupMenu(evt, group));
+    makeActivatable(row, () => void this.plugin.groups.selectGroup(group.id), (evt) => this.showGroupMenu(evt, group, row));
     row.setAttr("aria-current", active ? "true" : "false");
     this.renderFoldChevron(row, group.id, group.collapsed);
 
@@ -301,10 +302,12 @@ export class TerminusSidebarView extends ItemView {
     iconButton(actions, "check-circle-2", "Settle: put this group away as done", () => {
       if (!this.plugin.groups.settleGroup(group.id)) new Notice("Terminus: a session in this group is working or waiting on you");
     });
+    // The group's own menu, the same one its right-click opens.
+    iconButton(actions, "more-horizontal", "More options", (evt) => this.showGroupMenu(evt, group, row));
     this.renderCloseButton(actions, group.id, members, "Close this group and its terminals", () => this.plugin.groups.closeGroup(group.id), row);
 
     row.addEventListener("click", () => void this.plugin.groups.selectGroup(group.id));
-    row.addEventListener("contextmenu", (evt) => this.showGroupMenu(evt, group));
+    row.addEventListener("contextmenu", (evt) => this.showGroupMenu(evt, group, row));
 
     // Folded: just the row (and a pending close question).
     if (group.collapsed) return;
@@ -388,9 +391,9 @@ export class TerminusSidebarView extends ItemView {
       const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
       iconButton(actions, "undo-2", shelf.restoreLabel, () => shelf.restore(group));
       const open = () => void this.plugin.groups.selectGroup(group.id);
-      makeActivatable(row, open, (evt) => this.showGroupMenu(evt, group));
+      makeActivatable(row, open, (evt) => this.showGroupMenu(evt, group, row));
       row.addEventListener("click", open);
-      row.addEventListener("contextmenu", (evt) => this.showGroupMenu(evt, group));
+      row.addEventListener("contextmenu", (evt) => this.showGroupMenu(evt, group, row));
     }
   }
 
@@ -491,7 +494,7 @@ export class TerminusSidebarView extends ItemView {
     const color = view.effectiveColor;
     if (color) row.style.setProperty("--terminus-terminal-color", color);
     row.draggable = true;
-    makeActivatable(row, () => void this.plugin.focusTerminal(token), (evt) => this.showMoveMenu(evt, this.dragSet(view)));
+    makeActivatable(row, () => void this.plugin.focusTerminal(token), (evt) => this.showTerminalMenu(evt, this.dragSet(view)));
 
     row.createSpan({ cls: "terminus-sidebar-terminal-color" });
     row.createSpan({ cls: "terminus-sidebar-terminal-name", text: view.getDisplayText() });
@@ -514,7 +517,7 @@ export class TerminusSidebarView extends ItemView {
     }
 
     const actions = row.createDiv({ cls: "terminus-sidebar-row-actions" });
-    iconButton(actions, "arrow-left-right", "Move to group", (evt) => this.showMoveMenu(evt, this.dragSet(view)));
+    iconButton(actions, "more-horizontal", "More options", (evt) => this.showTerminalMenu(evt, this.dragSet(view)));
     this.renderCloseButton(actions, token, [view], "Close terminal", () => this.plugin.groups.closeTerminals([view]), null);
 
     row.addEventListener("click", (evt) => {
@@ -526,6 +529,7 @@ export class TerminusSidebarView extends ItemView {
       }
       void this.plugin.focusTerminal(token);
     });
+    row.addEventListener("contextmenu", (evt) => this.showTerminalMenu(evt, this.dragSet(view)));
     row.addEventListener("dragstart", (evt) => {
       const tokens = this.dragSet(view).map((t) => t.hookToken);
       evt.dataTransfer?.setData(DRAG_TYPE, JSON.stringify(tokens));
@@ -618,7 +622,7 @@ export class TerminusSidebarView extends ItemView {
     });
   }
 
-  /** The terminals a drag or ⇄ acts on: the whole selection when the row is
+  /** The terminals a drag or ⋯ acts on: the whole selection when the row is
    *  part of it, otherwise just the row. */
   private dragSet(view: TerminalView): TerminalView[] {
     if (!this.selected.has(view.hookToken)) return [view];
@@ -654,7 +658,7 @@ export class TerminusSidebarView extends ItemView {
     const file = this.tabFile(leaf);
     const menu = (evt: MouseEvent) => {
       evt.preventDefault();
-      const m = new Menu();
+      const m = new TerminusMenu();
       if (file?.extension === "md") {
         m.addItem((item) =>
           item
@@ -684,21 +688,30 @@ export class TerminusSidebarView extends ItemView {
     return file instanceof TFile ? file : null;
   }
 
-  private showMoveMenu(evt: MouseEvent, views: TerminalView[]): void {
-    const menu = new Menu();
-    // One terminal at a time: a fork continues one session.
+  /**
+   * A terminal row's menu, from its ⋯, a right-click or the context-menu
+   * key: Fork session and Send to a new terminal for a Claude terminal, then
+   * the move items. For a ⌘-click selection the move items act on all of
+   * it; fork and send continue one session, so they're left out.
+   */
+  private showTerminalMenu(evt: MouseEvent, views: TerminalView[]): void {
+    const menu = new TerminusMenu();
     if (views.length === 1 && views[0]) {
-      const forked = addForkItem(menu, this.plugin, views[0]);
-      const delegated = addDelegateItem(menu, this.plugin, views[0]);
-      if (forked || delegated) menu.addSeparator();
+      addForkItem(menu, this.plugin, views[0]);
+      addDelegateItem(menu, this.plugin, views[0]);
+      // Dropped by the menu when neither item applies (a shell).
+      menu.addSeparator();
     }
     addMoveItems(menu, this.plugin, { terminals: views }, () => this.selected.clear());
     menu.showAtMouseEvent(evt);
   }
 
-  private showGroupMenu(evt: MouseEvent, group: TerminalGroup): void {
+  /** `row`: the group's row, which Colour… opens its picker beside. Not
+   *  the ⋯ that may have opened the menu: row buttons hide once the
+   *  pointer leaves the row, so by then it has no position. */
+  private showGroupMenu(evt: MouseEvent, group: TerminalGroup, row: HTMLElement): void {
     evt.preventDefault();
-    showGroupMenu(evt, this.plugin, group, {
+    showGroupMenu(evt, this.plugin, group, row, {
       rename: () => this.startRename(group.id),
       close: () => {
         const members = this.plugin.groups.terminalsIn(group.id);

@@ -8,12 +8,13 @@ import { linkNote, NOTE_STATUSES, NoteStatus, noteFile, noteStatus, NoteSuggestM
 import { GroupSuggestModal } from "./GroupSuggestModal";
 import { forkCommand } from "./forkSession";
 import { resolveSnoozePresets, wakeLabel, type SnoozePreset } from "./snoozePresets";
+import { TerminusMenu, type MenuLike } from "../views/TerminusMenu";
 import type TerminusPlugin from "../main";
 
 /**
  * Every group menu in one place, so the same action has the same name
  * wherever it appears: "Move to <group>", "Move to new group" and "Remove
- * from group" on the ⇄ button, a terminal tab's menu, a note tab's menu and
+ * from group" on a terminal row's ⋯, a terminal tab's menu, a note tab's menu and
  * the "Move tab to group…" command; and one short menu for a group itself.
  */
 
@@ -44,21 +45,24 @@ export function moveToNewGroup(plugin: TerminusPlugin, terminals: TerminalView[]
 }
 
 /** "Move to <group>" for each group, "Move to new group" (terminals only)
- *  and "Remove from group" when it's in one. */
-export function addMoveItems(menu: Menu, plugin: TerminusPlugin, subject: MoveSubject, onDone?: () => void): void {
+ *  and "Remove from group" when it's in one. Into a Terminus menu or one
+ *  of Obsidian's (a terminal tab's, the file menu). */
+export function addMoveItems(menu: MenuLike, plugin: TerminusPlugin, subject: MoveSubject, onDone?: () => void): void {
   const current = subjectGroup(plugin, subject);
   const done = (fn: () => void) => () => {
     onDone?.();
     fn();
   };
   for (const group of plugin.groupStore.list()) {
-    menu.addItem((item) =>
+    menu.addItem((item) => {
       item
         .setTitle(`Move to ${group.name}`)
         .setIcon("folder-input")
         .setChecked(current === group.id)
-        .onClick(done(() => moveSubject(plugin, subject, group.id)))
-    );
+        .onClick(done(() => moveSubject(plugin, subject, group.id)));
+      // In the group's colour, as its folder is in the sidebar.
+      item.setIconColor?.(group.color);
+    });
   }
   if ("terminals" in subject) {
     menu.addItem((item) =>
@@ -81,28 +85,30 @@ export function addMoveItems(menu: Menu, plugin: TerminusPlugin, subject: MoveSu
 /** "Fork session": a new terminal in the same group continuing from this
  *  terminal's Claude session. Only for a terminal with a running session
  *  whose id is known; a plain shell has nothing to fork. */
-export function addForkItem(menu: Menu, plugin: TerminusPlugin, view: TerminalView): boolean {
+export function addForkItem(menu: MenuLike, plugin: TerminusPlugin, view: TerminalView): boolean {
   const session = plugin.agentSessionStore.get(view.hookToken);
   if (!session?.running || !forkCommand(session.sessionId)) return false;
-  menu.addItem((item) =>
+  menu.addItem((item) => {
     item
       .setTitle("Fork session")
       .setIcon("git-fork")
-      .onClick(() => void plugin.groups.forkSession(view))
-  );
+      .onClick(() => void plugin.groups.forkSession(view));
+    item.setDescription?.("Continue this conversation in a new terminal");
+  });
   return true;
 }
 
 /** "Send to a new terminal…": a task for a new Claude session beside this
  *  one. Only for a terminal with a running session. */
-export function addDelegateItem(menu: Menu, plugin: TerminusPlugin, view: TerminalView): boolean {
+export function addDelegateItem(menu: MenuLike, plugin: TerminusPlugin, view: TerminalView): boolean {
   if (!plugin.agentSessionStore.get(view.hookToken)?.running) return false;
-  menu.addItem((item) =>
+  menu.addItem((item) => {
     item
       .setTitle("Send to a new terminal…")
       .setIcon("corner-down-right")
-      .onClick(() => void plugin.sendToNewTerminal(view))
-  );
+      .onClick(() => void plugin.sendToNewTerminal(view));
+    item.setDescription?.("A new session with a task; its result comes back here");
+  });
   return true;
 }
 
@@ -126,10 +132,16 @@ export function addNoteMenuItems(menu: Menu, plugin: TerminusPlugin, file: { pat
 }
 
 /** A group's own menu, kept short: rename, folder, colour, its note, close.
- *  Colour and note status open pickers rather than listing every choice. */
-export function showGroupMenu(evt: MouseEvent, plugin: TerminusPlugin, group: TerminalGroup, actions: { rename: () => void; close: () => void }): void {
-  const anchor = evt.currentTarget instanceof HTMLElement ? evt.currentTarget : null;
-  const menu = new Menu();
+ *  Colour and note status open pickers rather than listing every choice;
+ *  the colour picker opens beside `anchor`, the group's row. */
+export function showGroupMenu(
+  evt: MouseEvent,
+  plugin: TerminusPlugin,
+  group: TerminalGroup,
+  anchor: HTMLElement,
+  actions: { rename: () => void; close: () => void }
+): void {
+  const menu = new TerminusMenu();
   menu.addItem((item) => item.setTitle("Rename").setIcon("pencil").onClick(actions.rename));
   menu.addItem((item) =>
     item
@@ -137,16 +149,14 @@ export function showGroupMenu(evt: MouseEvent, plugin: TerminusPlugin, group: Te
       .setIcon("folder")
       .onClick(() => new FolderSuggestModal(plugin, (folder) => setGroupFolder(plugin, group.id, folder)).open())
   );
-  if (anchor) {
-    menu.addItem((item) =>
-      item
-        .setTitle("Colour…")
-        .setIcon("palette")
-        // "None" in the shared picker leaves the colour as it is: a group
-        // always has one.
-        .onClick(() => openTerminalColorPicker(anchor, group.color, (color) => color && plugin.groups.setGroupColor(group.id, color)))
-    );
-  }
+  menu.addItem((item) =>
+    item
+      .setTitle("Colour…")
+      .setIcon("palette")
+      // "None" in the shared picker leaves the colour as it is: a group
+      // always has one.
+      .onClick(() => openTerminalColorPicker(anchor, group.color, (color) => color && plugin.groups.setGroupColor(group.id, color)))
+  );
   menu.addSeparator();
   const note = noteFile(plugin, group.note);
   if (note) {
