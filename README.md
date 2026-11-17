@@ -241,7 +241,7 @@ The skill teaches Claude these commands; you don't need to type them, but you ca
 
 Each is run as `"$TERMINUS_CLI" <command>` and prints JSON. They work only while agent control is on.
 
-**Limits.** An agent sees only the terminals in its own group. It can't type into a session that is waiting on a permission prompt, and it can't start anything with Claude's permission checks bypassed (`--dangerously-skip-permissions`, `--permission-mode bypassPermissions`). One agent can have at most four terminals open that it opened itself (configurable up to 12), and a terminal an agent opened can't open more. Opens, runs, messages and delegations are limited to 40 per 10 minutes per agent. These are guardrails rather than a sandbox: an agent can already run any shell command its permissions allow, and nothing here gives it more than that.
+**Limits.** An agent sees only the terminals in its own group. It can't type into a session that is waiting on a permission prompt, and it can't start anything with Claude's permission checks bypassed (`--dangerously-skip-permissions`, `--permission-mode bypassPermissions`). One agent can have at most four terminals open that it opened itself (configurable up to 12), and a terminal an agent opened can't open more or run commands in one you opened, even after Obsidian restarts. Opens, runs, messages and delegations are limited to 40 per 10 minutes per agent. These are guardrails rather than a sandbox: an agent can already run any shell command its permissions allow, and nothing here gives it more than that.
 
 ### Agent browser
 

@@ -98,7 +98,7 @@ Notify only for something the user would want to be interrupted for.
 {{BROWSER}}
 ## Limits
 
-Terminus won't start anything with permission checks bypassed. A terminal you opened can't open more. Opens, runs, prompts and delegations are rate-limited.
+Terminus won't start anything with permission checks bypassed. A terminal you opened can't open more, or run commands in a terminal the user opened; that holds across restarts too. Opens, runs, prompts and delegations are rate-limited.
 `;
 
 function skillPath(vaultBasePath: string): string {

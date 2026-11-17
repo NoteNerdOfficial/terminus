@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { ApiError, RateLimiter, bypassFlagIn, findMatchingLine, optionalChoice, optionalInt, publicStatus, requireString, tailLines } from "../src/agentApi/policy";
+import { ApiError, RateLimiter, bypassFlagIn, findMatchingLine, openDepthRefusal, optionalChoice, optionalInt, publicStatus, requireString, runDepthRefusal, savedDepth, tailLines } from "../src/agentApi/policy";
 import type { AgentSession } from "../src/state/AgentSessionStore";
 
 function session(fields: Partial<AgentSession>): AgentSession {
@@ -78,5 +78,29 @@ describe("parameters", () => {
     assert.throws(() => optionalInt({ n: "5" }, "n", 80, 1, 100), ApiError);
     assert.equal(optionalChoice({}, "p", ["tab", "split-right"] as const, "tab"), "tab");
     assert.throws(() => optionalChoice({ p: "window" }, "p", ["tab", "split-right"] as const, "tab"), ApiError);
+  });
+});
+
+describe("open depth", () => {
+  it("lets the user's terminals open helpers but not the helpers", () => {
+    assert.equal(openDepthRefusal(0), null);
+    assert.ok(openDepthRefusal(1));
+    assert.ok(openDepthRefusal(2));
+  });
+
+  it("lets run go outward, never back towards the user", () => {
+    assert.equal(runDepthRefusal(0, 0), null);
+    assert.equal(runDepthRefusal(0, 1), null);
+    assert.equal(runDepthRefusal(1, 1), null);
+    assert.ok(runDepthRefusal(1, 0));
+  });
+
+  it("reads a saved depth, treating anything malformed as the user's own", () => {
+    assert.equal(savedDepth(1), 1);
+    assert.equal(savedDepth(undefined), 0);
+    assert.equal(savedDepth("1"), 0);
+    assert.equal(savedDepth(-1), 0);
+    assert.equal(savedDepth(1.5), 0);
+    assert.equal(savedDepth(1e9), 100);
   });
 });

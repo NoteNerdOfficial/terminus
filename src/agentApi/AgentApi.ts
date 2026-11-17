@@ -10,20 +10,19 @@ import {
   asParams,
   bypassFlagIn,
   findMatchingLine,
+  openDepthRefusal,
   optionalBool,
   optionalChoice,
   optionalInt,
   optionalString,
   publicStatus,
   requireString,
+  runDepthRefusal,
   tailLines,
   type Params,
   type PublicStatus,
 } from "./policy";
 
-/** An agent opened by an agent may not open more: one level of helpers,
- *  never a tree that grows on its own. */
-const MAX_OPEN_DEPTH = 1;
 /** Opens, runs, prompts and delegations together, per calling terminal. */
 const ACTION_LIMIT = 40;
 const ACTION_WINDOW_MS = 10 * 60 * 1000;
@@ -37,10 +36,11 @@ const MAX_RESULT_LENGTH = 100_000;
 const MAX_STATUS_LENGTH = 120;
 const PLACEMENTS = ["tab", "split-right", "split-down"] as const;
 
+/** Who opened a terminal, for `close`. Its depth lives on the terminal
+ *  itself (TerminalView.agentDepth), where it survives a restart. */
 interface OpenRecord {
   /** The token of the terminal that opened it. */
   by: string;
-  depth: number;
 }
 
 export interface ApiResponse {
@@ -192,6 +192,8 @@ export class AgentApi {
     if (status !== "none" && status !== "ended") {
       throw new ApiError("agent_running", `${target.publicId} is running Claude; send it a message with "prompt" instead`, 409);
     }
+    const depthRefusal = runDepthRefusal(caller.agentDepth, target.agentDepth);
+    if (depthRefusal) throw new ApiError("forbidden", depthRefusal, 403);
     this.takeAction(caller);
     if (!target.runCommand(command)) throw new ApiError("unavailable", `${target.publicId}'s shell isn't running`, 409);
     return { id: target.publicId };
@@ -356,9 +358,8 @@ export class AgentApi {
 
   /** Why the caller may not open another terminal, or null when it may. */
   private openRefusal(caller: TerminalView): string | null {
-    if ((this.opened.get(caller.hookToken)?.depth ?? 0) >= MAX_OPEN_DEPTH) {
-      return "A terminal opened by an agent can't open more terminals";
-    }
+    const depthRefusal = openDepthRefusal(caller.agentDepth);
+    if (depthRefusal) return depthRefusal;
     const max = this.plugin.settings.agentControl.maxOpenedTerminals;
     const live = [...this.opened].filter(([token, record]) => record.by === caller.hookToken && this.plugin.findTerminalView(token)).length;
     if (live >= max) return `You already have ${live} terminals open (the limit is ${max}); close one first`;
@@ -390,7 +391,8 @@ export class AgentApi {
     );
     if (previous && previous !== child?.leaf) workspace.setActiveLeaf(previous, { focus: true });
     if (!child) throw new ApiError("unavailable", "The terminal couldn't be opened", 500);
-    this.opened.set(child.hookToken, { by: caller.hookToken, depth: (this.opened.get(caller.hookToken)?.depth ?? 0) + 1 });
+    this.opened.set(child.hookToken, { by: caller.hookToken });
+    child.markOpenedByAgent(caller.agentDepth + 1);
     new Notice(`Terminus: ${caller.getDisplayText()} opened ${child.getDisplayText()}`);
     return child;
   }

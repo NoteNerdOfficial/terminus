@@ -53,6 +53,7 @@ import { withoutInheritedClaudeSession } from "../pty/claudeSessionEnv";
 import { addDelegateItem, addForkItem, addMoveItems } from "../groups/groupMenus";
 import { isSessionId, resumeCommand } from "../groups/forkSession";
 import { isOpenGroup } from "../state/GroupStore";
+import { savedDepth } from "../agentApi/policy";
 import { titleFromBranch, titleFromClaude, titleFromCommand, titleFromPrompt } from "../groups/groupNaming";
 import { errorMessage } from "../util/errors";
 import type TerminusPlugin from "../main";
@@ -239,6 +240,9 @@ export class TerminalView extends ItemView {
    *  (Multi-agent). Saved in view state from SessionStart until the user
    *  ends it, so a restart -- including a crash -- can pick it back up. */
   private claudeSession: { id: string; cwd: string } | null = null;
+  /** How far from the user this terminal is (see MAX_OPEN_DEPTH). Saved
+   *  with the layout, so a restart doesn't let a helper open more. */
+  private agentDepthValue = 0;
   /** Set by setState when this view is a restored terminal whose saved
    *  session should be resumed once its shell is ready. */
   private resumeOnStart = false;
@@ -1036,6 +1040,19 @@ export class TerminalView extends ItemView {
     return true;
   }
 
+  get agentDepth(): number {
+    return this.agentDepthValue;
+  }
+
+  /** From the agent API when an agent opens this terminal. Only ever
+   *  raises the depth, and saves the layout at once so a crash can't
+   *  lose it. */
+  markOpenedByAgent(depth: number): void {
+    if (depth <= this.agentDepthValue) return;
+    this.agentDepthValue = depth;
+    this.app.workspace.requestSaveLayout();
+  }
+
   /** The hook/review token: how the Agent inbox matches sessions and
    *  pending changes to this terminal. */
   get hookToken(): string {
@@ -1198,6 +1215,7 @@ export class TerminalView extends ItemView {
       autoNameSource: this.autoNameSource ?? undefined,
       claudeSession: this.plugin.experience === "multi-agent" ? (this.claudeSession ?? undefined) : undefined,
       steerQueue: this.plugin.experience === "multi-agent" && this.plugin.steerQueue.listFor(this.token).length > 0 ? this.plugin.steerQueue.texts(this.token) : undefined,
+      agentDepth: this.agentDepthValue > 0 ? this.agentDepthValue : undefined,
     };
   }
 
@@ -1270,6 +1288,7 @@ export class TerminalView extends ItemView {
       launch?: { command?: unknown; prompt?: unknown; submit?: unknown };
       claudeSession?: { id?: unknown; cwd?: unknown };
       steerQueue?: unknown;
+      agentDepth?: unknown;
     } | null;
     const launch = typedState?.launch;
     if (launch && typeof launch.command === "string" && launch.command) {
@@ -1320,6 +1339,8 @@ export class TerminalView extends ItemView {
     if (Array.isArray(savedQueue) && this.plugin.steerQueue.listFor(this.token).length === 0) {
       this.plugin.steerQueue.restore(this.token, savedQueue.filter((text): text is string => typeof text === "string"));
     }
+    // Never lowered: setState can run again on a live view.
+    this.agentDepthValue = Math.max(this.agentDepthValue, savedDepth(typedState?.agentDepth));
     // A group that no longer exists leaves the terminal ungrouped.
     if (typeof typedState?.groupId === "string" && this.plugin.groupStore.get(typedState.groupId)) {
       this.groupIdValue = typedState.groupId;

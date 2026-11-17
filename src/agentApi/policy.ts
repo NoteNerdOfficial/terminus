@@ -33,6 +33,29 @@ export function bypassFlagIn(command: string): string | null {
   return null;
 }
 
+/** How far a terminal is from the user: 0 when the user opened it, 1 when
+ *  an agent did. An agent at MAX_OPEN_DEPTH may not open more: one level
+ *  of helpers, never a tree that grows on its own. */
+export const MAX_OPEN_DEPTH = 1;
+
+export function openDepthRefusal(callerDepth: number): string | null {
+  return callerDepth >= MAX_OPEN_DEPTH ? "A terminal opened by an agent can't open more terminals" : null;
+}
+
+/** Typing a command into a terminal nearer the user would hand the caller
+ *  that terminal's depth: a helper could start `claude` in the user's own
+ *  shell and open terminals from there. So `run` only goes outward. */
+export function runDepthRefusal(callerDepth: number, targetDepth: number): string | null {
+  return callerDepth > targetDepth ? "A terminal opened by an agent can't run commands in a terminal the user opened" : null;
+}
+
+/** A depth read back from saved view state. Anything malformed counts as
+ *  0, the user's own terminal, which is what every terminal was before
+ *  depths were saved. */
+export function savedDepth(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? Math.min(value, 100) : 0;
+}
+
 /** At most `limit` actions per caller in any `windowMs`. In memory: a
  *  restart resets it, as it does every terminal's token. */
 export class RateLimiter {
