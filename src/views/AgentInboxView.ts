@@ -97,6 +97,16 @@ export class AgentInboxView extends ItemView {
     // else here cares about scrolling, so one throttled listener does it.
     this.registerDomEvent(this.contentEl, "scroll", () => this.queueStuckPass());
     // The overlap popover closes on the next click outside it and on
+    // The pinned headers paint with the pane's colour as read at the last
+    // render (see measureStickyOffsets). Switching between light and dark, or
+    // changing theme or a CSS snippet, changes that colour without a render,
+    // which left the headers in the old theme's colour: a black band in light
+    // mode. Read it again on the frame after the new styles apply. Measuring
+    // rather than re-rendering leaves a half-typed message alone, and also
+    // picks up a header height the new theme's font changed.
+    this.registerEvent(
+      this.app.workspace.on("css-change", () => window.requestAnimationFrame(() => this.measureStickyOffsets(this.contentEl)))
+    );
     // Escape, like Obsidian's own menus. Registered once rather than per
     // render, and cheap: both return immediately while it is closed.
     this.registerDomEvent(document, "click", (evt) => {
