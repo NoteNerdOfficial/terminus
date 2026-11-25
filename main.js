@@ -1341,7 +1341,8 @@ async function provisionClaudeSettings(app, manifest, options) {
     sessionHooksChanged || (sessionHooksChanged = changed);
   }
   for (const event of SHARED_SESSION_EVENTS) {
-    sessionHooksChanged || (sessionHooksChanged = ensureHook(hooks, event, sessionHook));
+    const changed = ensureHook(hooks, event, sessionHook);
+    sessionHooksChanged || (sessionHooksChanged = changed);
   }
   for (const event of SUBAGENT_EVENTS2) {
     const changed = trackSubagents ? ensureHook(hooks, event, sessionHook) : removeHook(hooks, event, sessionEventBridge);

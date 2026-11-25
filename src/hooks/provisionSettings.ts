@@ -202,7 +202,10 @@ export async function provisionClaudeSettings(app: App, manifest: PluginManifest
     sessionHooksChanged ||= changed;
   }
   for (const event of SHARED_SESSION_EVENTS) {
-    sessionHooksChanged ||= ensureHook(hooks, event, sessionHook);
+    // Not `||= ensureHook(...)`: once something changed, that would skip
+    // the call, and a fresh vault would get no SessionStart hook.
+    const changed = ensureHook(hooks, event, sessionHook);
+    sessionHooksChanged ||= changed;
   }
   for (const event of SUBAGENT_EVENTS) {
     const changed = trackSubagents ? ensureHook(hooks, event, sessionHook) : removeHook(hooks, event, sessionEventBridge);
