@@ -1,21 +1,40 @@
 import type { WorkspaceLeaf } from "obsidian";
-import { configureBrowserSession, fileKind, isElectronRemoteAvailable, pathBasename, pathDirname } from "terminus-node-bridge";
+import {
+  pathRelative,
+  configureBrowserSession,
+  fileKind,
+  isElectronRemoteAvailable,
+  makeDirRecursive,
+  osTempDir,
+  pathBasename,
+  pathDirname,
+  pathJoin,
+  writeFileBytes,
+} from "terminus-node-bridge";
 import type TerminusPlugin from "../main";
 import { AGENT_BROWSER_PARTITION, AGENT_BROWSER_VIEW_TYPE, AgentBrowserView } from "./AgentBrowserView";
-import { isAllowedBrowserUrl } from "./policy";
+import { isAllowedBrowserUrl, parseServeRequest } from "./policy";
+import { ReviewBook, composeReviewPrompt, siteOfPageKey, type ReviewNote } from "./review";
+import { BrowserSiteRegistry, withoutQuery } from "./sites";
 import { StaticSites } from "./StaticSites";
 
 export type BrowserPlacement = "tab" | "split-right" | "split-down";
 
 export interface OpenBrowserSpec {
   url: string;
-  ownerToken: string;
-  ownerLabel: string;
+  /** The agent's terminal (hook token); absent when the user opened it. */
+  ownerToken?: string;
+  ownerLabel?: string;
   placement: BrowserPlacement;
   /** Opens beside this leaf (the agent's terminal) rather than the active one. */
   near?: WorkspaceLeaf;
   /** A folder served for this view; stopped when the view closes. */
   siteId?: string;
+  /** The registered site it opens (see sites.ts), whose first address is
+   *  never shown because it may carry the site's token. */
+  registeredSiteId?: string;
+  /** False to open it in the background. */
+  focus?: boolean;
 }
 
 /**
@@ -27,6 +46,10 @@ export interface OpenBrowserSpec {
  */
 export class AgentBrowser {
   readonly sites: StaticSites;
+  /** Local sites other plugins offer (see sites.ts and TerminusApi). */
+  readonly registry = new BrowserSiteRegistry();
+  /** Review notes for the Obsidian session (see review.ts). */
+  readonly review = new ReviewBook();
   private sessionPrepared = false;
   private nextId = 1;
 
@@ -48,6 +71,7 @@ export class AgentBrowser {
   unload(): void {
     for (const leaf of this.plugin.app.workspace.getLeavesOfType(AGENT_BROWSER_VIEW_TYPE)) leaf.detach();
     this.sites.clear();
+    this.registry.clear();
     this.plugin.reviewServer.setStaticHandler(null);
   }
 
@@ -97,7 +121,7 @@ export class AgentBrowser {
         : workspace.getLeaf("split", spec.placement === "split-down" ? "horizontal" : "vertical");
     await leaf.setViewState({
       type: AGENT_BROWSER_VIEW_TYPE,
-      active: false,
+      active: spec.focus === true,
       state: { ownerToken: spec.ownerToken, ownerLabel: spec.ownerLabel },
     });
     const view = leaf.view;
@@ -107,14 +131,188 @@ export class AgentBrowser {
     }
     view.publicId = `b${this.nextId++}`;
     if (spec.siteId) view.servedSiteIds.add(spec.siteId);
+    if (spec.registeredSiteId) {
+      view.registeredSiteId = spec.registeredSiteId;
+      view.secretUrl = spec.url;
+    }
     await view.navigate(spec.url);
+    if (spec.focus) await workspace.revealLeaf(leaf);
     return view;
   }
 
-  /** Closes every agent browser: when the user turns the browser or agent
-   *  control off. */
-  closeAll(): void {
-    for (const leaf of this.plugin.app.workspace.getLeavesOfType(AGENT_BROWSER_VIEW_TYPE)) leaf.detach();
+  /**
+   * The address a registered site opens at, from the plugin that offers it.
+   * Throws with the plugin's own message when it can't be opened.
+   */
+  async siteUrl(id: string): Promise<string> {
+    const site = this.registry.get(id);
+    if (!site) throw new Error(`No site "${id}". The plugin that offers it may be off.`);
+    // The plugin's own message, said as the site's: "Build a preview first".
+    const opened = await Promise.resolve()
+      .then(() => site.open())
+      .then(
+        (value): { url: unknown } => ({ url: value }),
+        (err: unknown): { error: string } => ({ error: err instanceof Error ? err.message : String(err) })
+      );
+    if ("error" in opened) throw new Error(`${site.name}: ${opened.error}`);
+    const url = opened.url;
+    if (typeof url !== "string" || !isAllowedBrowserUrl(url) || url === "about:blank") {
+      throw new Error(`${site.name} didn't give an address on this computer to open`);
+    }
+    return url;
+  }
+
+  /** The user opening a page or a registered site themselves: not an
+   *  agent's, so no agent can reach it until the user sends it notes. */
+  async openForUser(target: { url: string } | { siteId: string }, placement: BrowserPlacement = "tab"): Promise<AgentBrowserView> {
+    if ("siteId" in target) {
+      const url = await this.siteUrl(target.siteId);
+      return this.open({ url, registeredSiteId: target.siteId, placement, focus: true });
+    }
+    return this.open({ url: target.url, placement, focus: true });
+  }
+
+  /** Closes the browsers agents opened: when the user turns the browser or
+   *  agent control off. Browsers the user opened stay, and agents lose the
+   *  access to them that review notes gave. */
+  closeAgentBrowsers(): void {
+    for (const view of this.views()) {
+      if (view.ownerToken) view.leaf.detach();
+      else view.sharedWith.clear();
+    }
+  }
+
+  /**
+   * Which page a review note belongs to: the served folder and the path in
+   * it for a prototype, the registered site and path for a plugin's site
+   * (its port and token change between runs), or the address without its
+   * query otherwise.
+   */
+  pageKey(view: AgentBrowserView, url: string): string {
+    const served = this.servedFile(view, url);
+    if (served) return `file:${served.root}/${served.relative}`;
+    if (view.registeredSiteId) {
+      try {
+        return `site:${view.registeredSiteId}:${new URL(url).pathname}`;
+      } catch {
+        // Fall through.
+      }
+    }
+    return withoutQuery(url);
+  }
+
+  /** The file a page was built from, when Terminus can tell: the file
+   *  itself for a served folder, or what the registered site says. */
+  sourceFor(view: AgentBrowserView, url: string): string | null {
+    const served = this.servedFile(view, url);
+    if (served) return pathJoin(served.root, served.relative);
+    if (view.registeredSiteId) {
+      const site = this.registry.get(view.registeredSiteId);
+      try {
+        const source = site?.sourceFor?.(url);
+        if (typeof source === "string" && source) return pathJoin(this.plugin.getVaultBasePath(), source);
+      } catch {
+        // The site doesn't know; the note goes without a file.
+      }
+    }
+    return null;
+  }
+
+  private servedFile(view: AgentBrowserView, url: string): { root: string; relative: string } | null {
+    let path: string;
+    try {
+      path = new URL(url).pathname;
+    } catch {
+      return null;
+    }
+    const request = parseServeRequest(path);
+    if (request.kind !== "file" || !view.servedSiteIds.has(request.siteId)) return null;
+    const site = this.sites.get(request.siteId);
+    if (!site) return null;
+    const relative = request.wantsDirectory ? [...request.segments, "index.html"].join("/") : request.segments.join("/");
+    return { root: site.root, relative };
+  }
+
+  // ---- Sending review notes ----
+
+  /** A terminal's name, for "Waiting on …". */
+  terminalName(token: string | null): string {
+    return (token && this.plugin.findTerminalView(token)?.getDisplayText()) || "the agent";
+  }
+
+  /**
+   * The Claude sessions review notes can go to: the agent that opened the
+   * browser first, then ones it was shared with, then every other running
+   * session, in workspace order.
+   */
+  reviewTargets(view: AgentBrowserView): { token: string; label: string; reason: string }[] {
+    const running = this.plugin.groups
+      .terminals()
+      .filter((terminal) => this.plugin.agentSessionStore.get(terminal.hookToken)?.running);
+    const rank = (token: string): number => (token === view.ownerToken ? 0 : view.sharedWith.has(token) ? 1 : 2);
+    return running
+      .map((terminal) => ({
+        token: terminal.hookToken,
+        label: terminal.getDisplayText(),
+        reason: rank(terminal.hookToken) === 0 ? "Opened this browser" : rank(terminal.hookToken) === 1 ? "Has your earlier notes" : "",
+      }))
+      .sort((a, b) => rank(a.token) - rank(b.token));
+  }
+
+  /** Whether an agent can answer notes in the browser itself. */
+  agentsCanReply(): boolean {
+    return this.plugin.agentControlActive && this.plugin.settings.agentControl.browser && this.available();
+  }
+
+  reviewPrompt(view: AgentBrowserView, notes: ReviewNote[], canReply: boolean): string {
+    const vault = this.plugin.getVaultBasePath();
+    const url = view.currentUrl();
+    const site = url ? siteOfPageKey(this.pageKey(view, url)) : null;
+    const standingKeeps = this.review
+      .all()
+      .filter((note) => note.intent === "keep" && note.status !== "open" && site !== null && siteOfPageKey(note.pageKey) === site);
+    return composeReviewPrompt(notes, {
+      standingKeeps,
+      browserId: canReply ? view.publicId : null,
+      canReply,
+      showPath: (path) => {
+        const relative = pathRelative(vault, path);
+        return relative && !relative.startsWith("..") ? relative : path;
+      },
+    });
+  }
+
+  /**
+   * Sends open notes to a Claude session, queued so they arrive between its
+   * turns, and lets that session reach this browser to check its work and
+   * answer them. Returns what happened, for a notice.
+   */
+  sendReview(view: AgentBrowserView, notes: ReviewNote[], token: string): string {
+    const open = notes.filter((note) => note.status === "open");
+    if (open.length === 0) throw new Error("There are no new notes to send");
+    const canReply = this.agentsCanReply();
+    const name = this.terminalName(token);
+    if (!this.plugin.queueGuidance(token, this.reviewPrompt(view, open, canReply))) {
+      throw new Error(`Couldn't send to ${name}: its Claude session isn't running`);
+    }
+    if (canReply) view.sharedWith.add(token);
+    view.refreshStrip();
+    this.review.markSent(
+      open.map((note) => note.id),
+      token
+    );
+    const count = open.length === 1 ? "1 note" : `${open.length} notes`;
+    const busy = this.plugin.agentSessionStore.get(token)?.status === "working";
+    return busy ? `${count} queued for ${name}; it gets them when its turn ends` : `Sent ${count} to ${name}`;
+  }
+
+  /** Saves a picked element's image where the agent can Read it. */
+  async saveReviewImage(noteKey: string, png: Uint8Array): Promise<string> {
+    const folder = pathJoin(osTempDir(), "terminus-browser");
+    await makeDirRecursive(folder);
+    const path = pathJoin(folder, `review-${noteKey}-${Date.now()}.png`);
+    await writeFileBytes(path, png);
+    return path;
   }
 
   /** The colour of the agent's group, as a CSS value, or null when it has none. */
@@ -132,7 +330,13 @@ export class AgentBrowser {
 
   /** A served address as the folder's name and the path below it, rather
    *  than the random id it's served at. */
-  displayUrl(url: string): string {
+  displayUrl(url: string, view?: AgentBrowserView): string {
+    // A registered site's first address may carry its token.
+    if (view?.registeredSiteId) {
+      const site = this.registry.get(view.registeredSiteId);
+      const shown = withoutQuery(url);
+      return site ? `${site.name} · ${safePath(shown)}` : shown;
+    }
     for (const view of this.views()) {
       for (const id of view.servedSiteIds) {
         const site = this.sites.get(id);
@@ -141,6 +345,14 @@ export class AgentBrowser {
         }
       }
     }
+    return url;
+  }
+}
+
+function safePath(url: string): string {
+  try {
+    return safeDecode(new URL(url).pathname);
+  } catch {
     return url;
   }
 }

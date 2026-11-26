@@ -14,6 +14,8 @@ import type TerminusPlugin from "../main";
 import type { AgentBrowserView } from "../browser/AgentBrowserView";
 import { DriverError } from "../browser/BrowserDriver";
 import { isAllowedBrowserUrl, isServableRelativePath, relativeStaysInside } from "../browser/policy";
+import { INTENT_LABELS, STATUS_LABELS, elementLabel, siteOfPageKey, type ReviewNote } from "../browser/review";
+import { withoutQuery } from "../browser/sites";
 import type { TerminalView } from "../views/TerminalView";
 import { ApiError, RateLimiter, optionalBool, optionalChoice, optionalInt, optionalString, requireString, type Params } from "./policy";
 
@@ -128,6 +130,14 @@ export class BrowserApi {
         return this.consoleMessages(caller, params);
       case "browser.close":
         return this.close(caller, params);
+      case "browser.sites":
+        return {
+          sites: this.plugin.agentBrowser.registry.list().map((site) => ({ id: site.id, name: site.name, description: site.description ?? null })),
+        };
+      case "browser.notes":
+        return this.notes(caller, params);
+      case "browser.reply":
+        return this.reply(caller, params);
       default:
         throw new ApiError("unknown_method", `Unknown method "${method}"`, 404);
     }
@@ -151,6 +161,7 @@ export class BrowserApi {
       view = await this.plugin.agentBrowser.open({
         url: target.url,
         siteId: target.siteId,
+        registeredSiteId: target.registeredSiteId,
         ownerToken: caller.hookToken,
         ownerLabel: caller.getDisplayText(),
         placement: optionalChoice(params, "placement", PLACEMENTS, "split-right"),
@@ -170,7 +181,15 @@ export class BrowserApi {
     const view = this.view(caller, params);
     this.takeBrowserAction(caller);
     const target = await this.target(caller, params);
-    if (target.siteId) view.servedSiteIds.add(target.siteId);
+    if (target.siteId) {
+      view.servedSiteIds.add(target.siteId);
+      view.registeredSiteId = null;
+      view.secretUrl = null;
+    }
+    if (target.registeredSiteId) {
+      view.registeredSiteId = target.registeredSiteId;
+      view.secretUrl = target.url;
+    }
     try {
       await view.navigate(target.url);
     } catch (err) {
@@ -254,6 +273,53 @@ export class BrowserApi {
     return { id: view.publicId, messages };
   }
 
+  /** The review notes the user left on this browser's site. */
+  private notes(caller: TerminalView, params: Params): unknown {
+    const view = this.view(caller, params);
+    const status = optionalChoice(params, "status", ["all", "open", "sent", "answered", "fixed", "resolved"] as const, "all");
+    const notes = this.notesFor(view).filter((note) => status === "all" || note.status === status);
+    return { id: view.publicId, notes: notes.map((note) => this.describeNote(note)) };
+  }
+
+  /** The agent's answer to one note: shown to the user beside the page. */
+  private reply(caller: TerminalView, params: Params): unknown {
+    const view = this.view(caller, params);
+    const noteId = requireString(params, "note", 20);
+    const text = requireString(params, "text", 4000);
+    const note = this.notesFor(view).find((n) => n.id === noteId);
+    if (!note) throw new ApiError("not_found", `No note ${noteId} on ${view.publicId}. "browser notes ${view.publicId}" lists them.`, 404);
+    if (note.status === "resolved") throw new ApiError("invalid_params", `${noteId} is already done`, 409);
+    if (note.intent === "keep") {
+      throw new ApiError("invalid_params", `${noteId} is a Keep: leave that element as it is. It needs no answer.`, 409);
+    }
+    this.takeBrowserAction(caller);
+    const updated = this.plugin.agentBrowser.review.reply(noteId, text, caller.getDisplayText(), optionalBool(params, "fixed"));
+    return { id: view.publicId, note: this.describeNote(updated) };
+  }
+
+  private notesFor(view: AgentBrowserView): ReviewNote[] {
+    const url = view.currentUrl();
+    if (!url) return [];
+    const site = siteOfPageKey(this.plugin.agentBrowser.pageKey(view, url));
+    return this.plugin.agentBrowser.review.all().filter((note) => siteOfPageKey(note.pageKey) === site);
+  }
+
+  private describeNote(note: ReviewNote): Record<string, unknown> {
+    return {
+      note: note.id,
+      status: note.status,
+      status_text: STATUS_LABELS[note.status],
+      intent: INTENT_LABELS[note.intent],
+      page: note.pageUrl,
+      file: note.sourcePath,
+      element: elementLabel(note.element),
+      selector: note.element.selector,
+      screenshot: note.screenshotPath,
+      changed: note.drift ? note.drift.changes : undefined,
+      thread: note.thread.map((entry) => ({ by: entry.by === "user" ? "user" : entry.who || "agent", text: entry.text })),
+    };
+  }
+
   private close(caller: TerminalView, params: Params): unknown {
     const view = this.view(caller, params);
     if (view.ownerToken !== caller.hookToken) {
@@ -265,10 +331,13 @@ export class BrowserApi {
 
   // ---- Shared ----
 
-  /** Browsers opened by agents in the caller's group. */
+  /** Browsers opened by agents in the caller's group, and ones the user
+   *  shared with them by sending them review notes. */
   private reachable(caller: TerminalView): AgentBrowserView[] {
     const tokens = new Set(this.host.scope(caller).map((view) => view.hookToken));
-    return this.plugin.agentBrowser.views().filter((view) => view.ownerToken !== null && tokens.has(view.ownerToken));
+    return this.plugin.agentBrowser
+      .views()
+      .filter((view) => (view.ownerToken !== null && tokens.has(view.ownerToken)) || [...view.sharedWith].some((token) => tokens.has(token)));
   }
 
   private view(caller: TerminalView, params: Params): AgentBrowserView {
@@ -287,13 +356,18 @@ export class BrowserApi {
       // Not attached yet.
     }
     const owner = view.ownerToken ? this.plugin.findTerminalView(view.ownerToken) : null;
+    // A plugin site's address may still carry its token: never handed out.
+    if (view.registeredSiteId) url = withoutQuery(url);
+    const notes = this.notesFor(view);
     return {
       id: view.publicId,
       url,
-      shown_as: this.plugin.agentBrowser.displayUrl(url),
+      shown_as: this.plugin.agentBrowser.displayUrl(url, view),
+      site: view.registeredSiteId,
+      review_notes: notes.length ? notes.filter((n) => n.status !== "resolved").length : undefined,
       title,
       visible: view.isShown(),
-      opened_by: owner?.publicId ?? null,
+      opened_by: owner?.publicId ?? (view.ownerToken ? null : "user"),
     };
   }
 
@@ -302,10 +376,24 @@ export class BrowserApi {
    * file or folder in the vault or the caller's working folder, served over
    * http). A relative path is taken from the caller's working folder.
    */
-  private async target(caller: TerminalView, params: Params): Promise<{ url: string; siteId?: string }> {
+  private async target(caller: TerminalView, params: Params): Promise<{ url: string; siteId?: string; registeredSiteId?: string }> {
     const url = optionalString(params, "url", 4000);
     const path = optionalString(params, "path", 2000);
-    if ((url === undefined) === (path === undefined)) throw new ApiError("invalid_params", 'Give either "url" or "path"');
+    const site = optionalString(params, "site", 80);
+    if ([url, path, site].filter((value) => value !== undefined).length !== 1) {
+      throw new ApiError("invalid_params", 'Give one of "url", "path" or "site"');
+    }
+    if (site !== undefined) {
+      if (!this.plugin.agentBrowser.registry.get(site)) {
+        const known = this.plugin.agentBrowser.registry.list().map((s) => s.id);
+        throw new ApiError("not_found", `No site "${site}". ${known.length ? `Sites: ${known.join(", ")}` : "No plugin offers a site right now."}`, 404);
+      }
+      try {
+        return { url: await this.plugin.agentBrowser.siteUrl(site), registeredSiteId: site };
+      } catch (err) {
+        throw new ApiError("unavailable", err instanceof Error ? err.message : String(err), 409);
+      }
+    }
     if (url !== undefined) {
       if (!isAllowedBrowserUrl(url)) {
         throw new ApiError("forbidden", `The agent browser only opens pages on this computer (localhost, 127.0.0.1), not ${url}`, 403);

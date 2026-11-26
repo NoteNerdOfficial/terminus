@@ -99,7 +99,7 @@ const context = await esbuild.context({
   define: { TERMINUS_MULTI_AGENT_AVAILABLE: String(multiAgentAvailable) },
   // Small images shown in the plugin (src/assets), bundled so they work
   // offline and Terminus fetches nothing to show them.
-  loader: { ".gif": "dataurl" },
+  loader: { ".gif": "dataurl", ".jpg": "dataurl" },
   plugins: [
     {
       name: "chmod-resources",

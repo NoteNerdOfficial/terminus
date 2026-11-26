@@ -173,6 +173,8 @@ export interface TerminusSettings {
   hasSeenAgentFeaturesNews: boolean;
   /** The agent browser's "What's new" (1.0.48) has been shown, or skipped on a fresh install. */
   hasSeenBrowserNews: boolean;
+  /** The review-mode "What's new" has been shown (or skipped on a new install). */
+  hasSeenReviewNews: boolean;
   /** Multi-agent's terminal groups (see GroupStore). Kept while Classic is
    *  selected, like the per-mode settings. */
   groups: GroupsData;
@@ -239,6 +241,7 @@ export const DEFAULT_SETTINGS: TerminusSettings = {
   hasSeenMultiAgentDefault: false,
   hasSeenAgentFeaturesNews: false,
   hasSeenBrowserNews: false,
+  hasSeenReviewNews: false,
   groups: DEFAULT_GROUPS_DATA,
 };
 

@@ -4131,10 +4131,792 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
   flex: none;
 }
 
+.terminus-agent-browser-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .terminus-agent-browser-stage {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
+}
+
+.terminus-agent-browser-bar .clickable-icon {
+  position: relative;
+  flex: none;
+}
+
+.terminus-agent-browser-bar .clickable-icon.is-active {
+  color: var(--terminus-agent-accent);
+  background: var(--background-modifier-hover);
+}
+
+/* The notes button's count, and a dot when an agent has answered. */
+.terminus-agent-browser-notes[data-count]:not([data-count=""])::after {
+  content: attr(data-count);
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.terminus-agent-browser-notes.has-answers::after {
+  background: var(--terminus-agent-accent);
+  color: var(--text-on-accent);
+}
+
+.terminus-browser-muted {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+/* The companion belongs to an agent: none in a browser only the user has. */
+.terminus-agent-browser:not(.has-agent) .terminus-agent-cursor {
+  display: none;
+}
+
+/* Review mode (browser/ReviewLayer.ts). Review is the user's tool, so one
+   accent carries it: Obsidian's own, never the agent's group colour (a red
+   group would make every new comment look like an error). The agent's
+   colour stays on what is the agent's: the strip, its cursor, its replies. Green means "an agent answered, your
+   turn"; orange means "a kept element changed". Nothing else is coloured.
+   The layer over the page takes no pointer events, so the page stays
+   usable; only pins and the composer do. */
+.terminus-agent-browser {
+  --terminus-review-accent: var(--interactive-accent);
+}
+
+.terminus-review-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* While picking: catches the pointer over the page (ReviewLayer's
+   bindPickSurface), so a click picks rather than reaches the page. */
+.terminus-review-pick-surface {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.terminus-review-color-probe {
+  color: var(--terminus-review-accent);
+  display: none;
+}
+
+.terminus-review-outline {
+  position: absolute;
+  border: 2px solid var(--terminus-review-accent);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--terminus-review-accent) 10%, transparent);
+  transition: left 120ms ease-out, top 120ms ease-out, width 120ms ease-out, height 120ms ease-out;
+}
+
+/* The toolbar's Review toggle: labelled, because it changes what a click on
+   the page does. Filled with the accent while picking. */
+.terminus-agent-browser-bar .terminus-review-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-1);
+  flex: none;
+  height: 24px;
+  padding: 0 var(--size-4-2);
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border);
+}
+
+.terminus-agent-browser-bar .terminus-review-toggle:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.terminus-agent-browser-bar .terminus-review-toggle.is-active {
+  background: var(--terminus-review-accent);
+  border-color: var(--terminus-review-accent);
+  color: var(--text-on-accent);
+}
+
+/* Every icon beside text in review mode (reviewIcon in ReviewLayer.ts): a
+   flex box with the SVG as a block, so it centres on the label instead of
+   sitting on its baseline. 14px by default; smaller where noted. */
+.terminus-review-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  line-height: 0;
+}
+
+.terminus-review-icon svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+/* While picking: a bar between the toolbar and the page, never over it. */
+.terminus-review-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  flex: none;
+  padding: var(--size-4-1) var(--size-4-2);
+  background: color-mix(in srgb, var(--terminus-review-accent) 12%, var(--background-primary));
+  border-bottom: 1px solid color-mix(in srgb, var(--terminus-review-accent) 35%, transparent);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-normal);
+}
+
+.terminus-review-bar-icon {
+  color: var(--terminus-review-accent);
+}
+
+.terminus-review-bar-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.terminus-review-bar .terminus-review-bar-done {
+  height: 22px;
+  padding: 0 var(--size-4-3);
+  font-size: var(--font-ui-smaller);
+}
+
+/* Pins: a number in a tag whose point sits on the element's corner. */
+.terminus-review-layer .terminus-review-pin {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  pointer-events: auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px 11px 11px 3px;
+  border: 2px solid var(--background-primary);
+  background: var(--terminus-review-accent);
+  color: var(--text-on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  transition: left 120ms ease-out, top 120ms ease-out, transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.terminus-review-layer .terminus-review-pin:hover,
+.terminus-review-layer .terminus-review-pin.is-focused {
+  transform: scale(1.15);
+}
+
+.terminus-review-layer .terminus-review-pin:focus-visible {
+  outline: 2px solid var(--terminus-review-accent);
+  outline-offset: 2px;
+}
+
+/* Where the pin will land, while its comment is being written. */
+.terminus-review-layer .terminus-review-pin.is-ghost {
+  width: 22px;
+  min-width: 22px;
+  padding: 0;
+  justify-content: center;
+  pointer-events: none;
+  cursor: default;
+  animation: terminus-review-drop 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.terminus-review-pin.is-ghost::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-on-accent);
+}
+
+@keyframes terminus-review-drop {
+  from { transform: translateY(-6px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.terminus-review-layer .terminus-review-pin[data-status="sent"] {
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  border-color: var(--background-modifier-border);
+}
+
+/* An answer is waiting: green, with a short pulse to draw the eye, then still. */
+.terminus-review-layer .terminus-review-pin[data-status="fixed"],
+.terminus-review-layer .terminus-review-pin[data-status="answered"] {
+  background: var(--color-green);
+  animation: terminus-review-pulse 1.6s ease-out 3;
+}
+
+@keyframes terminus-review-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-green) 55%, transparent); }
+  100% { box-shadow: 0 0 0 10px transparent; }
+}
+
+.terminus-review-layer .terminus-review-pin[data-status="resolved"] {
+  opacity: 0.5;
+  background: var(--text-faint);
+}
+
+/* A Keep: a lock in a quiet colour, protected rather than to do. */
+.terminus-review-layer .terminus-review-pin[data-intent="keep"] {
+  background: var(--background-primary);
+  color: var(--text-muted);
+  border-color: var(--background-modifier-border);
+  animation: none;
+  opacity: 1;
+}
+
+.terminus-review-layer .terminus-review-pin[data-intent="keep"].has-drift {
+  background: var(--color-orange);
+  color: var(--text-on-accent);
+  border-color: var(--background-primary);
+}
+
+.terminus-review-pin-icon svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* The composer, beside the picked element. */
+.terminus-review-composer {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  padding: var(--size-4-3);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14), 0 12px 32px rgba(0, 0, 0, 0.16);
+}
+
+.terminus-review-element {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminus-review-composer .terminus-review-element {
+  color: var(--text-muted);
+}
+
+/* The three types: a pill-shaped segmented control. An accent-filled pill
+   marks the chosen one and slides between them. */
+.terminus-review-intents {
+  --terminus-review-thumb: 0;
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+}
+
+.terminus-review-intent-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / 3);
+  border-radius: 999px;
+  background: var(--terminus-review-accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 2px 6px color-mix(in srgb, var(--terminus-review-accent) 30%, transparent);
+  transform: translateX(calc(var(--terminus-review-thumb) * 100%));
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.terminus-review-intents .terminus-review-intent {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 var(--size-4-2);
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium);
+  transition: color 150ms ease-out;
+}
+
+.terminus-review-intents .terminus-review-intent:hover {
+  background: transparent;
+  color: var(--text-normal);
+}
+
+.terminus-review-intents .terminus-review-intent:focus-visible {
+  outline: 2px solid var(--terminus-review-accent);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+.terminus-review-intent .terminus-review-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.terminus-review-intents .terminus-review-intent[aria-checked="true"],
+.terminus-review-intents .terminus-review-intent[aria-checked="true"]:hover {
+  color: var(--text-on-accent);
+}
+
+/* What the chosen type does, in a line, so it's learnt without hovering. */
+.terminus-review-intent-meaning {
+  margin-top: calc(var(--size-4-1) * -1);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+}
+
+.terminus-review-text {
+  width: 100%;
+  resize: vertical;
+  min-height: 60px;
+  font-size: var(--font-ui-small);
+  line-height: 1.45;
+}
+
+.terminus-review-composer-actions,
+.terminus-review-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+}
+
+.terminus-review-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: auto;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-review-shortcut kbd {
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.terminus-review-shortcut span {
+  margin-left: 3px;
+}
+
+/* The tray beside the page. */
+.terminus-review-tray {
+  display: flex;
+  flex-direction: column;
+  width: clamp(240px, 34%, 320px);
+  flex: none;
+  min-height: 0;
+  border-left: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-small);
+}
+
+.terminus-review-tray-head,
+.terminus-review-tray-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2) var(--size-4-3);
+  flex: none;
+}
+
+.terminus-review-tray-head {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.terminus-review-tray-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  flex: 1;
+  font-weight: var(--font-semibold);
+}
+
+.terminus-review-tray-count {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-normal);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
+
+.terminus-review-tray-foot {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.terminus-review-tray-foot .mod-cta {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--size-4-2);
+}
+
+.terminus-review-tray-foot .mod-cta:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+}
+
+.terminus-review-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--size-4-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+}
+
+.terminus-review-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--size-4-3);
+  padding: var(--size-4-3) var(--size-4-2);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.terminus-review-empty-title {
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+}
+
+.terminus-review-kinds {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.terminus-review-kinds li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--size-4-2);
+}
+
+.terminus-review-kinds strong {
+  color: var(--text-normal);
+  font-weight: var(--font-medium);
+}
+
+/* Beside a wrapping line: centred on the first line, not the paragraph. */
+.terminus-review-kind-icon {
+  height: 1.45em;
+  color: var(--text-faint);
+}
+
+.terminus-review-empty .mod-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-4-2);
+}
+
+/* A comment. */
+.terminus-review-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  padding: var(--size-4-2) var(--size-4-3) var(--size-4-3);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+
+.terminus-review-card:hover {
+  border-color: var(--background-modifier-border-hover);
+}
+
+.terminus-review-card.is-focused {
+  border-color: var(--terminus-review-accent);
+  box-shadow: 0 0 0 1px var(--terminus-review-accent);
+}
+
+.terminus-review-card[data-status="fixed"],
+.terminus-review-card[data-status="answered"] {
+  border-color: color-mix(in srgb, var(--color-green) 60%, var(--background-modifier-border));
+}
+
+.terminus-review-card.has-drift {
+  border-color: color-mix(in srgb, var(--color-orange) 70%, var(--background-modifier-border));
+}
+
+.terminus-review-card[data-status="resolved"] {
+  opacity: 0.6;
+}
+
+.terminus-review-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  min-height: 24px;
+}
+
+.terminus-review-badge {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: var(--terminus-review-accent);
+  color: var(--text-on-accent);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  text-align: center;
+}
+
+.terminus-review-card[data-status="sent"] .terminus-review-badge {
+  background: var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+.terminus-review-card[data-status="fixed"] .terminus-review-badge,
+.terminus-review-card[data-status="answered"] .terminus-review-badge {
+  background: var(--color-green);
+}
+
+.terminus-review-card[data-intent="keep"] .terminus-review-badge {
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+}
+
+.terminus-review-card.has-drift .terminus-review-badge {
+  background: var(--color-orange);
+  color: var(--text-on-accent);
+}
+
+.terminus-review-card-intent {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-review-card-intent .terminus-review-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Status as a small dot and a word, pushed to the right. */
+.terminus-review-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.terminus-review-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.terminus-review-card[data-status="open"] .terminus-review-status::before {
+  background: var(--terminus-review-accent);
+}
+
+.terminus-review-card[data-status="fixed"] .terminus-review-status,
+.terminus-review-card[data-status="answered"] .terminus-review-status {
+  color: var(--color-green);
+  font-weight: var(--font-semibold);
+}
+
+.terminus-review-card[data-status="fixed"] .terminus-review-status::before,
+.terminus-review-card[data-status="answered"] .terminus-review-status::before {
+  background: var(--color-green);
+}
+
+.terminus-review-card.has-drift .terminus-review-status {
+  color: var(--color-orange);
+  font-weight: var(--font-semibold);
+}
+
+.terminus-review-card.has-drift .terminus-review-status::before {
+  background: var(--color-orange);
+}
+
+/* Show-on-page: quiet until the card is hovered or it has focus. */
+.terminus-review-card .terminus-review-locate {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.terminus-review-card:hover .terminus-review-locate,
+.terminus-review-card.is-focused .terminus-review-locate,
+.terminus-review-card .terminus-review-locate:focus-visible {
+  opacity: 1;
+}
+
+.terminus-review-comment {
+  color: var(--text-normal);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.terminus-review-missing {
+  display: none;
+  color: var(--text-warning);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-review-card.is-missing .terminus-review-missing {
+  display: block;
+}
+
+/* Replies: set in from the comment on a tinted ground, each with who said it. */
+.terminus-review-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-1);
+  margin-top: var(--size-4-1);
+}
+
+.terminus-review-entry {
+  padding: var(--size-4-1) var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+}
+
+.terminus-review-entry.is-agent {
+  background: color-mix(in srgb, var(--terminus-agent-accent) 9%, var(--background-secondary));
+}
+
+.terminus-review-card[data-status="fixed"] .terminus-review-entry.is-agent:last-child,
+.terminus-review-card[data-status="answered"] .terminus-review-entry.is-agent:last-child {
+  background: color-mix(in srgb, var(--color-green) 10%, var(--background-secondary));
+}
+
+.terminus-review-who {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+}
+
+.terminus-review-who-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.terminus-review-entry-text {
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.terminus-review-card-actions {
+  margin-top: var(--size-4-1);
+}
+
+.terminus-review-card-actions button {
+  height: 26px;
+  padding: 0 var(--size-4-3);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-review-waiting {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+/* A kept element changed. */
+.terminus-review-drift {
+  margin-top: var(--size-4-1);
+  padding: var(--size-4-1) var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--color-orange) 12%, var(--background-primary));
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-review-drift-title {
+  font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.terminus-review-drift ul {
+  margin: 2px 0 0;
+  padding-left: var(--size-4-4);
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.terminus-review-edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-1);
+}
+
+.terminus-review-elsewhere {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--size-4-2) var(--size-4-3);
+  border-top: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+  flex: none;
 }
 
 .terminus-agent-browser-page {
@@ -4554,6 +5336,16 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .terminus-review-layer .terminus-review-pin,
+  .terminus-review-layer .terminus-review-pin.is-ghost,
+  .terminus-review-intent-thumb,
+  .terminus-review-outline,
+  .terminus-review-card,
+  .terminus-review-card .terminus-review-locate {
+    animation: none !important;
+    transition: none !important;
+  }
+
   .terminus-agent-cursor,
   .terminus-agent-cursor-buddy,
   .terminus-agent-browser-edge {

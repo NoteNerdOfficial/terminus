@@ -11,14 +11,15 @@ export function skillMarkdown(browser: boolean): string {
   return SKILL_MD.replace("{{DESCRIPTION_BROWSER}}", browser ? DESCRIPTION_BROWSER : "").replace("{{BROWSER}}\n", browser ? BROWSER_SECTION : "");
 }
 
-const DESCRIPTION_BROWSER = " Also open a prototype or a local dev server in a browser beside you and use it like a person would (read it, click, type, screenshot) -- use it to check UI work you've built.";
+const DESCRIPTION_BROWSER = " Also open a prototype or a local dev server in a browser beside you and use it like a person would (read it, click, type, screenshot) -- use it to check UI work you've built, and to answer the review notes the user leaves on a page.";
 
 const BROWSER_SECTION = `## Browser
 
 A browser view beside you, for pages on this computer only: a prototype file from the vault or your working folder, or a local dev server.
 
 \`\`\`bash
-"$TERMINUS_CLI" browser open --path prototype/index.html      # or --url http://localhost:5173; --placement tab|split-right|split-down
+"$TERMINUS_CLI" browser open --path prototype/index.html      # or --url http://localhost:5173, or --site ID; --placement tab|split-right|split-down
+"$TERMINUS_CLI" browser sites                                  # sites other plugins offer (a preview, say), to open with --site
 "$TERMINUS_CLI" browser snapshot b1                            # the page as text, with a ref for each element
 "$TERMINUS_CLI" browser click b1 e12                           # --double; --snapshot prints a fresh snapshot after
 "$TERMINUS_CLI" browser type b1 e5 "ada@example.com" --submit  # replaces the text; --append adds to it
@@ -32,7 +33,20 @@ A browser view beside you, for pages on this computer only: a prototype file fro
 "$TERMINUS_CLI" browser close b1
 \`\`\`
 
+### Review notes
+
+The user can pick elements in a browser and leave notes on them, then send them to you. The message lists each note (\`n3\`) with its element, selector, file and a screenshot path. Work through them, check each change in that same browser, then answer every note where the user is looking:
+
+\`\`\`bash
+"$TERMINUS_CLI" browser notes b1                                 # --status open|sent|answered|fixed|resolved
+"$TERMINUS_CLI" browser reply b1 n3 "Moved the button below the field" --fixed   # a change for the user to check
+"$TERMINUS_CLI" browser reply b1 n4 "It's 16px because the grid uses 8px steps"  # an answer, nothing changed
+\`\`\`
+
+Reply to every note you were sent, \`--fixed\` only when you changed something. Reload the browser before checking a change to a static file.
+
 - Snapshot before acting, and again after anything that changes the page: refs (\`e12\`) only last until the page changes, and a stale one is refused (\`stale_ref\`).
+- A plugin's site (\`--site\`) may need a token you can't see; Terminus fetches it for you. Don't try to open its port with \`--url\` first. If it fails, the error says what the user must do (build a preview, say).
 - Opening a \`--path\` serves the file's whole folder over http, so its relative links, scripts and \`fetch\` work. Files under a dot-folder aren't served.
 - \`screenshot\` fails with \`hidden\` while the browser is behind another tab. Don't retry; the snapshot still works, or ask the user to bring it into view.
 - Outside sites don't open, not even by a link. Check what a page does with \`snapshot\` and \`console\` rather than \`screenshot\` alone: it's cheaper and more exact.

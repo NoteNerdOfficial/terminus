@@ -67,11 +67,21 @@ def add_browser_parser(sub):
         group = p.add_mutually_exclusive_group(required=True)
         group.add_argument("--path", help="a file or folder in the vault or your working folder")
         group.add_argument("--url", help="a page on this computer, e.g. http://localhost:5173")
+        group.add_argument("--site", help="a site a plugin offers (see: browser sites)")
 
     p = bsub.add_parser("open", help="open a browser beside you")
     target(p)
     p.add_argument("--placement", choices=["tab", "split-right", "split-down"])
     bsub.add_parser("list", help="browsers in your group")
+    bsub.add_parser("sites", help="sites plugins offer, to open with --site")
+    p = bsub.add_parser("notes", help="the user's review notes on a browser's pages")
+    p.add_argument("id")
+    p.add_argument("--status", choices=["all", "open", "sent", "answered", "fixed", "resolved"])
+    p = bsub.add_parser("reply", help="answer a review note, shown to the user beside the page")
+    p.add_argument("id")
+    p.add_argument("note")
+    p.add_argument("text")
+    p.add_argument("--fixed", action="store_true", help="you changed something for the user to check")
     p = bsub.add_parser("navigate", help="open another page")
     p.add_argument("id")
     target(p)
@@ -129,11 +139,37 @@ def run_browser(args):
     a = args.browser_command
     flags = {"snapshot": True} if getattr(args, "snapshot", False) else {}
     if a == "open":
-        result = call("browser.open", {"path": args.path, "url": args.url, "placement": args.placement})
+        result = call("browser.open", {"path": args.path, "url": args.url, "site": args.site, "placement": args.placement})
     elif a == "list":
         result = call("browser.list", {})
+    elif a == "sites":
+        result = call("browser.sites", {})
+        sites = result.get("sites") or []
+        if not sites:
+            sys.stdout.write("(no plugin offers a site right now)\n")
+        for s in sites:
+            sys.stdout.write("%s  %s%s\n" % (s["id"], s["name"], (" -- " + s["description"]) if s.get("description") else ""))
+        return
+    elif a == "notes":
+        result = call("browser.notes", {"id": args.id, "status": args.status})
+        notes = result.get("notes") or []
+        if not notes:
+            sys.stdout.write("(no review notes)\n")
+        for n in notes:
+            sys.stdout.write("%s [%s] %s: %s\n" % (n["note"], n["status"], n["intent"], n["element"]))
+            sys.stdout.write("   page: %s\n" % n["page"])
+            if n.get("file"):
+                sys.stdout.write("   file: %s\n" % n["file"])
+            sys.stdout.write("   selector: %s\n" % n["selector"])
+            if n.get("screenshot"):
+                sys.stdout.write("   screenshot: %s\n" % n["screenshot"])
+            for entry in n.get("thread") or []:
+                sys.stdout.write("   %s: %s\n" % (entry["by"], entry["text"].replace("\n", "\n      ")))
+        return
+    elif a == "reply":
+        result = call("browser.reply", {"id": args.id, "note": args.note, "text": args.text, "fixed": args.fixed or None})
     elif a == "navigate":
-        result = call("browser.navigate", {"id": args.id, "path": args.path, "url": args.url})
+        result = call("browser.navigate", {"id": args.id, "path": args.path, "url": args.url, "site": args.site})
     elif a in ("back", "reload"):
         result = call("browser." + a, dict({"id": args.id}, **flags))
     elif a == "snapshot":

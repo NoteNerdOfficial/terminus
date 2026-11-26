@@ -46,6 +46,8 @@ import { Notifier } from "./notify/Notifier";
 import { AgentApi } from "./agentApi/AgentApi";
 import { provisionSkill } from "./agentApi/skill";
 import { AgentBrowser } from "./browser/AgentBrowser";
+import { WhatsNewReviewModal } from "./modals/WhatsNewReviewModal";
+import { OpenInBrowserModal, TERMINUS_API_READY_EVENT, createTerminusApi, type TerminusApi } from "./browser/publicApi";
 import {
   DEFAULT_SETTINGS,
   Experience,
@@ -75,6 +77,8 @@ export default class TerminusPlugin extends Plugin {
   readonly agentApi = new AgentApi(this);
   /** Browser views agents can drive, and the folders served to them (browser/). */
   readonly agentBrowser = new AgentBrowser(this);
+  /** For other plugins: `app.plugins.getPlugin("terminus")?.api` (see browser/publicApi.ts). */
+  readonly api: TerminusApi = createTerminusApi(this);
   /** Per-session notes in the vault, a section per turn. Off by default;
    *  see state/SessionLog.ts. */
   readonly sessionLog = new SessionLog(this);
@@ -314,6 +318,16 @@ export default class TerminusPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "open-in-browser",
+      name: "Open a local page in the browser",
+      checkCallback: (checking) => {
+        if (!this.agentBrowser.available()) return false;
+        if (!checking) new OpenInBrowserModal(this.app, this).open();
+        return true;
+      },
+    });
+
+    this.addCommand({
       id: "rescue-closed-terminal",
       name: "Rescue closed terminal",
       checkCallback: (checking) => {
@@ -330,6 +344,8 @@ export default class TerminusPlugin extends Plugin {
     // revealed reactively once Claude's first change lands) if the user
     // goes looking for it.
     this.app.workspace.onLayoutReady(() => {
+      // Plugins that loaded before Terminus register their sites now.
+      this.app.workspace.trigger(TERMINUS_API_READY_EVENT, this.api);
       void this.revealReviewView();
       void this.showWelcomeIfFirstRun().then((showedWelcome) => {
         // The welcome already says Multi-agent is the default, so an install
@@ -337,8 +353,10 @@ export default class TerminusPlugin extends Plugin {
         if (this.defaultNoticePending && !showedWelcome) this.announceMultiAgentDefault();
         // Never on top of another first-run popup: it waits for a later load.
         const agentNewsPending = !this.settings.hasSeenAgentFeaturesNews;
+        const browserNewsPending = !this.settings.hasSeenBrowserNews;
         void this.announceAgentFeatures(showedWelcome || this.defaultNoticePending);
         void this.announceBrowserFeature(showedWelcome || this.defaultNoticePending || agentNewsPending);
+        void this.announceReviewFeature(showedWelcome || this.defaultNoticePending || agentNewsPending || browserNewsPending);
       });
       if (this.experience === "multi-agent") void this.startMultiAgentViews();
       // Notes from a run that was killed rather than closed still say they
@@ -464,6 +482,30 @@ export default class TerminusPlugin extends Plugin {
       const multiAgent = this.experience === "multi-agent";
       void WhatsNewBrowserModal.ask(this.app, multiAgent).then((choice) => {
         if (choice === "settings") this.openSettingsAt(multiAgent ? "Agent control" : "Experience");
+      });
+    };
+    window.setTimeout(show, 3000);
+  }
+
+  /** Review mode's "What's new", once per install that had Terminus before
+   *  it; a new install just marks it seen. Waits for a later load rather
+   *  than open on top of another first-run popup. */
+  private async announceReviewFeature(deferred: boolean): Promise<void> {
+    if (this.settings.hasSeenReviewNews) return;
+    if (!this.freshInstall && deferred) return;
+    this.settings.hasSeenReviewNews = true;
+    await this.saveSettings();
+    if (this.freshInstall || !this.agentBrowser.available()) return;
+    // As in announceBrowserFeature: not while the settings window has focus.
+    let waited = 0;
+    const show = (): void => {
+      if (this.isUnloading) return;
+      if (activeDocument !== document && waited++ < 600) {
+        window.setTimeout(show, 1000);
+        return;
+      }
+      void WhatsNewReviewModal.ask(this.app, this.agentBrowser.agentsCanReply()).then((choice) => {
+        if (choice === "open") new OpenInBrowserModal(this.app, this).open();
       });
     };
     window.setTimeout(show, 3000);
@@ -630,7 +672,7 @@ export default class TerminusPlugin extends Plugin {
   async setAgentControl(enabled: boolean): Promise<void> {
     this.settings.agentControl.enabled = enabled;
     await this.saveSettings();
-    if (!enabled) this.agentBrowser.closeAll();
+    if (!enabled) this.agentBrowser.closeAgentBrowsers();
     await this.provisionAgentSkill();
   }
 
@@ -638,7 +680,7 @@ export default class TerminusPlugin extends Plugin {
   async setAgentBrowser(enabled: boolean): Promise<void> {
     this.settings.agentControl.browser = enabled;
     await this.saveSettings();
-    if (!enabled) this.agentBrowser.closeAll();
+    if (!enabled) this.agentBrowser.closeAgentBrowsers();
     await this.provisionAgentSkill();
   }
 

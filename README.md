@@ -46,6 +46,7 @@ Terminus opens in the **Multi-agent experience**: an Agent inbox with a card per
   - [Session logs](#session-logs)
   - [Agent control](#agent-control)
   - [Agent browser](#agent-browser)
+  - [Review pages with Claude](#review-pages-with-claude)
 - [Commands](#commands)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
@@ -258,16 +259,57 @@ Off unless you turn it on, and only with agent control on: **Settings → Termin
 
 | Command | What it does |
 | --- | --- |
-| `browser open --path <file>` / `--url <localhost address>` | Opens a browser beside the agent |
+| `browser open --path <file>` / `--url <localhost address>` / `--site <id>` | Opens a browser beside the agent |
+| `browser sites` | Lists the local sites other plugins offer, to open with `--site` |
 | `browser snapshot <id>` | Prints the page as text, with a ref (`e12`) for each element |
 | `browser click <id> <ref>`, `type <id> <ref> <text>`, `press <id> <key>`, `select <id> <ref> <value>` | Acts on the page; `--snapshot` prints a fresh snapshot after |
 | `browser wait <id> --text <text>` | Waits for text to appear (or `--gone` for it to go) |
 | `browser screenshot <id>`, `console <id>` | Saves a PNG and prints its path; prints console messages |
 | `browser navigate <id>`, `back <id>`, `reload <id>`, `list`, `close <id>` | Moves around; lists and closes browsers |
+| `browser notes <id>`, `reply <id> <note> <text> [--fixed]` | Reads your review comments; answers one beside the page |
 
 **Why only pages on your computer.** The agent browser never opens outside websites, not even by following a link from a local page. Everything a page says goes straight to the agent, which runs with your shell permissions: a website could hide instructions for it in its text, and an agent on the open web could submit forms or type your files into a site. Keeping it to your own computer keeps the browser to what it's for, checking your own work, without opening that door. A local page can still load scripts, fonts and images from the internet, so prototypes that use a CDN work normally.
 
 **Limits.** The browser has its own session that forgets everything when Obsidian quits, so nothing you're signed in to elsewhere is shared. Every permission (camera, microphone, location, notifications, clipboard) is refused, and downloads and pop-ups are blocked. An agent can have three browsers open, and reaches only the browsers of agents in its own group. A screenshot needs the browser visible: one behind another tab can still be read and clicked, but not captured.
+
+### Review pages with Claude
+
+<p align="center">
+  <img src="screenshots/browser-review.png" alt="Review mode in the Terminus browser: numbered pins on a page, a comment box with Change, Question and Keep, and a list of comments Claude has answered" width="760">
+</p>
+
+Look over a page in the Terminus browser, point at what you want changed and let Claude do it, without copying anything into a chat. It works on a prototype an agent opened, a dev server, or a site another plugin offers.
+
+1. **Turn on Review** in the browser's toolbar and click any element. A pin drops where you clicked, and a box opens for your comment.
+2. **Pick what it is.** Hover a type for what it means:
+   - **Change**: ask for an edit. Claude changes the page, then you check the result.
+   - **Question**: ask without asking for a change. Claude answers and leaves the page alone.
+   - **Keep**: mark something as right as it is. Claude won't touch it while it works on your other comments, and the comment needs no words.
+3. **Send them to a Claude session.** They go as one message, queued until its current turn ends. Each comment carries the element, a selector, a cropped screenshot and, when Terminus can tell, the file behind the page, so Claude knows exactly where to look.
+4. **Claude answers beside the page.** Each pin turns green when there's an answer. For a change, choose **Looks right** or **Not yet…** to send a follow-up with the conversation so far. Sending comments to a session lets it reach that browser too, so it can reload the page and check its own work.
+
+**Keep, checked.** When you mark something Keep, Terminus remembers how it looks: its text, attributes and visible styles. After every page load and every answer from Claude it compares again, and if a kept element changed it warns you on the pin and in the list, with what changed. Ask Claude to restore it, or keep the new look. Sizes are only compared at the same page width, so resizing the pane doesn't set it off.
+
+Comments last for the Obsidian session and come back when you reopen the page; nothing is written to your vault. Pins follow their elements as the page scrolls and reflows, and comments on other pages of the same site are listed at the bottom.
+
+**Open pages yourself.** You don't need an agent to use the browser: **Open a local page in the browser** in the command palette opens a localhost address (a dev server, say) or a site another plugin offers. This works whether or not agents may use the browser; that setting only governs what agents can do. For Claude to answer in the browser itself, turn on **Let agents use a browser**; without it, your comments still reach Claude as a message, and it replies in the terminal.
+
+**Sites from other plugins.** A plugin that serves something locally, often behind a token it keeps to itself, can offer it to Terminus: Terminus asks the plugin for the address only when the site is opened, and never shows that address to an agent. [Vault Publisher](https://github.com/NoteNerdOfficial/vault-publisher) offers its site preview this way, so its **Open in Terminus** button, or `browser open --site vault-publisher-preview` from an agent, opens the preview here. For plugin authors:
+
+```ts
+const terminus = this.app.plugins.getPlugin("terminus")?.api;
+if (terminus?.version >= 1) {
+  this.register(
+    terminus.registerSite({
+      id: "my-preview",
+      name: "My preview",
+      open: async () => startServer(), // returns http://127.0.0.1:<port>/?token=…
+      sourceFor: (pageUrl) => null, // optional: the vault file behind a page
+    })
+  );
+}
+// Terminus fires "terminus:api-ready" on the workspace when it loads after you.
+```
 
 ## Commands
 
@@ -286,6 +328,7 @@ All of these appear in the command palette under `Terminus:`. None ship with a d
 | Open Action Log |
 | Getting started |
 | Rescue closed terminal |
+| Open a local page in the browser |
 | Increase terminal font size |
 | Decrease terminal font size |
 | Reset terminal font size |

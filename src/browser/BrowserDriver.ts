@@ -1,6 +1,7 @@
 import type { ConsoleLevel, DebuggerSession, GuestPage } from "terminus-node-bridge";
 import { parseKey } from "./keys";
 import { formatSnapshot, parseAxTree, type Snapshot } from "./snapshot";
+import type { Fingerprint, PickedElement } from "./review";
 
 export interface ConsoleEntry {
   level: ConsoleLevel;
@@ -30,6 +31,117 @@ const SETTLE_MS = 150;
 const LOAD_WAIT_MS = 8000;
 const POLL_MS = 100;
 const SCREENSHOT_TIMEOUT_MS = 5000;
+
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function isFingerprint(value: unknown): value is Fingerprint {
+  if (typeof value !== "object" || value === null) return false;
+  const f = value as Record<string, unknown>;
+  return typeof f.text === "string" && typeof f.attrs === "object" && f.attrs !== null && typeof f.styles === "object" && f.styles !== null;
+}
+
+function isRect(value: unknown): value is Rect {
+  if (typeof value !== "object" || value === null) return false;
+  const r = value as Record<string, unknown>;
+  return [r.x, r.y, r.width, r.height].every((n) => typeof n === "number" && Number.isFinite(n));
+}
+
+/**
+ * Runs in the page with `this` as the picked element: a selector that finds
+ * only it, what it is, and its box. Bounded, because the page's text can be
+ * any size.
+ */
+const DESCRIBE_ELEMENT = String.raw`function () {
+  const el = this.nodeType === 1 ? this : this.parentElement;
+  if (!el) throw new Error("it isn't an element");
+  const esc = (s) => (window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, "\\$&"));
+  const unique = (sel) => { try { return document.querySelectorAll(sel).length === 1; } catch (e) { return false; } };
+  const looksGenerated = (s) => /\d{3,}|[a-f0-9]{8,}|^(css|sc|jsx|svelte)-/i.test(s);
+  function selectorFor(node) {
+    if (node.id && !looksGenerated(node.id) && unique("#" + esc(node.id))) return "#" + esc(node.id);
+    const parts = [];
+    let cur = node;
+    while (cur && cur.nodeType === 1 && cur !== document.documentElement) {
+      let part = cur.tagName.toLowerCase();
+      if (cur.id && !looksGenerated(cur.id) && unique("#" + esc(cur.id))) { parts.unshift("#" + esc(cur.id)); break; }
+      const testId = cur.getAttribute("data-testid");
+      if (testId && unique("[data-testid=\"" + testId.replace(/"/g, "\\\"") + "\"]")) { parts.unshift("[data-testid=\"" + testId.replace(/"/g, "\\\"") + "\"]"); break; }
+      const parent = cur.parentElement;
+      if (parent) {
+        const same = Array.from(parent.children).filter((c) => c.tagName === cur.tagName);
+        if (same.length > 1) part += ":nth-of-type(" + (same.indexOf(cur) + 1) + ")";
+      }
+      parts.unshift(part);
+      const sel = parts.join(" > ");
+      if (unique(sel)) return sel;
+      cur = parent;
+    }
+    return parts.join(" > ");
+  }
+  const flat = (s, n) => (s || "").replace(/\s+/g, " ").trim().slice(0, n);
+  const text = flat(el.innerText || el.textContent, 200);
+  const labelled = el.getAttribute("aria-labelledby");
+  const labelledText = labelled ? flat(labelled.split(/\s+/).map((id) => (document.getElementById(id) || {}).textContent || "").join(" "), 120) : "";
+  const name = flat(el.getAttribute("aria-label") || labelledText || el.getAttribute("alt") || el.getAttribute("title") || el.getAttribute("placeholder") || (el.labels && el.labels[0] ? el.labels[0].textContent : "") || "", 120);
+  const clone = el.cloneNode(false);
+  let open = clone.outerHTML || "";
+  const close = "</" + el.tagName.toLowerCase() + ">";
+  if (open.endsWith(close)) open = open.slice(0, -close.length);
+  const inner = flat(el.innerHTML, 160);
+  const html = (open + (inner ? inner + (el.innerHTML.length > 160 ? "…" : "") + close : "")).slice(0, 600);
+  const r = el.getBoundingClientRect();
+  return {
+    element: {
+      selector: selectorFor(el).slice(0, 700),
+      tag: el.tagName.toLowerCase(),
+      role: el.getAttribute("role") || "",
+      name,
+      text,
+      html,
+    },
+    rect: { x: r.left, y: r.top, width: r.width, height: r.height },
+  };
+}`;
+
+/**
+ * Runs in the page: how each selector's element looks (see Fingerprint in
+ * review.ts), or null when it isn't there. Sizes and positions are left out
+ * on purpose: they change when the pane is resized.
+ */
+const FINGERPRINTS_FOR = String.raw`function (selectors) {
+  const STYLES = ["color", "background-color", "background-image", "font-family", "font-size", "font-weight", "font-style",
+    "text-decoration-line", "text-transform", "text-align", "letter-spacing", "display", "visibility", "opacity",
+    "border-top-width", "border-top-style", "border-top-color", "border-radius", "box-shadow"];
+  const ATTRS = ["class", "src", "href", "alt", "title", "aria-label", "placeholder", "type", "disabled"];
+  return selectors.map((sel) => {
+    let el = null;
+    try { el = document.querySelector(sel); } catch (e) { return null; }
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    const styles = {};
+    for (const name of STYLES) styles[name] = cs.getPropertyValue(name);
+    const attrs = {};
+    for (const name of ATTRS) { const v = el.getAttribute(name); if (v !== null) attrs[name] = v.slice(0, 300); }
+    return { text: (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 500), attrs, styles, viewport: window.innerWidth };
+  });
+}`;
+
+/** Runs in the page: each selector's element's box in the viewport, or null. */
+const RECTS_FOR = `function (selectors) {
+  return selectors.map((sel) => {
+    let el = null;
+    try { el = document.querySelector(sel); } catch (e) { return null; }
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return null;
+    return { x: r.left, y: r.top, width: r.width, height: r.height };
+  });
+}`;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -72,6 +184,8 @@ export class BrowserDriver {
   onConsoleError: ((message: string) => void) | null = null;
   private console: ConsoleEntry[] = [];
   private unsubscribers: (() => void)[] = [];
+  private highlightConfig: Record<string, unknown> | null = null;
+  private highlighted: number | null = null;
 
   constructor(private readonly focusGuard: FocusGuard = (action) => action()) {}
 
@@ -243,6 +357,123 @@ export class BrowserDriver {
     this.emit(`Picked ${values.join(", ")} in`, this.label(ref), point);
     await this.settle();
     return Array.isArray(picked) ? picked.map(String) : [];
+  }
+
+  // ---- Review: the user picking elements ----
+
+  /**
+   * Gets the page ready for the user to pick elements. The picking itself
+   * is the view's: it catches the pointer over the page and asks nodeAt()
+   * what's under it, so it always knows the exact point clicked (Chrome's
+   * own inspect mode swallows the click and reports only the element).
+   */
+  async startPicking(color: { r: number; g: number; b: number }): Promise<void> {
+    await this.send("DOM.enable");
+    await this.send("Overlay.enable");
+    this.highlightConfig = {
+      showInfo: true,
+      showAccessibilityInfo: false,
+      contentColor: { ...color, a: 0.18 },
+      paddingColor: { ...color, a: 0.08 },
+      borderColor: { ...color, a: 0.9 },
+    };
+    this.highlighted = null;
+  }
+
+  /** The element at a point in the page's viewport (CSS pixels), or null. */
+  async nodeAt(x: number, y: number): Promise<number | null> {
+    const result = (await this.send("DOM.getNodeForLocation", {
+      x: Math.round(x),
+      y: Math.round(y),
+      includeUserAgentShadowDOM: false,
+      ignorePointerEventsNone: true,
+    }).catch(() => null)) as { backendNodeId?: unknown } | null;
+    return typeof result?.backendNodeId === "number" ? result.backendNodeId : null;
+  }
+
+  /** Outlines an element with Chrome's own highlight, or clears it with null. */
+  async highlight(backendNodeId: number | null): Promise<void> {
+    if (backendNodeId === this.highlighted) return;
+    this.highlighted = backendNodeId;
+    if (backendNodeId === null || !this.highlightConfig) {
+      await this.send("Overlay.hideHighlight").catch(() => undefined);
+      return;
+    }
+    await this.send("Overlay.highlightNode", { backendNodeId, highlightConfig: this.highlightConfig }).catch(() => undefined);
+  }
+
+  /** Passes a scroll from the picking layer on to the page. Moves no focus. */
+  async scrollBy(x: number, y: number, deltaX: number, deltaY: number): Promise<void> {
+    await this.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: Math.round(x), y: Math.round(y), deltaX, deltaY }).catch(() => undefined);
+  }
+
+  /** Scrolls a selector's element to the middle of the viewport. */
+  async scrollIntoView(selector: string): Promise<boolean> {
+    const found = await this.evaluate(
+      `(() => { let el = null; try { el = document.querySelector(${JSON.stringify(selector)}); } catch (e) {} if (!el) return false; el.scrollIntoView({ block: "center", inline: "nearest" }); return true; })()`
+    );
+    return found === true;
+  }
+
+  async stopPicking(): Promise<void> {
+    this.highlightConfig = null;
+    if (!this.debugger?.isAttached()) return;
+    await this.highlight(null);
+  }
+
+  /** What a picked element is, and where it is in the page's viewport. */
+  async describeNode(backendNodeId: number): Promise<{ element: PickedElement; rect: Rect | null }> {
+    let result: unknown;
+    try {
+      result = await this.session().send("DOM.resolveNode", { backendNodeId });
+    } catch {
+      throw new DriverError("stale_ref", "That element is gone from the page");
+    }
+    const objectId = (result as { object?: { objectId?: unknown } } | null)?.object?.objectId;
+    if (typeof objectId !== "string") throw new DriverError("stale_ref", "That element is gone from the page");
+    const value = await this.callOn(objectId, DESCRIBE_ELEMENT, [], "the element");
+    const described = value as { element?: PickedElement; rect?: Rect } | null;
+    if (!described?.element) throw new DriverError("page_error", "The page didn't describe the element");
+    return { element: described.element, rect: described.rect ?? null };
+  }
+
+  /**
+   * Where each selector's element is now, in the page's viewport (CSS
+   * pixels), or null for one that isn't on the page or has no size.
+   * Reads only; never reported as the agent's activity.
+   */
+  async rectsFor(selectors: string[]): Promise<(Rect | null)[]> {
+    if (selectors.length === 0) return [];
+    const value = await this.evaluate(`(${RECTS_FOR})(${JSON.stringify(selectors)})`);
+    return Array.isArray(value) ? value.map((rect) => (isRect(rect) ? rect : null)) : selectors.map(() => null);
+  }
+
+  /** How each selector's element looks now, or null where it's missing. Reads only. */
+  async fingerprintsFor(selectors: string[]): Promise<(Fingerprint | null)[]> {
+    if (selectors.length === 0) return [];
+    const value = await this.evaluate(`(${FINGERPRINTS_FOR})(${JSON.stringify(selectors)})`);
+    if (!Array.isArray(value)) throw new DriverError("page_error", "The page didn't answer");
+    return value.map((entry) => (isFingerprint(entry) ? entry : null));
+  }
+
+  /** A PNG of part of the viewport, a little larger than `rect`. */
+  async captureRect(rect: Rect): Promise<Uint8Array | null> {
+    const pad = 8;
+    const clip = {
+      x: Math.max(0, rect.x - pad),
+      y: Math.max(0, rect.y - pad),
+      width: Math.min(1600, Math.max(1, rect.width + pad * 2)),
+      height: Math.min(1200, Math.max(1, rect.height + pad * 2)),
+      scale: 1,
+    };
+    const capture = this.send("Page.captureScreenshot", { format: "png", clip, captureBeyondViewport: false });
+    const timeout = new Promise<null>((resolve) => window.setTimeout(() => resolve(null), SCREENSHOT_TIMEOUT_MS));
+    const result = (await Promise.race([capture, timeout]).catch(() => null)) as { data?: unknown } | null;
+    if (typeof result?.data !== "string") return null;
+    const binary = atob(result.data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
   }
 
   /** Waits for the page to finish loading after a navigation. */

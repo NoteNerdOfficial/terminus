@@ -4,6 +4,9 @@ import { AgentCursor, type Expression } from "./agentCursor";
 import { BrowserDriver, type BrowserActivity } from "./BrowserDriver";
 import { isAllowedBrowserUrl } from "./policy";
 import type { AgentBrowser } from "./AgentBrowser";
+import { ReviewLayer } from "./ReviewLayer";
+import type { ReviewNote } from "./review";
+import { withoutQuery } from "./sites";
 
 export const AGENT_BROWSER_VIEW_TYPE = "terminus-agent-browser";
 
@@ -77,6 +80,11 @@ export class AgentBrowserView extends ItemView {
   private urlEl: HTMLElement | null = null;
   private ownerEl: HTMLElement | null = null;
   private noticeEl: HTMLElement | null = null;
+  private iconEl: HTMLElement | null = null;
+  private reviewButton: HTMLElement | null = null;
+  private notesButton: HTMLElement | null = null;
+  private review: ReviewLayer | null = null;
+  private offReview: (() => void) | null = null;
   private cursor: AgentCursor | null = null;
   private actingTimer = 0;
   /** Folders served for this view, stopped when it closes. */
@@ -85,6 +93,14 @@ export class AgentBrowserView extends ItemView {
   readonly driver = new BrowserDriver((action) => this.keepingFocus(action));
   /** What agents call it (`b1`); given by AgentBrowser when it opens. */
   publicId = "";
+  /** The plugin site it shows (see sites.ts), if it was opened as one. */
+  registeredSiteId: string | null = null;
+  /** That site's first address, which may carry its token: never shown,
+   *  saved or handed to an agent. */
+  secretUrl: string | null = null;
+  /** Terminals the user sent review notes to: their agents can reach this
+   *  browser as if they'd opened it, to check their work and answer. */
+  readonly sharedWith = new Set<string>();
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -98,7 +114,7 @@ export class AgentBrowserView extends ItemView {
   }
 
   getDisplayText(): string {
-    return this.title || "Agent browser";
+    return this.title || (this.ownerToken ? "Agent browser" : "Terminus browser");
   }
 
   getIcon(): string {
@@ -110,7 +126,33 @@ export class AgentBrowserView extends ItemView {
   }
 
   getState(): Record<string, unknown> {
-    return { ...this.state };
+    // A plugin site's address can carry its token; the layout file is no place for it.
+    const url = this.registeredSiteId && this.state.url ? withoutQuery(this.state.url) : this.state.url;
+    return { ...this.state, url };
+  }
+
+  /** The address showing now, or null before the first page. */
+  currentUrl(): string | null {
+    try {
+      return this.page && !this.page.isDestroyed() ? this.page.getURL() : (this.state.url ?? null);
+    } catch {
+      return this.state.url ?? null;
+    }
+  }
+
+  /** Where to go back to a note's page: on a plugin site, at the site's
+   *  address now (its port can change between runs). */
+  urlForPage(note: ReviewNote): string {
+    const now = this.currentUrl();
+    if (this.registeredSiteId && now) {
+      try {
+        const target = new URL(note.href);
+        return new URL(target.pathname, new URL(now).origin).toString();
+      } catch {
+        // Fall through.
+      }
+    }
+    return note.href;
   }
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
@@ -129,19 +171,32 @@ export class AgentBrowserView extends ItemView {
     contentEl.addClass("terminus-agent-browser");
 
     const bar = contentEl.createDiv({ cls: "terminus-agent-browser-bar" });
-    setIcon(bar.createSpan({ cls: "terminus-agent-browser-icon" }), "bot");
+    this.iconEl = bar.createSpan({ cls: "terminus-agent-browser-icon" });
+    const back = this.barButton(bar, "arrow-left", "Back", () => {
+      if (this.page?.canGoBack()) this.page.goBack();
+    });
+    back.addClass("terminus-agent-browser-back");
     this.ownerEl = bar.createSpan({ cls: "terminus-agent-browser-owner" });
     this.urlEl = bar.createSpan({ cls: "terminus-agent-browser-url" });
-    const reload = bar.createEl("button", { cls: "clickable-icon terminus-agent-browser-reload" });
-    setIcon(reload, "rotate-cw");
-    setTooltip(reload, "Reload");
-    reload.addEventListener("click", () => this.page?.reload());
+    // Review is the one labelled control: it changes what a click on the
+    // page does, so its state has to be readable at a glance.
+    this.reviewButton = bar.createEl("button", { cls: "terminus-review-toggle", attr: { type: "button", "aria-pressed": "false" } });
+    setIcon(this.reviewButton.createSpan({ cls: ["terminus-review-icon", "terminus-review-toggle-icon"] }), "crosshair");
+    this.reviewButton.createSpan({ cls: "terminus-review-toggle-label", text: "Review" });
+    setTooltip(this.reviewButton, "Click elements on the page to comment on them");
+    this.reviewButton.addEventListener("click", () => void this.review?.togglePicking());
+    this.notesButton = this.barButton(bar, "messages-square", "Comments", () => this.review?.toggleTray());
+    this.notesButton.addClass("terminus-agent-browser-notes");
+    this.barButton(bar, "rotate-cw", "Reload", () => this.page?.reload());
     this.noticeEl = contentEl.createDiv({ cls: "terminus-agent-browser-notice" });
     this.noticeEl.hide();
 
     // The page, with the agent's edge, ripples and cursor laid over it. The
-    // overlays take no pointer events, so they never get in the user's way.
-    const stage = contentEl.createDiv({ cls: "terminus-agent-browser-stage" });
+    // overlays take no pointer events, so they never get in the user's way;
+    // review pins (ReviewLayer) are the one exception. The review tray sits
+    // beside the page.
+    const body = contentEl.createDiv({ cls: "terminus-agent-browser-body" });
+    const stage = body.createDiv({ cls: "terminus-agent-browser-stage" });
 
     // The partition has to be set before the element is attached; Obsidian
     // strips preload scripts and Node access from every <webview> as it
@@ -169,10 +224,51 @@ export class AgentBrowserView extends ItemView {
       console.error("Terminus: couldn't draw the agent's cursor", err);
     }
 
+    try {
+      this.review = new ReviewLayer(this, this.browser, stage, body);
+      this.review.onModeChange = () => this.renderReviewButtons();
+      this.offReview = this.browser.review.onChange(() => this.renderReviewButtons());
+    } catch (err) {
+      console.error("Terminus: couldn't set up review mode", err);
+    }
+    this.registerDomEvent(contentEl, "keydown", (event: KeyboardEvent) => {
+      if (event.key === "Escape" && this.review?.handleEscape()) event.preventDefault();
+    });
+
     this.renderStrip();
+    this.renderReviewButtons();
+  }
+
+  private barButton(bar: HTMLElement, icon: string, label: string, onClick: () => void): HTMLElement {
+    const button = bar.createEl("button", { cls: "clickable-icon", attr: { type: "button", "aria-label": label } });
+    setIcon(button, icon);
+    setTooltip(button, label);
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  private renderReviewButtons(): void {
+    const review = this.review;
+    const picking = review?.isPicking ?? false;
+    this.reviewButton?.toggleClass("is-active", picking);
+    this.reviewButton?.setAttr("aria-pressed", String(picking));
+    this.reviewButton?.querySelector(".terminus-review-toggle-label")?.setText(picking ? "Reviewing" : "Review");
+    const notes = review?.notesHere() ?? [];
+    const waiting = notes.filter((n) => n.status === "fixed" || n.status === "answered").length;
+    const open = notes.filter((n) => n.status !== "resolved").length;
+    if (this.notesButton) {
+      this.notesButton.toggleClass("is-active", review?.trayOpen ?? false);
+      this.notesButton.dataset.count = open ? String(open) : "";
+      this.notesButton.toggleClass("has-answers", waiting > 0);
+      setTooltip(this.notesButton, waiting ? `Comments: ${waiting} to check` : open ? `Comments (${open})` : "Comments");
+    }
   }
 
   async onClose(): Promise<void> {
+    this.review?.dispose();
+    this.review = null;
+    this.offReview?.();
+    this.offReview = null;
     window.clearTimeout(this.actingTimer);
     this.cursor?.dispose();
     this.driver.onActivity = null;
@@ -199,7 +295,8 @@ export class AgentBrowserView extends ItemView {
     await page.loadURL(url).catch((err: unknown) => {
       // A load that's replaced by another one (or a redirect) rejects with
       // ERR_ABORTED; did-fail-load reports anything that really failed.
-      if (!String(err).includes("ERR_ABORTED")) throw err;
+      // Electron words it either way: "ERR_ABORTED (-3)" or just "(-3)".
+      if (!/ERR_ABORTED|\(-3\)/.test(String(err))) throw err;
     });
     if (!this.historyCleared) {
       page.clearHistory();
@@ -270,6 +367,8 @@ export class AgentBrowserView extends ItemView {
     }
     this.state.url = url;
     this.renderStrip();
+    this.review?.pageChanged();
+    this.renderReviewButtons();
     this.app.workspace.requestSaveLayout();
   }
 
@@ -280,18 +379,26 @@ export class AgentBrowserView extends ItemView {
 
   private onFailLoad(event: FailLoadEvent): void {
     if (!event.isMainFrame || event.errorCode === ERR_ABORTED) return;
-    this.showNotice(`Couldn't open ${event.validatedURL} (${event.errorDescription || event.errorCode}). Is the server running?`);
-    this.express("sad", { doing: "Couldn't open", target: this.browser.displayUrl(event.validatedURL) });
+    const shown = this.browser.displayUrl(event.validatedURL, this);
+    this.showNotice(`Couldn't open ${shown} (${event.errorDescription || event.errorCode}). Is the server running?`);
+    this.express("sad", { doing: "Couldn't open", target: shown });
   }
 
   /** A face from the agent's companion for a moment that matters (see AgentCursor). */
   express(expression: Expression, say?: { doing: string; target: string }): void {
+    // The companion is the agent's: a browser no agent has is the user's alone.
+    if (!this.hasAgent()) return;
     this.cursor?.express(expression, say);
+  }
+
+  private hasAgent(): boolean {
+    return this.ownerToken !== null || this.sharedWith.size > 0;
   }
 
   /** Shows what the agent just did: the edge while it's acting, and its
    *  cursor acting it out (see AgentCursor). */
   private showActivity(activity: BrowserActivity): void {
+    if (!this.hasAgent()) return;
     const { contentEl } = this;
     contentEl.addClass("is-agent-acting");
     window.clearTimeout(this.actingTimer);
@@ -307,15 +414,26 @@ export class AgentBrowserView extends ItemView {
     this.noticeEl?.show();
   }
 
+  /** After the user shares the browser with an agent. */
+  refreshStrip(): void {
+    this.renderStrip();
+  }
+
   private renderStrip(): void {
-    const color = this.browser.agentColor(this.ownerToken);
+    const color = this.browser.agentColor(this.ownerToken ?? [...this.sharedWith][0] ?? null);
     if (color) this.contentEl.style.setProperty("--terminus-agent-color", color);
     else this.contentEl.style.removeProperty("--terminus-agent-color");
+    this.contentEl.toggleClass("has-agent", this.hasAgent());
     const owner = this.state.ownerLabel;
-    this.cursor?.setName(owner ?? "Agent");
-    this.ownerEl?.setText(owner ? `Driven by ${owner}` : "Agent browser");
+    const shared = [...this.sharedWith].map((token) => this.browser.terminalName(token));
+    this.cursor?.setName(owner ?? shared[0] ?? "Agent");
+    if (this.iconEl) setIcon(this.iconEl, owner || shared.length ? "bot" : "globe");
+    // Only said when there's someone to name: a browser of the user's own needs no label.
+    this.ownerEl?.setText(owner ? `Driven by ${owner}` : shared.length ? `Shared with ${shared.join(", ")}` : "");
+    this.ownerEl?.toggle(Boolean(owner || shared.length));
     const url = this.state.url ?? "";
-    this.urlEl?.setText(this.browser.displayUrl(url));
-    if (this.urlEl) setTooltip(this.urlEl, url);
+    const shown = this.browser.displayUrl(url, this);
+    this.urlEl?.setText(shown);
+    if (this.urlEl) setTooltip(this.urlEl, this.registeredSiteId ? shown : url);
   }
 }
