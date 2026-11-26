@@ -1,6 +1,8 @@
 import { TypedEmitter } from "../node/emitter";
+import type { ReviewIntent } from "../browser/review";
 
-/** One comment on a hunk, queued until it's sent to the session. */
+/** One comment on a hunk, or on text selected in a note, queued until it's
+ *  sent to the session. */
 export interface FeedbackItem {
   id: number;
   /** The terminal whose session gets it: the one that made the change. */
@@ -20,6 +22,9 @@ export interface FeedbackItem {
   /** The hunk was rejected along with the comment: the file no longer has
    *  Claude's version of it. */
   rejected: boolean;
+  /** Set for a comment on text selected in a note (see review/noteReview.ts):
+   *  what the user wants done with it. A hunk comment has none. */
+  intent?: ReviewIntent;
   createdAt: number;
 }
 
@@ -44,6 +49,41 @@ export class FeedbackStore extends TypedEmitter<FeedbackStoreEvents> {
     this.items.push(added);
     this.emit("change");
     return added;
+  }
+
+  /**
+   * Changes a queued comment's text, and its type for one on note text.
+   * Emptying a comment that needs words removes it, as emptying a queued
+   * message does; a Keep needs none.
+   */
+  edit(id: number, comment: string, intent?: ReviewIntent): void {
+    const item = this.items.find((entry) => entry.id === id);
+    if (!item) return;
+    const text = comment.trim();
+    const nextIntent = item.intent && intent ? intent : item.intent;
+    if (!text && nextIntent !== "keep") {
+      this.remove(id);
+      return;
+    }
+    if (item.comment === text && item.intent === nextIntent) return;
+    this.items = this.items.map((entry) => (entry.id === id ? { ...entry, comment: text, intent: nextIntent } : entry));
+    this.emit("change");
+  }
+
+  /** Moves a comment to sit before `beforeId` among its session's, or to
+   *  the end of them when null: the order they're numbered in when sent. */
+  move(token: string, id: number, beforeId: number | null): void {
+    const mine = this.listFor(token);
+    const moving = mine.find((item) => item.id === id);
+    if (!moving || id === beforeId) return;
+    const rest = mine.filter((item) => item.id !== id);
+    const at = beforeId === null ? rest.length : rest.findIndex((item) => item.id === beforeId);
+    rest.splice(at === -1 ? rest.length : at, 0, moving);
+    if (rest.every((item, i) => item === mine[i])) return;
+    // Other sessions' comments keep their places; this session's take the new order.
+    let next = 0;
+    this.items = this.items.map((item) => (item.token === token ? rest[next++]! : item));
+    this.emit("change");
   }
 
   remove(id: number): void {

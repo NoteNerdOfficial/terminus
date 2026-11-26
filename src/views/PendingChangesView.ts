@@ -61,6 +61,8 @@ export class PendingChangesView extends ItemView {
   async onOpen(): Promise<void> {
     this.plugin.dedupeView(PENDING_CHANGES_VIEW_TYPE);
     this.plugin.pendingChangesStore.on("change", this.render);
+    // A row says when its edit changed text the user marked Keep.
+    this.plugin.noteKeeps.on("change", this.render);
     // Shell changes with no reviewable before-state live on the session,
     // not in the pending-change store, so they need their own signal.
     this.plugin.agentSessionStore.on("change", this.onSessionChange);
@@ -69,6 +71,7 @@ export class PendingChangesView extends ItemView {
 
   async onClose(): Promise<void> {
     this.plugin.pendingChangesStore.off("change", this.render);
+    this.plugin.noteKeeps.off("change", this.render);
     this.plugin.agentSessionStore.off("change", this.onSessionChange);
   }
 

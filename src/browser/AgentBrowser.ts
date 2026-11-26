@@ -306,6 +306,27 @@ export class AgentBrowser {
     return busy ? `${count} queued for ${name}; it gets them when its turn ends` : `Sent ${count} to ${name}`;
   }
 
+  /**
+   * Sends open notes to a new Claude session in a new terminal: typed in
+   * there for the user to send, and the browser shared with it so it can
+   * answer and check its work, as with a session already running.
+   */
+  async sendReviewToNewSession(view: AgentBrowserView, notes: ReviewNote[]): Promise<string> {
+    const open = notes.filter((note) => note.status === "open");
+    if (open.length === 0) throw new Error("There are no new notes to send");
+    const canReply = this.agentsCanReply();
+    const name = `Review · ${view.getDisplayText()}`.slice(0, 48);
+    const terminal = await this.plugin.startClaudeWith(this.reviewPrompt(view, open, canReply), name);
+    if (!terminal) throw new Error("Couldn't open a new terminal");
+    if (canReply) view.sharedWith.add(terminal.hookToken);
+    view.refreshStrip();
+    this.review.markSent(
+      open.map((note) => note.id),
+      terminal.hookToken
+    );
+    return `started ${terminal.getDisplayText()} with your ${open.length === 1 ? "comment" : "comments"} typed in. Press Enter to send.`;
+  }
+
   /** Saves a picked element's image where the agent can Read it. */
   async saveReviewImage(noteKey: string, png: Uint8Array): Promise<string> {
     const folder = pathJoin(osTempDir(), "terminus-browser");

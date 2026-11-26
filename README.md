@@ -47,6 +47,7 @@ Terminus opens in the **Multi-agent experience**: an Agent inbox with a card per
   - [Agent control](#agent-control)
   - [Agent browser](#agent-browser)
   - [Review pages with Claude](#review-pages-with-claude)
+  - [Review notes with Claude](#review-notes-with-claude)
 - [Commands](#commands)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
@@ -285,7 +286,7 @@ Look over a page in the Terminus browser, point at what you want changed and let
    - **Change**: ask for an edit. Claude changes the page, then you check the result.
    - **Question**: ask without asking for a change. Claude answers and leaves the page alone.
    - **Keep**: mark something as right as it is. Claude won't touch it while it works on your other comments, and the comment needs no words.
-3. **Send them to a Claude session.** They go as one message, queued until its current turn ends. Each comment carries the element, a selector, a cropped screenshot and, when Terminus can tell, the file behind the page, so Claude knows exactly where to look.
+3. **Send them to a Claude session**, or to a new one: **New Claude session** opens a terminal running Claude with your comments typed in. They go as one message, queued until its current turn ends. Each comment carries the element, a selector, a cropped screenshot and, when Terminus can tell, the file behind the page, so Claude knows exactly where to look.
 4. **Claude answers beside the page.** Each pin turns green when there's an answer. For a change, choose **Looks right** or **Not yet…** to send a follow-up with the conversation so far. Sending comments to a session lets it reach that browser too, so it can reload the page and check its own work.
 
 **Keep, checked.** When you mark something Keep, Terminus remembers how it looks: its text, attributes and visible styles. After every page load and every answer from Claude it compares again, and if a kept element changed it warns you on the pin and in the list, with what changed. Ask Claude to restore it, or keep the new look. Sizes are only compared at the same page width, so resizing the pane doesn't set it off.
@@ -311,6 +312,22 @@ if (terminus?.version >= 1) {
 // Terminus fires "terminus:api-ready" on the workspace when it loads after you.
 ```
 
+### Review notes with Claude
+
+<p align="center">
+  <img src="screenshots/note-review.png" alt="Reviewing a note: a kept line marked with a lock, a comment box with Change, Question and Keep open on another line, and the session's card in the Agent inbox with two queued comments ready to send" width="900">
+</p>
+
+The same Change, Question and Keep comments work on your notes. Select some text in a note, right-click and choose **Review with Terminus…** (or run **Review selection**, which you can give a hotkey). Multi-agent only.
+
+- **Pick the type and write the comment.** A Keep needs no words.
+- **Choose who gets it.** The **To** menu lists the running Claude sessions, the one that last edited the note first, and **New Claude session**, which opens a terminal running Claude with your comment typed in. When no session is running it's the only choice.
+- **Add, or send now.** **Add** queues the comment on the session's card in the Agent inbox, alongside comments on its edits. **Send now** sends just this one, as soon as the session is between turns.
+
+**Queued comments on the card.** They're numbered in the order they'll be sent and go together as one message with **Send all to …**, so Claude sees every Change, Question and Keep at once. Drag a comment to reorder it, or use the pencil to edit its text or type. Queued messages, which go one per turn, sit just below in the same style.
+
+**Keep, marked and checked.** Kept text gets a faint highlight and a lock: hover the lock for your reason, click it to stop keeping the text. Terminus finds the passage by its text, so edits elsewhere in the note don't lose it. Whenever Claude edits the note, Terminus checks each kept passage. If the edit changed one, that edit's row in the Agent inbox and Pending Changes says "changed text you marked Keep" and a notice tells you, with the diff and Reject right there. Rejecting the edit brings the text, and its mark, back. Only Claude's edits count: changing kept text yourself never sets it off. Keeps last for the Obsidian session and are never written into the note.
+
 ## Commands
 
 All of these appear in the command palette under `Terminus:`. None ship with a default hotkey — Obsidian's plugin guidelines advise against claiming key combinations on a user's behalf — so assign your own in **Settings → Hotkeys** for any you use often.
@@ -329,6 +346,7 @@ All of these appear in the command palette under `Terminus:`. None ship with a d
 | Getting started |
 | Rescue closed terminal |
 | Open a local page in the browser |
+| Review selection *(Multi-agent)* |
 | Increase terminal font size |
 | Decrease terminal font size |
 | Reset terminal font size |

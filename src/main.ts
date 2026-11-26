@@ -1,6 +1,6 @@
 import { Notice, Plugin, WorkspaceLeaf, requireApiVersion, setIcon } from "obsidian";
 import { TerminusMenu } from "./views/TerminusMenu";
-import { pathBasename, pathJoin, pathRelative } from "terminus-node-bridge";
+import { pathBasename, pathJoin, pathRelative, readTextFileIfExists } from "terminus-node-bridge";
 import { ReviewServer } from "./server/ReviewServer";
 import { provisionClaudeSettings, getVaultBasePath, getHookBridgePath } from "./hooks/provisionSettings";
 import { provisionResources } from "./hooks/provisionResources";
@@ -21,7 +21,8 @@ import { SessionLog } from "./state/SessionLog";
 import { ActionLog } from "./state/ActionLog";
 import { AgentSessionStore } from "./state/AgentSessionStore";
 import { TranscriptUsageReader, subagentTranscriptPath } from "./claude/transcriptUsage";
-import { FeedbackStore } from "./state/FeedbackStore";
+import { FeedbackStore, type FeedbackItem } from "./state/FeedbackStore";
+import type { ReviewIntent } from "./browser/review";
 import { SteerQueueStore } from "./state/SteerQueueStore";
 import { InboxUiState } from "./state/InboxUiState";
 import { ClassicUiState } from "./state/ClassicUiState";
@@ -47,6 +48,9 @@ import { AgentApi } from "./agentApi/AgentApi";
 import { provisionSkill } from "./agentApi/skill";
 import { AgentBrowser } from "./browser/AgentBrowser";
 import { WhatsNewReviewModal } from "./modals/WhatsNewReviewModal";
+import { NoteReview } from "./review/noteReview";
+import { NoteKeeps } from "./review/noteKeeps";
+import { keepMarksExtension, refreshKeepMarks } from "./review/keepMarks";
 import { OpenInBrowserModal, TERMINUS_API_READY_EVENT, createTerminusApi, type TerminusApi } from "./browser/publicApi";
 import {
   DEFAULT_SETTINGS,
@@ -79,6 +83,10 @@ export default class TerminusPlugin extends Plugin {
   readonly agentBrowser = new AgentBrowser(this);
   /** For other plugins: `app.plugins.getPlugin("terminus")?.api` (see browser/publicApi.ts). */
   readonly api: TerminusApi = createTerminusApi(this);
+  /** Change / Question / Keep on text selected in a note (review/noteReview.ts). */
+  private readonly noteReview = new NoteReview(this);
+  /** Note passages marked Keep, checked against Claude's edits (review/noteKeeps.ts). */
+  readonly noteKeeps = new NoteKeeps();
   /** Per-session notes in the vault, a section per turn. Off by default;
    *  see state/SessionLog.ts. */
   readonly sessionLog = new SessionLog(this);
@@ -209,7 +217,8 @@ export default class TerminusPlugin extends Plugin {
 
     await this.provisionHooks();
 
-    this.registerEditorExtension([inlineDiffField, inlineDiffDecorations]);
+    this.registerEditorExtension([inlineDiffField, inlineDiffDecorations, keepMarksExtension(this.noteKeeps, () => this.getVaultBasePath())]);
+    this.watchNoteKeeps();
 
     this.registerView(TERMINUS_VIEW_TYPE, (leaf) => new TerminalView(leaf, this));
     this.registerView(PENDING_CHANGES_VIEW_TYPE, (leaf) => new PendingChangesView(leaf, this));
@@ -217,6 +226,7 @@ export default class TerminusPlugin extends Plugin {
     this.registerView(AGENT_INBOX_VIEW_TYPE, (leaf) => new AgentInboxView(leaf, this));
     this.registerView(TERMINUS_SIDEBAR_VIEW_TYPE, (leaf) => new TerminusSidebarView(leaf, this));
     this.agentBrowser.register();
+    this.noteReview.register();
     this.groups.register();
 
     // Twice a day, while the sidebar that shows it is in use.
@@ -387,6 +397,7 @@ export default class TerminusPlugin extends Plugin {
     this.queueSendPending.clear();
     if (this.revealPendingChangesTimer) window.clearTimeout(this.revealPendingChangesTimer);
     this.agentBrowser.unload();
+    this.noteReview.close();
     void this.reviewServer.stop();
   }
 
@@ -485,6 +496,49 @@ export default class TerminusPlugin extends Plugin {
       });
     };
     window.setTimeout(show, 3000);
+  }
+
+  /**
+   * Keeps on notes: checked on each edit of Claude's (a broken one is
+   * flagged on that edit's row and in a notice), checked again when an edit
+   * is resolved (rejecting it brings the text back), and redrawn in open
+   * editors and the change lists whenever they change.
+   */
+  private watchNoteKeeps(): void {
+    this.pendingChangesStore.on("recorded", (change) => {
+      const broken = this.noteKeeps.checkEdit(change.diff.filePath, change.diff.oldText, change.diff.newText, change.panelLabel);
+      if (broken.length === 0) return;
+      const name = pathBasename(change.diff.filePath);
+      new Notice(
+        `Terminus: ${change.panelLabel} changed ${broken.length === 1 ? "text" : `${broken.length} passages`} you marked Keep in ${name}. Its edit is waiting for review.`,
+        10000
+      );
+    });
+    this.pendingChangesStore.on("resolved", (item) => {
+      if (this.noteKeeps.brokenIn(item.diff.filePath).length === 0) return;
+      void readTextFileIfExists(item.diff.filePath).then((text: string | null) => {
+        if (text !== null) this.noteKeeps.recheck(item.diff.filePath, text);
+      });
+    });
+    this.noteKeeps.on("change", () => {
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        const cm = (leaf.view as { editor?: { cm?: { dispatch?: (spec: unknown) => void } } }).editor?.cm;
+        cm?.dispatch?.({ effects: refreshKeepMarks.of(null) });
+      });
+      this.refreshTerminusViews();
+    });
+  }
+
+  /** A queued comment on note text changed to or from Keep in the inbox:
+   *  marks the passage, or stops keeping it, to match. */
+  syncNoteKeep(item: FeedbackItem, intent: ReviewIntent | null, reason: string): void {
+    const start = item.newLines?.start ?? 1;
+    if (intent === "keep") {
+      this.noteKeeps.add({ filePath: item.filePath, text: item.excerpt, line: start, reason });
+      return;
+    }
+    const kept = this.noteKeeps.forFile(item.filePath).find((keep) => keep.text === item.excerpt.replace(/\r\n?/g, "\n"));
+    if (kept) this.noteKeeps.remove(kept.id);
   }
 
   /** Review mode's "What's new", once per install that had Terminus before
@@ -997,6 +1051,20 @@ export default class TerminusPlugin extends Plugin {
       return { ready: false, reason: "Answer Claude's prompt first" };
     }
     return { ready: true };
+  }
+
+  /**
+   * Starts Claude in a new terminal in the active group, at the vault, with
+   * `prompt` typed in and not submitted: what review comments go to when no
+   * session should get them, or none is running. The user presses Enter.
+   */
+  async startClaudeWith(prompt: string, name: string): Promise<TerminalView | null> {
+    return this.groups.newTerminal(this.groupStore.activeGroupId, true, {
+      command: "claude",
+      prompt,
+      cwd: this.getVaultBasePath(),
+      name,
+    });
   }
 
   /**

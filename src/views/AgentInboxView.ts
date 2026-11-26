@@ -1,3 +1,7 @@
+import { INTENT_LABELS, type ReviewIntent } from "../browser/review";
+import { bindTextKeys, renderComposerFields, renderShortcutHint } from "../review/composer";
+import { NOTE_HINTS } from "../review/noteReview";
+import type { FeedbackItem } from "../state/FeedbackStore";
 import { ItemView, Platform, setIcon, setTooltip, WorkspaceLeaf } from "obsidian";
 import { TerminusMenu } from "./TerminusMenu";
 import { pathRelative } from "terminus-node-bridge";
@@ -42,6 +46,8 @@ export class AgentInboxView extends ItemView {
   private stuckFrame: number | null = null;
   /** The queued message being edited in place, if any. */
   private editingQueueId: number | null = null;
+  /** The queued comment being edited in place, if any. */
+  private editingFeedbackId: number | null = null;
   /** Every pending change, as of the current render: the row lookups that
    *  run per card read this instead of the store, so one render is one
    *  read. Only valid during a render. */
@@ -263,7 +269,11 @@ export class AgentInboxView extends ItemView {
     // Rebuilding the view under a box someone is typing in would take its
     // focus and caret; the render waits until the box loses focus.
     const active = document.activeElement;
-    if (active instanceof HTMLTextAreaElement && active.hasClass("terminus-inbox-steer-input") && container.contains(active)) {
+    if (
+      active instanceof HTMLTextAreaElement &&
+      (active.hasClass("terminus-inbox-steer-input") || active.hasClass("terminus-review-text")) &&
+      container.contains(active)
+    ) {
       this.renderSkipped = true;
       return;
     }
@@ -1041,20 +1051,15 @@ export class AgentInboxView extends ItemView {
   }
 
   /**
-   * A session's queued messages, in the order they'll be sent: drag to
-   * reorder, edit in place, Steer to send one into the running turn now, or
-   * remove. They go out one per turn end unless something holds the queue
-   * (a prompt open, a failed turn, a restart), which the header says.
+   * Queued messages: sent one per turn, in this order. Drawn as the queued
+   * comments are (see queueHead and queueRow), so the two read as one kind
+   * of thing that differs only in how it's sent.
    */
   private renderQueue(el: HTMLElement, token: string): void {
     const items = this.plugin.steerQueue.listFor(token);
     if (items.length === 0) return;
     const queue = el.createDiv({ cls: "terminus-inbox-queue" });
-    const head = queue.createDiv({ cls: "terminus-inbox-queue-head" });
-    iconLabel(head, "list-ordered", `Queued ${items.length}`, "terminus-inbox-queue-title");
-    const hold = this.plugin.queueHoldReason(token);
-    if (hold) head.createSpan({ cls: "terminus-inbox-foot-note", text: hold });
-    head.createDiv({ cls: "terminus-inbox-spacer" });
+    const head = this.queueHead(queue, "list-ordered", "Messages", items.length, this.plugin.queueHoldReason(token) ?? "One per turn");
     if (this.plugin.steerQueue.isPaused(token)) {
       const resume = head.createEl("button", { cls: "terminus-btn-ghost-accent", text: "Resume" });
       setTooltip(resume, "Send the queue from here: the next message goes out when the session is between turns");
@@ -1065,24 +1070,21 @@ export class AgentInboxView extends ItemView {
     clear.addEventListener("click", () => this.plugin.steerQueue.clear(token));
 
     const steerReady = this.plugin.steerReadiness(token).ready;
-    let dragId: number | null = null;
-    const clearDropMarks = () => queue.querySelectorAll(".is-drop-before, .is-drop-after").forEach((row) => row.removeClasses(["is-drop-before", "is-drop-after"]));
+    const list = queue.createDiv({ cls: "terminus-inbox-queue-list" });
+    const drag = this.reorderable(list, (id, before) => this.plugin.steerQueue.move(token, id, before));
     items.forEach((item, index) => {
-      const row = queue.createDiv({ cls: "terminus-inbox-queue-item", attr: { draggable: "true" } });
-      const grip = row.createSpan({ cls: "terminus-inbox-queue-grip" });
-      setIcon(grip, "grip-vertical");
-      setTooltip(grip, "Drag to reorder");
+      const { row, body, actions } = this.queueRow(list, index);
       if (this.editingQueueId === item.id) {
-        this.renderQueueEditor(row, token, item.id, item.text);
-        row.draggable = false;
+        row.addClass("is-editing");
+        this.renderQueueEditor(body, token, item.id, item.text);
         return;
       }
-      row.createSpan({ cls: "terminus-inbox-queue-text", text: item.text, attr: { title: item.text } });
-      iconButton(row, "pencil", "Edit this message", () => {
+      body.createDiv({ cls: "terminus-inbox-queue-text", text: item.text, attr: { title: item.text } });
+      iconButton(actions, "pencil", "Edit this message", () => {
         this.editingQueueId = item.id;
         this.render();
       });
-      const steer = row.createEl("button", { cls: "terminus-btn-ghost terminus-inbox-queue-steer" });
+      const steer = actions.createEl("button", { cls: "terminus-btn-ghost terminus-inbox-queue-steer" });
       setIcon(steer.createSpan({ cls: "terminus-meta-icon" }), "corner-up-right");
       steer.createSpan({ text: "Steer" });
       if (steerReady) {
@@ -1091,39 +1093,150 @@ export class AgentInboxView extends ItemView {
       } else {
         steer.disabled = true;
       }
-      iconButton(row, "x", "Remove this message", () => this.plugin.steerQueue.remove(token, item.id));
-
-      row.addEventListener("dragstart", (evt) => {
-        dragId = item.id;
-        evt.dataTransfer?.setData("text/plain", item.text);
-        if (evt.dataTransfer) evt.dataTransfer.effectAllowed = "move";
-        row.addClass("is-dragging");
-      });
-      row.addEventListener("dragend", () => {
-        dragId = null;
-        row.removeClass("is-dragging");
-        clearDropMarks();
-      });
-      row.addEventListener("dragover", (evt) => {
-        if (dragId === null || dragId === item.id) return;
-        evt.preventDefault();
-        const rect = row.getBoundingClientRect();
-        const after = evt.clientY > rect.top + rect.height / 2;
-        clearDropMarks();
-        row.addClass(after ? "is-drop-after" : "is-drop-before");
-      });
-      row.addEventListener("drop", (evt) => {
-        if (dragId === null) return;
-        evt.preventDefault();
-        const rect = row.getBoundingClientRect();
-        const after = evt.clientY > rect.top + rect.height / 2;
-        const before = after ? (items[index + 1]?.id ?? null) : item.id;
-        const moving = dragId;
-        dragId = null;
-        clearDropMarks();
-        this.plugin.steerQueue.move(token, moving, before);
-      });
+      iconButton(actions, "x", "Remove this message", () => this.plugin.steerQueue.remove(token, item.id));
+      row.draggable = true;
+      drag.bind(row, item.id, items[index + 1]?.id ?? null, item.text);
     });
+  }
+
+  /** A queue's header: what it is, how many, and how it's sent (or why it's
+   *  held). Buttons for the whole queue go on the returned element's right. */
+  private queueHead(queue: HTMLElement, icon: string, title: string, count: number, how: string): HTMLElement {
+    const head = queue.createDiv({ cls: "terminus-inbox-queue-head" });
+    const name = iconLabel(head, icon, title, "terminus-inbox-queue-title");
+    name.createSpan({ cls: "terminus-inbox-queue-count", text: String(count) });
+    head.createSpan({ cls: "terminus-inbox-queue-how", text: how });
+    head.createDiv({ cls: "terminus-inbox-spacer" });
+    return head;
+  }
+
+  /**
+   * One row of a queue: its place in the order (a grip to drag it by on
+   * hover), what's queued, and its buttons, shown on hover or keyboard
+   * focus so a long queue doesn't repeat them down the card.
+   */
+  private queueRow(list: HTMLElement, index: number): { row: HTMLElement; body: HTMLElement; actions: HTMLElement } {
+    const row = list.createDiv({ cls: "terminus-inbox-queue-item" });
+    const handle = row.createSpan({ cls: "terminus-inbox-queue-handle", attr: { "aria-hidden": "true" } });
+    handle.createSpan({ cls: "terminus-inbox-queue-index", text: String(index + 1) });
+    setIcon(handle.createSpan({ cls: "terminus-inbox-queue-grip" }), "grip-vertical");
+    setTooltip(handle, "Drag to reorder");
+    const body = row.createDiv({ cls: "terminus-inbox-queue-body" });
+    const actions = row.createDiv({ cls: "terminus-inbox-queue-actions" });
+    return { row, body, actions };
+  }
+
+  /**
+   * Drag-to-reorder for a list of rows, shared by queued messages and
+   * queued comments: a row dropped on the top half of another goes before
+   * it, on the bottom half after it. `move` gets the dragged id and the id
+   * it should sit before, or null for the end.
+   */
+  private reorderable(list: HTMLElement, move: (id: number, beforeId: number | null) => void): { bind: (row: HTMLElement, id: number, nextId: number | null, label: string) => void } {
+    let dragId: number | null = null;
+    const clearDropMarks = () => list.querySelectorAll(".is-drop-before, .is-drop-after").forEach((row) => row.removeClasses(["is-drop-before", "is-drop-after"]));
+    return {
+      bind: (row, id, nextId, label) => {
+        row.addEventListener("dragstart", (evt) => {
+          dragId = id;
+          evt.dataTransfer?.setData("text/plain", label);
+          if (evt.dataTransfer) evt.dataTransfer.effectAllowed = "move";
+          row.addClass("is-dragging");
+        });
+        row.addEventListener("dragend", () => {
+          dragId = null;
+          row.removeClass("is-dragging");
+          clearDropMarks();
+        });
+        row.addEventListener("dragover", (evt) => {
+          if (dragId === null || dragId === id) return;
+          evt.preventDefault();
+          const rect = row.getBoundingClientRect();
+          const after = evt.clientY > rect.top + rect.height / 2;
+          clearDropMarks();
+          row.addClass(after ? "is-drop-after" : "is-drop-before");
+        });
+        row.addEventListener("drop", (evt) => {
+          if (dragId === null) return;
+          evt.preventDefault();
+          const rect = row.getBoundingClientRect();
+          const after = evt.clientY > rect.top + rect.height / 2;
+          const moving = dragId;
+          dragId = null;
+          clearDropMarks();
+          move(moving, after ? nextId : id);
+        });
+      },
+    };
+  }
+
+  /**
+   * The in-place editor for one queued comment. A comment on note text gets
+   * the same box it was written in (type and text; Save or ⌘↵, Cancel or
+   * Escape); one on Claude's edit, the queued-message editor's plain box.
+   * Changing a comment to or from Keep marks or unmarks the note to match.
+   */
+  private renderFeedbackEditor(line: HTMLElement, item: FeedbackItem, place: string): void {
+    const finish = (save: { comment: string; intent?: ReviewIntent } | null): void => {
+      this.editingFeedbackId = null;
+      if (save) {
+        const was = item.intent;
+        this.plugin.feedbackStore.edit(item.id, save.comment, save.intent);
+        if (was !== save.intent && (was === "keep" || save.intent === "keep")) this.plugin.syncNoteKeep(item, save.intent ?? null, save.comment);
+      }
+      this.render();
+    };
+    if (!item.intent) {
+      const box = line.createEl("textarea", { cls: "terminus-inbox-steer-input terminus-inbox-queue-editor", attr: { rows: "2", "aria-label": `Edit comment on ${place}` } });
+      box.value = item.comment;
+      let done = false;
+      const end = (save: boolean): void => {
+        if (done) return;
+        done = true;
+        box.blur();
+        finish(save ? { comment: box.value } : null);
+      };
+      box.addEventListener("keydown", (evt) => {
+        if (evt.key === "Escape") {
+          evt.preventDefault();
+          end(false);
+        } else if (evt.key === "Enter" && !evt.shiftKey && !evt.isComposing) {
+          evt.preventDefault();
+          end(true);
+        }
+      });
+      box.addEventListener("blur", () => end(true));
+      window.setTimeout(() => box.focus(), 0);
+      return;
+    }
+    const card = line.createDiv({ cls: "terminus-inbox-feedback-editor" });
+    card.createDiv({ cls: "terminus-inbox-feedback-place", text: place });
+    const fields = renderComposerFields(card, item.intent, NOTE_HINTS);
+    // The view holds its redraws while this box has focus; let go first.
+    const close = (save: { comment: string; intent?: ReviewIntent } | null): void => {
+      fields.textarea.blur();
+      finish(save);
+    };
+    fields.textarea.value = item.comment;
+    const actions = card.createDiv({ cls: "terminus-review-composer-actions" });
+    renderShortcutHint(actions, "save");
+    const cancel = actions.createEl("button", { text: "Cancel", attr: { type: "button" } });
+    const save = actions.createEl("button", { cls: "mod-cta", text: "Save", attr: { type: "button" } });
+    const submit = (): void => {
+      const text = fields.text();
+      if (text === null) {
+        fields.textarea.focus();
+        return;
+      }
+      close({ comment: text, intent: fields.intent() });
+    };
+    cancel.addEventListener("click", () => close(null));
+    save.addEventListener("click", submit);
+    bindTextKeys(fields.textarea, submit, () => close(null));
+    window.setTimeout(() => {
+      fields.textarea.focus();
+      fields.textarea.setSelectionRange(fields.textarea.value.length, fields.textarea.value.length);
+    }, 0);
   }
 
   /** The in-place editor for one queued message: Enter saves, Escape
@@ -1209,37 +1322,63 @@ export class AgentInboxView extends ItemView {
     }
   }
 
-  /** Queued review comments for this session, and the button that types
-   *  them into its terminal -- only between turns (see feedbackReadiness). */
+  /**
+   * Queued review comments for this session: sent together as one
+   * message, numbered in this order, with the button that types them into
+   * its terminal -- only between turns (see feedbackReadiness).
+   */
   private renderFeedback(el: HTMLElement, token: string, terminalName: string): void {
     const items = this.plugin.feedbackStore.listFor(token);
     if (items.length === 0) return;
     const section = el.createDiv({ cls: "terminus-inbox-feedback" });
-    iconLabel(section, "message-square", `${items.length} ${items.length === 1 ? "comment" : "comments"} queued`, "terminus-inbox-feedback-title");
-    const row = section.createDiv({ cls: "terminus-inbox-feedback-row" });
+    const queue = section.createDiv({ cls: "terminus-inbox-queue" });
+    const head = this.queueHead(queue, "message-square", "Comments", items.length, "Sent together");
+    const clear = head.createEl("button", { cls: "terminus-btn-ghost", text: "Clear" });
+    setTooltip(clear, "Remove every queued comment for this session");
+    clear.addEventListener("click", () => this.plugin.feedbackStore.clear(token));
+
+    const list = queue.createDiv({ cls: "terminus-inbox-queue-list" });
+    const base = this.plugin.getVaultBasePath();
+    const drag = this.reorderable(list, (id, before) => this.plugin.feedbackStore.move(token, id, before));
+    items.forEach((item, index) => {
+      const { row, body, actions } = this.queueRow(list, index);
+      row.addClass("terminus-inbox-feedback-item");
+      const where = item.newLines ?? item.oldLines;
+      const place = `${pathRelative(base, item.filePath)}${where ? `:${where.start}` : ""}`;
+      if (this.editingFeedbackId === item.id) {
+        row.addClass("is-editing");
+        this.renderFeedbackEditor(body, item, place);
+        return;
+      }
+      // What was said first; where, underneath.
+      const said = body.createDiv({ cls: "terminus-inbox-feedback-line" });
+      if (item.intent) said.createSpan({ cls: `terminus-inbox-feedback-intent is-${item.intent}`, text: INTENT_LABELS[item.intent] });
+      const text = item.comment || (item.intent === "keep" ? "Leave as it is" : "");
+      said.createSpan({ cls: "terminus-inbox-feedback-text", text, attr: { title: item.excerpt ? `${text}\n\n“${item.excerpt.slice(0, 300)}”` : text } });
+      const meta = body.createDiv({ cls: "terminus-inbox-feedback-meta" });
+      meta.createSpan({ cls: "terminus-inbox-feedback-place", text: place, attr: { title: item.filePath } });
+      if (item.rejected) meta.createSpan({ cls: "terminus-diff-stat-remove", text: "rejected" });
+      iconButton(actions, "pencil", "Edit this comment", () => {
+        this.editingFeedbackId = item.id;
+        this.render();
+      });
+      iconButton(actions, "x", "Remove this comment", () => this.plugin.feedbackStore.remove(item.id));
+      row.draggable = true;
+      drag.bind(row, item.id, items[index + 1]?.id ?? null, text);
+    });
+
+    const foot = queue.createDiv({ cls: "terminus-inbox-queue-foot" });
     const readiness = this.plugin.feedbackReadiness(token);
     if (readiness.ready) {
-      const send = row.createEl("button", { cls: "mod-cta", text: `Send to ${terminalName}` });
+      const send = foot.createEl("button", { cls: "mod-cta terminus-inbox-queue-send" });
+      setIcon(send.createSpan({ cls: "terminus-meta-icon" }), "send");
+      send.createSpan({ text: `Send ${items.length === 1 ? "it" : `all ${items.length}`} to ${terminalName}` });
       setTooltip(send, "Types the comments into the terminal's input line without sending them");
       send.addEventListener("click", () => void this.plugin.sendFeedback(token));
     } else {
-      row.createSpan({ cls: "terminus-inbox-foot-note", text: readiness.reason });
-    }
-    row.createDiv({ cls: "terminus-inbox-spacer" });
-    const discard = row.createEl("button", { text: "Discard" });
-    setTooltip(discard, "Discard every queued comment for this session");
-    discard.addEventListener("click", () => this.plugin.feedbackStore.clear(token));
-
-    const list = section.createDiv({ cls: "terminus-inbox-feedback-list" });
-    const base = this.plugin.getVaultBasePath();
-    for (const item of items) {
-      const line = list.createDiv({ cls: "terminus-inbox-feedback-item" });
-      const where = item.newLines ?? item.oldLines;
-      const place = `${pathRelative(base, item.filePath)}${where ? `:${where.start}` : ""}`;
-      line.createSpan({ cls: "terminus-inbox-feedback-place", text: place });
-      if (item.rejected) line.createSpan({ cls: "terminus-diff-stat-remove", text: "rejected" });
-      line.createSpan({ cls: "terminus-inbox-feedback-text", text: item.comment, attr: { title: item.comment } });
-      iconButton(line, "x", "Remove this comment", () => this.plugin.feedbackStore.remove(item.id));
+      const note = foot.createDiv({ cls: "terminus-inbox-queue-waiting" });
+      setIcon(note.createSpan({ cls: "terminus-meta-icon" }), "clock");
+      note.createSpan({ text: readiness.reason });
     }
   }
 

@@ -38,7 +38,7 @@ export class WhatsNewReviewModal extends Modal {
     contentEl.createEl("h3", { text: "What's new in Terminus" });
     contentEl.createEl("p", {
       cls: "terminus-whats-new-lead",
-      text: "Review a page with Claude, right in Obsidian.",
+      text: "Review pages and notes with Claude, right in Obsidian.",
     });
     contentEl.createEl("img", {
       cls: "terminus-whats-new-demo",
@@ -60,11 +60,15 @@ export class WhatsNewReviewModal extends Modal {
     );
     point(
       "Claude answers each one.",
-      "Send your comments to a Claude session. It gets the element, a screenshot and the file behind the page, then answers beside each pin. You accept the fix or follow up."
+      "Send your comments to a Claude session, or start a new one. It gets the element, a screenshot and the file behind the page, then answers beside each pin. You accept the fix or follow up."
+    );
+    point(
+      "Review notes too.",
+      "Select text in a note, right-click and choose Review with Terminus. Comments queue on the session's card in the Agent inbox, where you can reorder and edit them before sending them together."
     );
     point(
       "Keep what's right.",
-      "Mark something Keep and Terminus tells you if a later change touches it."
+      "Mark something Keep, on a page or in a note, and Terminus tells you if a later change touches it."
     );
     point(
       "Open pages yourself.",

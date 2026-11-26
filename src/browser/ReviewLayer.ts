@@ -1,5 +1,6 @@
-import { Notice, Platform, setIcon, setTooltip } from "obsidian";
+import { Notice, setIcon, setTooltip } from "obsidian";
 import { TerminusMenu } from "../views/TerminusMenu";
+import { INTENTS, INTENT_ICONS, bindTextKeys, renderComposerFields, renderShortcutHint, reviewIcon } from "../review/composer";
 import type { AgentBrowser } from "./AgentBrowser";
 import type { AgentBrowserView } from "./AgentBrowserView";
 import type { Rect } from "./BrowserDriver";
@@ -10,22 +11,11 @@ const PIN_POLL_MS = 120;
 /** A pin's size, and where its tip is: the bottom-left corner. */
 const PIN_HEIGHT = 22;
 const PIN_TIP_X = 1;
-const INTENTS: ReviewIntent[] = ["change", "question", "keep"];
-const INTENT_ICONS: Record<ReviewIntent, string> = {
-  change: "pencil",
-  question: "help-circle",
-  keep: "lock",
-};
 /** One line each, for the empty tray. */
 const INTENT_SHORT: Record<ReviewIntent, string> = {
   change: "asks the agent for an edit.",
   question: "asks without changing anything.",
   keep: "protects what's already right.",
-};
-const INTENT_PLACEHOLDERS: Record<ReviewIntent, string> = {
-  change: "What should change here?",
-  question: "What do you want to know?",
-  keep: "Why it should stay as it is (optional)",
 };
 /** How long after a page load to look at kept elements: the page settles first. */
 const KEEP_CHECK_DELAY_MS = 800;
@@ -255,72 +245,24 @@ export class ReviewLayer {
 
     const head = card.createDiv({ cls: "terminus-review-composer-head" });
     head.createSpan({ cls: "terminus-review-element", text: elementLabel(pending.element) });
-    let intent: ReviewIntent = "change";
-    // A radio group drawn as a segmented control: one tab stop, arrow keys
-    // move between types, and a raised tile slides to the one chosen.
-    const chips = card.createDiv({ cls: "terminus-review-intents", attr: { role: "radiogroup", "aria-label": "Comment type" } });
-    chips.createDiv({ cls: "terminus-review-intent-thumb", attr: { "aria-hidden": "true" } });
-    const meaning = card.createDiv({ cls: "terminus-review-intent-meaning", attr: { "aria-live": "polite" } });
-    const choose = (value: ReviewIntent, focus: "chip" | "text"): void => {
-      intent = value;
-      const index = INTENTS.indexOf(value);
-      chips.style.setProperty("--terminus-review-thumb", String(index));
-      for (const [i, el] of chipEls.entries()) {
-        el.setAttr("aria-checked", String(i === index));
-        el.tabIndex = i === index ? 0 : -1;
-      }
-      meaning.setText(INTENT_HINTS[value]);
-      textarea.placeholder = INTENT_PLACEHOLDERS[value];
-      if (focus === "chip") chipEls[index]!.focus();
-      else textarea.focus();
-    };
-    const chipEls = INTENTS.map((value, i) => {
-      const chip = chips.createEl("button", {
-        cls: "terminus-review-intent",
-        attr: { type: "button", role: "radio", "aria-checked": "false" },
-      });
-      reviewIcon(chip, INTENT_ICONS[value]);
-      chip.createSpan({ cls: "terminus-review-intent-label", text: INTENT_LABELS[value] });
-      // Obsidian's tooltip is the accessible name too, so it starts with the
-      // type's own name.
-      setTooltip(chip, `${INTENT_LABELS[value]}: ${INTENT_HINTS[value]}`, { placement: "top" });
-      chip.addEventListener("click", () => choose(value, "text"));
-      chip.addEventListener("keydown", (event) => {
-        const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
-        const jump = event.key === "Home" ? 0 : event.key === "End" ? INTENTS.length - 1 : null;
-        if (!step && jump === null) return;
-        event.preventDefault();
-        const next = jump ?? (i + step + INTENTS.length) % INTENTS.length;
-        choose(INTENTS[next]!, "chip");
-      });
-      return chip;
-    });
-    const textarea = card.createEl("textarea", {
-      cls: "terminus-review-text",
-      attr: { rows: "3", placeholder: INTENT_PLACEHOLDERS[intent], "aria-label": "Your comment" },
-    });
-    choose(intent, "text");
+    const fields = renderComposerFields(card);
     const actions = card.createDiv({ cls: "terminus-review-composer-actions" });
-    const hint = actions.createSpan({ cls: "terminus-review-shortcut" });
-    hint.createEl("kbd", { text: Platform.isMacOS ? "⌘" : "Ctrl" });
-    hint.createEl("kbd", { text: "↵" });
-    hint.createSpan({ text: "to add" });
+    renderShortcutHint(actions);
     const cancel = actions.createEl("button", { text: "Cancel", attr: { type: "button" } });
     const add = actions.createEl("button", { cls: "mod-cta", text: "Add", attr: { type: "button" } });
     cancel.addEventListener("click", () => this.cancelComposer());
     const submit = (): void => {
-      const text = textarea.value.trim();
-      // A Keep needs no words: picking it is the whole message.
-      if (!text && intent !== "keep") {
-        textarea.focus();
+      const text = fields.text();
+      if (text === null) {
+        fields.textarea.focus();
         return;
       }
-      void this.addNote(pending, intent, text);
+      void this.addNote(pending, fields.intent(), text);
     };
     add.addEventListener("click", submit);
-    bindTextKeys(textarea, submit, () => this.cancelComposer());
+    bindTextKeys(fields.textarea, submit, () => this.cancelComposer());
     this.placeComposer(card, pending.point);
-    window.setTimeout(() => textarea.focus(), 0);
+    window.setTimeout(() => fields.textarea.focus(), 0);
   }
 
   /** Just below where the user clicked, or above it when there's no room. */
@@ -814,9 +756,6 @@ export class ReviewLayer {
     if (notes.length === 0) return;
     const targets = this.browser.reviewTargets(this.view);
     const menu = new TerminusMenu();
-    if (targets.length === 0) {
-      menu.addItem((item) => item.setTitle("No Claude session is running").setIsLabel(true));
-    }
     for (const target of targets) {
       menu.addItem((item) =>
         item
@@ -826,6 +765,14 @@ export class ReviewLayer {
           .onClick(() => this.send(notes, target.token))
       );
     }
+    if (targets.length) menu.addSeparator();
+    menu.addItem((item) =>
+      item
+        .setTitle("New Claude session")
+        .setIcon("plus")
+        .setDescription(targets.length ? "In a new terminal" : "No Claude session is running")
+        .onClick(() => void this.sendToNewSession(notes))
+    );
     menu.addSeparator();
     menu.addItem((item) =>
       item
@@ -839,6 +786,15 @@ export class ReviewLayer {
   private send(notes: ReviewNote[], token: string): void {
     try {
       const result = this.browser.sendReview(this.view, notes, token);
+      new Notice(`Terminus: ${result}`);
+    } catch (err) {
+      new Notice(`Terminus: ${err instanceof Error ? err.message : String(err)}`, 8000);
+    }
+  }
+
+  private async sendToNewSession(notes: ReviewNote[]): Promise<void> {
+    try {
+      const result = await this.browser.sendReviewToNewSession(this.view, notes);
       new Notice(`Terminus: ${result}`);
     } catch (err) {
       new Notice(`Terminus: ${err instanceof Error ? err.message : String(err)}`, 8000);
@@ -863,49 +819,11 @@ export class ReviewLayer {
   }
 }
 
-/**
- * ⌘/Ctrl+Enter submits and Escape cancels in a review textarea. Listened
- * for on the window, in the capture phase: Obsidian's own hotkeys take
- * Mod+Enter there (it toggles a checkbox by default) and stop it before it
- * reaches the textarea. The listener goes once the textarea leaves the page.
- */
-function bindTextKeys(textarea: HTMLTextAreaElement, submit: () => void, cancel: () => void): void {
-  const win = textarea.win;
-  const onKey = (event: KeyboardEvent): void => {
-    if (!textarea.isConnected) {
-      win.removeEventListener("keydown", onKey, true);
-      return;
-    }
-    if (event.target !== textarea) return;
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      event.stopPropagation();
-      submit();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      cancel();
-    }
-  };
-  win.addEventListener("keydown", onKey, true);
-}
-
 /** A comment's state in words. A Keep has its own: it never waits on an answer. */
 function statusLabel(note: ReviewNote): string {
   if (note.intent !== "keep") return STATUS_LABELS[note.status];
   if (note.drift) return note.status === "open" ? "Changed · not sent" : "Changed";
   return note.status === "open" ? "Not sent" : "Agent told";
-}
-
-/**
- * An icon set beside text. Wrapped in a flex box with the SVG as a block:
- * left inline, the SVG sits on the text's baseline and rides high of the
- * label's middle.
- */
-function reviewIcon(parent: HTMLElement, name: string, cls?: string): HTMLElement {
-  const wrap = parent.createSpan({ cls: cls ? ["terminus-review-icon", cls] : "terminus-review-icon" });
-  setIcon(wrap, name);
-  return wrap;
 }
 
 /** Where a click fell within an element, as fractions across and down it. */

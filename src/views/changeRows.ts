@@ -146,6 +146,11 @@ export function renderChangeRow(
     const count = change.brokenBacklinks.length;
     warning("terminus-backlink-warning", `may break ${count} incoming ${count === 1 ? "link" : "links"}`);
   }
+  // Text the user marked Keep (review/noteKeeps.ts) that this edit took away.
+  const keeps = ctx.plugin.noteKeeps.brokenIn(change.diff.filePath);
+  if (keeps.length > 0) {
+    warning("terminus-keep-warning", `changed ${keeps.length === 1 ? "text" : `${keeps.length} passages`} you marked Keep`);
+  }
 
   const stop = (e: MouseEvent, fn: () => void) => {
     e.stopPropagation();

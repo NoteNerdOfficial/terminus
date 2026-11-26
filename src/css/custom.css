@@ -2183,11 +2183,15 @@
 }
 
 /* Messages queued for a session, above its "Tell this session…" box. */
+/* A queue on an agent's card: queued comments (sent together) and queued
+   messages (one per turn) share this look, and differ only in what their
+   header says about how they're sent. Rows are numbered in the order
+   they'll go; the number becomes a grip on hover. A row's buttons show on
+   hover or keyboard focus, and always where there's no hover. */
 .terminus-inbox-queue {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px;
+  padding: 6px 6px 4px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-m);
   background-color: var(--background-primary);
@@ -2197,10 +2201,11 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 0 2px 2px;
-  color: var(--text-muted);
+  gap: 4px 8px;
+  min-height: 24px;
+  padding: 0 2px 4px 4px;
   font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
 }
 
 .terminus-inbox-queue-title {
@@ -2208,20 +2213,50 @@
   align-items: center;
   gap: 6px;
   font-weight: var(--font-semibold);
+  color: var(--text-normal);
+}
+
+.terminus-inbox-queue-title .terminus-meta-icon {
+  color: var(--text-muted);
+}
+
+.terminus-inbox-queue-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background-color: var(--background-modifier-hover);
+  color: var(--text-muted);
+  font-weight: var(--font-normal);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  text-align: center;
+}
+
+.terminus-inbox-queue-how {
+  color: var(--text-faint);
+}
+
+.terminus-inbox-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .terminus-inbox-queue-item {
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 6px;
   min-width: 0;
-  padding: 2px 2px 2px 0;
+  padding: 4px 4px 4px 2px;
   border-radius: var(--radius-s);
   font-size: var(--font-ui-small);
+  color: var(--text-normal);
 }
 
-.terminus-inbox-queue-item:hover {
+.terminus-inbox-queue-item:hover,
+.terminus-inbox-queue-item:focus-within {
   background-color: var(--background-modifier-hover);
 }
 
@@ -2236,30 +2271,138 @@
   left: 0;
   right: 0;
   height: 2px;
+  border-radius: 1px;
   background-color: var(--interactive-accent);
 }
 
 .terminus-inbox-queue-item.is-drop-before::before {
-  top: -2px;
+  top: -1px;
 }
 
 .terminus-inbox-queue-item.is-drop-after::after {
-  bottom: -2px;
+  bottom: -1px;
 }
 
-.terminus-inbox-queue-grip {
+/* Its number, or the grip to drag it by while the row is hovered. */
+.terminus-inbox-queue-handle {
+  position: relative;
   display: flex;
-  flex: 0 0 auto;
-  color: var(--text-faint);
+  align-items: center;
+  justify-content: center;
+  height: 20px;
   cursor: grab;
 }
 
-.terminus-inbox-queue-text {
-  flex: 1 1 auto;
+.terminus-inbox-queue-index {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+.terminus-inbox-queue-grip {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0;
+}
+
+.terminus-inbox-queue-grip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.terminus-inbox-queue-item[draggable="true"]:hover .terminus-inbox-queue-index {
+  opacity: 0;
+}
+
+.terminus-inbox-queue-item[draggable="true"]:hover .terminus-inbox-queue-grip {
+  opacity: 1;
+}
+
+.terminus-inbox-queue-item.is-editing .terminus-inbox-queue-handle {
+  cursor: default;
+}
+
+.terminus-inbox-queue-body {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 20px;
+  gap: 1px;
+}
+
+.terminus-inbox-queue-text {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  line-height: 20px;
+}
+
+/* Floated over the row's right edge, so hidden buttons take no width from
+   the text. */
+.terminus-inbox-queue-actions {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 26px;
+  padding: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background-color: var(--background-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+
+.terminus-inbox-queue-item:hover .terminus-inbox-queue-actions,
+.terminus-inbox-queue-item:focus-within .terminus-inbox-queue-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .terminus-inbox-queue-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.terminus-inbox-queue-item.is-editing .terminus-inbox-queue-actions {
+  display: none;
+}
+
+.terminus-inbox-queue-actions .terminus-icon-button {
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border-radius: var(--radius-s);
+  color: var(--text-normal);
+}
+
+.terminus-inbox-queue-actions .terminus-icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.terminus-inbox-queue-actions .terminus-icon-button:hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* Remove reads as a warning on hover. */
+.terminus-inbox-queue-actions .terminus-icon-button[aria-label^="Remove"]:hover {
+  color: var(--text-error);
 }
 
 .terminus-inbox-queue-steer {
@@ -2267,11 +2410,49 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-s);
+}
+
+.terminus-inbox-queue-actions .terminus-inbox-queue-steer:hover:not(:disabled) {
+  background-color: var(--background-modifier-hover);
 }
 
 .terminus-inbox-queue-editor {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* The foot of the comments queue: the one button that sends them all,
+   or why it has to wait. */
+.terminus-inbox-queue-foot {
+  display: flex;
+  align-items: center;
+  padding: 6px 2px 2px;
+  margin-top: 4px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.terminus-inbox-view button.terminus-inbox-queue-send {
+  flex: 1;
+  justify-content: center;
+  height: var(--tm-button-height);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+}
+
+.terminus-inbox-queue-waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tm-button-height);
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
 }
 
 /* Tasks sent from a session to new terminals, on its card. */
@@ -2550,7 +2731,6 @@
 }
 
 .terminus-inbox-view .terminus-inbox-next,
-.terminus-inbox-view .terminus-inbox-feedback-row button,
 .terminus-inbox-view .terminus-inbox-banner button {
   display: inline-flex;
   align-items: center;
@@ -2567,7 +2747,6 @@
 }
 
 .terminus-inbox-view .terminus-inbox-next:hover:not(:disabled),
-.terminus-inbox-view .terminus-inbox-feedback-row button:hover,
 .terminus-inbox-view .terminus-inbox-banner button:hover {
   background-color: var(--interactive-hover);
 }
@@ -3526,55 +3705,9 @@
 }
 
 .terminus-inbox-feedback {
-  padding: 8px 12px 10px 16px;
+  /* Lines up with the messages queue and the Tell box below it. */
+  padding: 8px 10px 10px;
   border-top: 1px solid var(--background-modifier-border);
-}
-
-.terminus-inbox-feedback-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 500;
-  color: var(--text-normal);
-}
-
-.terminus-inbox-feedback-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--tm-gap);
-  margin-top: 8px;
-}
-
-.terminus-inbox-feedback-list {
-  margin-top: 6px;
-}
-
-.terminus-inbox-feedback-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 0;
-  font-size: var(--font-ui-smaller);
-  color: var(--text-muted);
-}
-
-.terminus-inbox-feedback-place {
-  flex: none;
-  max-width: 45%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-monospace);
-  color: var(--text-faint);
-}
-
-.terminus-inbox-feedback-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .terminus-inbox-card-foot {
@@ -4399,6 +4532,203 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
 .terminus-review-pin-icon svg {
   width: 11px;
   height: 11px;
+}
+
+/* The same box on text selected in a note (review/noteReview.ts): fixed in
+   the window rather than over a browser page. */
+.terminus-review-composer.terminus-note-review {
+  --terminus-review-accent: var(--interactive-accent);
+  position: fixed;
+  z-index: var(--layer-popover);
+}
+
+.terminus-note-review-quote {
+  padding: var(--size-4-1) var(--size-4-2);
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.terminus-note-review-to {
+  display: flex;
+  align-items: center;
+  gap: var(--size-4-2);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-note-review-to-label {
+  color: var(--text-muted);
+  font-weight: var(--font-medium);
+}
+
+.terminus-note-review-to .dropdown {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Text marked Keep in a note (review/keepMarks.ts): a faint wash and a
+   dotted underline, quiet enough to read through, and a lock before it. */
+.terminus-keep-mark {
+  background: color-mix(in srgb, var(--interactive-accent) 9%, transparent);
+  text-decoration: underline dotted color-mix(in srgb, var(--interactive-accent) 55%, transparent);
+  text-underline-offset: 3px;
+  border-radius: 2px;
+}
+
+.terminus-keep-lock {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -1px;
+  margin-right: 3px;
+  padding: 1px;
+  border-radius: 3px;
+  color: color-mix(in srgb, var(--interactive-accent) 75%, var(--text-muted));
+  cursor: pointer;
+}
+
+.terminus-keep-lock svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+
+.terminus-keep-lock:hover,
+.terminus-keep-lock:focus-visible {
+  background: var(--background-modifier-hover);
+  color: var(--interactive-accent);
+}
+
+/* A queued comment's row: what was said (its type, then the text) over
+   where (the file and line), so the words get the width. */
+/* Up to two lines of what was said before it's cut; the chip flows with
+   the text as its first word. */
+.terminus-inbox-feedback-line {
+  min-width: 0;
+  line-height: 20px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.terminus-inbox-feedback-line .terminus-inbox-feedback-intent {
+  display: inline-block;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+.terminus-inbox-feedback-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--font-ui-smaller);
+  line-height: 16px;
+}
+
+.terminus-inbox-feedback-place {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-monospace);
+  color: var(--text-faint);
+}
+
+/* A queued comment being edited: inline in its row, not a card in a card.
+   The type's meaning stays in its tooltip here; the row is narrow. */
+.terminus-inbox-queue-item.is-editing {
+  padding: 6px 6px 8px 2px;
+  background-color: var(--background-secondary);
+}
+
+.terminus-inbox-feedback-editor {
+  --terminus-review-accent: var(--interactive-accent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.terminus-inbox-feedback-editor > .terminus-inbox-feedback-place {
+  font-size: var(--font-ui-smaller);
+  line-height: 20px;
+}
+
+.terminus-inbox-feedback-editor .terminus-review-intent-meaning {
+  display: none;
+}
+
+.terminus-inbox-feedback-editor .terminus-review-intents .terminus-review-intent {
+  height: 26px;
+  gap: 4px;
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-inbox-feedback-editor .terminus-review-intent .terminus-review-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.terminus-inbox-feedback-editor .terminus-review-text {
+  min-height: 52px;
+  font-size: var(--font-ui-small);
+}
+
+.terminus-inbox-feedback-editor .terminus-review-composer-actions {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.terminus-inbox-feedback-editor .terminus-review-shortcut {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.terminus-inbox-view .terminus-inbox-feedback-editor .terminus-review-composer-actions button {
+  flex: none;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+}
+
+/* Cancel is the quiet one: text until hovered. Save is the action. */
+.terminus-inbox-view .terminus-inbox-feedback-editor .terminus-review-composer-actions button:not(.mod-cta) {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+}
+
+.terminus-inbox-view .terminus-inbox-feedback-editor .terminus-review-composer-actions button:not(.mod-cta):hover {
+  background-color: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+/* Being edited, the editor takes the row's text and button columns. */
+.terminus-inbox-queue-item.is-editing .terminus-inbox-queue-body {
+  grid-column: 2 / 3;
+}
+
+.terminus-inbox-feedback-intent {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-medium);
+  line-height: 16px;
+}
+
+.terminus-inbox-feedback-intent.is-keep {
+  background: color-mix(in srgb, var(--interactive-accent) 16%, transparent);
+  color: var(--text-accent);
 }
 
 /* The composer, beside the picked element. */
