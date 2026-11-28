@@ -757,14 +757,30 @@ export class ReviewLayer {
     bindTextKeys(textarea, submit, finish);
   }
 
-  /** Scrolls the note's element into view and outlines it. */
+  /**
+   * Takes the user to the note's element wherever it is on the page: the
+   * screen it was left on, the slide of a deck, the dialog it was in (see
+   * GO_TO_PIN), scrolled into view and outlined.
+   */
   private async reveal(note: ReviewNote): Promise<void> {
     this.focusedNote = note.id;
-    try {
-      await this.view.driver.scrollToPin({ selector: note.element.selector, tag: note.element.tag, place: note.place });
-    } catch {
-      // Not on the page; the card already says so.
+    const driver = this.view.driver;
+    const query = { selector: note.element.selector, tag: note.element.tag, place: note.place };
+    let result = await driver.goToPin(query).catch(() => "missing" as const);
+    if (result === "route") {
+      // Another screen of the page: go there, then look again.
+      try {
+        await this.view.navigate(this.view.urlForPage(note) + (note.place?.route ?? ""));
+        await driver.waitForLoad().catch(() => undefined);
+        result = await driver.goToPin(query).catch(() => "missing" as const);
+      } catch (err) {
+        new Notice(`Terminus: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
     }
+    const number = note.id.slice(1);
+    if (result === "missing") new Notice(`Terminus: what comment ${number} is about isn't on the page now. It may have changed or moved.`);
+    else if (result !== "shown") new Notice(`Terminus: comment ${number} is on this page, but in a part of it that only the page itself can open.`);
     this.render();
     window.setTimeout(() => this.outlineFor(note.id), PIN_POLL_MS * 2);
     window.setTimeout(() => this.outlineEl.hide(), 1600);

@@ -42,6 +42,9 @@ export interface PinPlace {
   context: string | null;
   /** The element's text, to find it again when its selector stops fitting. */
   text: string;
+  /** The attributes that had `context` open, on it and a few levels up, to
+   *  open it again for "Show on the page" once it has closed. */
+  reveal?: Record<string, string>[];
 }
 
 /** What the page says about a pin now. */
@@ -264,6 +267,43 @@ const HELPERS = String.raw`
   function contextShowing(key) {
     return contextNodes(key).some((el) => showing(el) && inSight(el));
   }
+
+  // The element again: by its selector while that still finds an element
+  // of the same tag and text; else the one element anywhere with that tag
+  // and text (it moved); else the selector's, if the tag still fits (its
+  // text was edited, which is what a Change asks for).
+  function resolve(q) {
+    let el = null;
+    try { el = document.querySelector(q.selector); } catch (e) {}
+    const sameTag = !!el && el.tagName.toLowerCase() === q.tag;
+    const text = q.place ? q.place.text : "";
+    if (sameTag && (!text || textOf(el) === text)) return { el };
+    if (text) {
+      const matches = Array.from(document.getElementsByTagName(q.tag)).filter((m) => textOf(m) === text);
+      const pick = matches.length === 1 ? matches : matches.filter(showing);
+      if (pick.length === 1) return { el: pick[0] };
+    }
+    return sameTag ? { el, adopted: true } : null;
+  }
+
+  // What has a context open: a few attributes, on it and its ancestors.
+  const REVEAL_ATTRS = ["class", "style", "hidden", "open", "inert", "aria-hidden", "aria-expanded", "data-state", "data-open", "data-visible"];
+  const REVEAL_DEPTH = 4;
+  function revealStateOf(holder) {
+    const out = [];
+    let el = holder;
+    for (let level = 0; level < REVEAL_DEPTH; level++) {
+      if (!el || el.nodeType !== 1 || el === document.body || el === document.documentElement) break;
+      const attrs = {};
+      for (const name of REVEAL_ATTRS) {
+        const value = el.getAttribute(name);
+        if (value !== null) attrs[name] = value.slice(0, 600);
+      }
+      out.push(attrs);
+      el = el.parentElement;
+    }
+    return out;
+  }
 `;
 
 /**
@@ -274,7 +314,9 @@ export const PLACE_OF = String.raw`function () {
   const el = this.nodeType === 1 ? this : this.parentElement;
   if (!el) return null;
   const context = contextOf(el);
-  return { route: currentRoute(), view: currentViewKey(deckGroups()), context: context ? context.key : null, text: textOf(el) };
+  const place = { route: currentRoute(), view: currentViewKey(deckGroups()), context: context ? context.key : null, text: textOf(el) };
+  if (context) place.reveal = revealStateOf(context.el);
+  return place;
 }`;
 
 /**
@@ -304,24 +346,6 @@ export const PINS_FOR = String.raw`function (queries) {
   let route;
   const deck = () => groups || (groups = deckGroups());
   const view = () => (viewKey === null ? (viewKey = currentViewKey(deck())) : viewKey);
-
-  // The element again: by its selector while that still finds an element
-  // of the same tag and text; else the one element anywhere with that tag
-  // and text (it moved); else the selector's, if the tag still fits (its
-  // text was edited, which is what a Change asks for).
-  function resolve(q) {
-    let el = null;
-    try { el = document.querySelector(q.selector); } catch (e) {}
-    const sameTag = !!el && el.tagName.toLowerCase() === q.tag;
-    const text = q.place ? q.place.text : "";
-    if (sameTag && (!text || textOf(el) === text)) return { el };
-    if (text) {
-      const matches = Array.from(document.getElementsByTagName(q.tag)).filter((m) => textOf(m) === text);
-      const pick = matches.length === 1 ? matches : matches.filter(showing);
-      if (pick.length === 1) return { el: pick[0] };
-    }
-    return sameTag ? { el, adopted: true } : null;
-  }
 
   // On the page of the deck it was left on: the same pages up, or the
   // named ones it was left on still showing, or its own element showing
@@ -364,20 +388,93 @@ export const PINS_FOR = String.raw`function (queries) {
   });
 }`;
 
-/** Runs in the page with one PinQuery: scrolls its element into view.
- *  False when it isn't on the page. */
-export const SCROLL_TO_PIN = String.raw`function (q) {
+/**
+ * Runs in the page with one PinQuery: takes the user to its element,
+ * wherever on the page it is, the way Vault Publisher's overlay does.
+ *
+ *   - On another page of a deck: turns the deck to that page, by swapping
+ *     the attributes that make one page shown and the others hidden
+ *     between the page that's up and the one wanted. The deck has no
+ *     method to call, and this is the change it makes itself, so its own
+ *     Prev and Next still work afterwards.
+ *   - In a dialog or sheet that has closed: puts back the attributes that
+ *     had it open. Undone when the next note is shown, where the page
+ *     hasn't changed them since.
+ *   - Then scrolls it into view.
+ *
+ * Returns "route" when the note is on another screen (the caller goes
+ * there and asks again), "missing" when the element isn't on the page,
+ * "shown" when it's now on screen, else "hidden".
+ */
+export const GO_TO_PIN = String.raw`function (q) {
   ${HELPERS}
-  let el = null;
-  try { el = document.querySelector(q.selector); } catch (e) {}
-  const text = q.place ? q.place.text : "";
-  if (!(el && el.tagName.toLowerCase() === q.tag && (!text || textOf(el) === text)) && text) {
-    const matches = Array.from(document.getElementsByTagName(q.tag)).filter((m) => textOf(m) === text);
-    if (matches.length === 1) el = matches[0];
+  const VIEW_STATE_ATTRS = ["class", "style", "hidden", "open", "aria-hidden", "aria-selected", "aria-current", "aria-expanded",
+    "data-active", "data-state", "data-current", "data-visible"];
+  const swap = (a, b) => {
+    for (const name of VIEW_STATE_ATTRS) {
+      const from = a.getAttribute(name);
+      const to = b.getAttribute(name);
+      if (from === to) continue;
+      if (to === null) a.removeAttribute(name); else a.setAttribute(name, to);
+      if (from === null) b.removeAttribute(name); else b.setAttribute(name, from);
+    }
+  };
+
+  // The last note's dialog, put back the way the page had it.
+  const last = window.__terminusPeek;
+  window.__terminusPeek = null;
+  if (last) {
+    for (const change of last.slice().reverse()) {
+      if (!change.el.isConnected || change.el.getAttribute(change.name) !== change.after) continue;
+      if (change.before === null) change.el.removeAttribute(change.name); else change.el.setAttribute(change.name, change.before);
+    }
   }
-  if (!el || el.tagName.toLowerCase() !== q.tag) return false;
-  el.scrollIntoView({ block: "center", inline: "nearest" });
-  return true;
+
+  const place = q.place;
+  if (place && (place.route || null) !== currentRoute()) return "route";
+
+  // Turn the deck, a level at a time: an inner deck is only found once the
+  // outer one is on the right page.
+  if (place && place.view) {
+    const wanted = place.view.split(">");
+    for (let round = 0; round < 4; round++) {
+      if (currentViewKey(deckGroups()) === place.view) break;
+      let moved = false;
+      for (const group of deckGroups()) {
+        if (wanted.includes(viewKeyOf(group.shown))) continue;
+        const member = group.members.find((m) => m !== group.shown && wanted.includes(viewKeyOf(m)));
+        if (member) { swap(group.shown, member); moved = true; }
+      }
+      if (!moved) break;
+    }
+  }
+
+  const found = resolve(q);
+  if (!found) return "missing";
+  const el = found.el;
+
+  // Open the dialog it was left in, if that has closed.
+  if (place && place.context && place.reveal && place.reveal.length && !(showing(el) && inSight(el))) {
+    const holders = contextNodes(place.context);
+    const holder = holders.find((h) => h.contains(el)) || holders[0];
+    const changes = [];
+    let at = holder;
+    for (const saved of place.reveal) {
+      if (!at || at.nodeType !== 1 || at === document.body) break;
+      for (const name of REVEAL_ATTRS) {
+        const want = Object.prototype.hasOwnProperty.call(saved, name) ? saved[name] : null;
+        const have = at.getAttribute(name);
+        if (want === have) continue;
+        changes.push({ el: at, name, before: have, after: want });
+        if (want === null) at.removeAttribute(name); else at.setAttribute(name, want);
+      }
+      at = at.parentElement;
+    }
+    if (changes.length) window.__terminusPeek = changes;
+  }
+
+  el.scrollIntoView({ block: "center", inline: "center" });
+  return showing(el) && inSight(el) ? "shown" : "hidden";
 }`;
 
 export function isPinPlace(value: unknown): value is PinPlace {

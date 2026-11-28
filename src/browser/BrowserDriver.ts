@@ -2,7 +2,7 @@ import type { ConsoleLevel, DebuggerSession, GuestPage } from "terminus-node-bri
 import { parseKey } from "./keys";
 import { formatSnapshot, parseAxTree, type Snapshot } from "./snapshot";
 import type { Fingerprint, PickedElement } from "./review";
-import { PINS_FOR, PLACE_OF, SCROLL_TO_PIN, SHOWN_AT, isPinPlace, isPinState, type PinPlace, type PinQuery, type PinState } from "./pinPlace";
+import { PINS_FOR, PLACE_OF, GO_TO_PIN, SHOWN_AT, isPinPlace, isPinState, type PinPlace, type PinQuery, type PinState } from "./pinPlace";
 
 export interface ConsoleEntry {
   level: ConsoleLevel;
@@ -417,10 +417,10 @@ export class BrowserDriver {
   }
 
   /** Scrolls a selector's element to the middle of the viewport. */
-  /** Scrolls a review pin's element into view. False when it isn't on the page. */
-  async scrollToPin(query: PinQuery): Promise<boolean> {
-    const found = await this.evaluate(`(${SCROLL_TO_PIN})(${JSON.stringify(query)})`);
-    return found === true;
+  /** Takes the user to a review pin's element: see GO_TO_PIN. */
+  async goToPin(query: PinQuery): Promise<"route" | "missing" | "shown" | "hidden"> {
+    const result = await this.evaluate(`(${GO_TO_PIN})(${JSON.stringify(query)})`);
+    return result === "route" || result === "shown" || result === "hidden" ? result : "missing";
   }
 
   async stopPicking(): Promise<void> {
