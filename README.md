@@ -291,7 +291,11 @@ Look over a page in the Terminus browser, point at what you want changed and let
 
 **Keep, checked.** When you mark something Keep, Terminus remembers how it looks: its text, attributes and visible styles. After every page load and every answer from Claude it compares again, and if a kept element changed it warns you on the pin and in the list, with what changed. Ask Claude to restore it, or keep the new look. Sizes are only compared at the same page width, so resizing the pane doesn't set it off.
 
-Comments last for the Obsidian session and come back when you reopen the page; nothing is written to your vault. Pins follow their elements as the page scrolls and reflows, and comments on other pages of the same site are listed at the bottom.
+Comments last for the Obsidian session and come back when you reopen the page; nothing is written to your vault. Comments on other pages of the same site are listed at the bottom.
+
+**Pins stay on what you commented on.** A pin follows its element as the page scrolls and reflows, and finds it again by its text after a reload or an edit, even if it moved. It stays on its slide in a deck, its screen in a prototype, its dialog or sheet, and inside a device frame. When a comment's element isn't showing, its card says where it is, such as "On slide 3 of 5", and **Show on the page** takes you there: it opens the page, turns the deck, or switches the frame's screen. A sheet or menu you opened by clicking can be reopened with **Retrace**, which repeats your last clicks. If the element is gone or now appears twice, the pin stays where you dropped it, dashed, and the card says why.
+
+**Edits show up.** When a page comes from a file in your vault, the browser reloads it when that file, or a stylesheet or script beside it, changes, so Claude's edits appear as they land. **Reload** asks the site to bring its copy up to date first, so a Vault Publisher preview of a note is rebuilt after the note changes.
 
 **Open pages yourself.** You don't need an agent to use the browser: **Open a local page in the browser** in the command palette opens a localhost address (a dev server, say) or a site another plugin offers. This works whether or not agents may use the browser; that setting only governs what agents can do. For Claude to answer in the browser itself, turn on **Let agents use a browser**; without it, your comments still reach Claude as a message, and it replies in the terminal.
 
@@ -306,6 +310,7 @@ if (terminus?.version >= 1) {
       name: "My preview",
       open: async () => startServer(), // returns http://127.0.0.1:<port>/?token=…
       sourceFor: (pageUrl) => null, // optional: the vault file behind a page
+      refresh: async (pageUrl) => {}, // optional: bring the page up to date before Reload
     })
   );
 }

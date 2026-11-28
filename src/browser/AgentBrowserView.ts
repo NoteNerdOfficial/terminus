@@ -337,7 +337,7 @@ export class AgentBrowserView extends ItemView {
       return this.reloading;
     }
     const run = async (): Promise<void> => {
-      let problem: string | null = null;
+      let problem: string | null;
       do {
         this.reloadAgain = false;
         problem = await this.reloadOnce();
