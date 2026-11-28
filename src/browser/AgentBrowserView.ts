@@ -1,4 +1,4 @@
-import { ItemView, setIcon, setTooltip, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, setIcon, setTooltip, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import { guestPageForWebContentsId, webContentsIdOf, type GuestPage } from "terminus-node-bridge";
 import { AgentCursor, type Expression } from "./agentCursor";
 import { BrowserDriver, type BrowserActivity } from "./BrowserDriver";
@@ -18,6 +18,14 @@ export const AGENT_BROWSER_PARTITION = "terminus-agent-browser";
 const ERR_ABORTED = -3;
 /** How long the edge and the cursor's bubble stay after the last action. */
 const ACTING_MS = 2500;
+/** How long after the file behind the page changes to reload it: an agent
+ *  often writes a file several times in a row. Longer for a note, whose
+ *  page a site may have to build again, and which Obsidian saves as the
+ *  user types. */
+const SOURCE_SETTLE_MS = 400;
+const NOTE_SETTLE_MS = 1500;
+/** While the user is writing a comment, a reload would lose it: wait. */
+const COMPOSING_RETRY_MS = 1000;
 
 export interface AgentBrowserViewState {
   url?: string;
@@ -87,6 +95,10 @@ export class AgentBrowserView extends ItemView {
   private offReview: (() => void) | null = null;
   private cursor: AgentCursor | null = null;
   private actingTimer = 0;
+  private sourceTimer = 0;
+  /** A reload in progress, and whether another was asked for meanwhile. */
+  private reloading: Promise<void> | null = null;
+  private reloadAgain = false;
   /** Folders served for this view, stopped when it closes. */
   readonly servedSiteIds = new Set<string>();
   /** What agents drive the page through. */
@@ -187,7 +199,7 @@ export class AgentBrowserView extends ItemView {
     this.reviewButton.addEventListener("click", () => void this.review?.togglePicking());
     this.notesButton = this.barButton(bar, "messages-square", "Comments", () => this.review?.toggleTray());
     this.notesButton.addClass("terminus-agent-browser-notes");
-    this.barButton(bar, "rotate-cw", "Reload", () => this.page?.reload());
+    this.barButton(bar, "rotate-cw", "Reload", () => void this.reloadReporting());
     this.noticeEl = contentEl.createDiv({ cls: "terminus-agent-browser-notice" });
     this.noticeEl.hide();
 
@@ -270,6 +282,7 @@ export class AgentBrowserView extends ItemView {
     this.offReview?.();
     this.offReview = null;
     window.clearTimeout(this.actingTimer);
+    window.clearTimeout(this.sourceTimer);
     this.cursor?.dispose();
     this.driver.onActivity = null;
     this.driver.onConsoleError = null;
@@ -302,6 +315,71 @@ export class AgentBrowserView extends ItemView {
       page.clearHistory();
       this.historyCleared = true;
     }
+  }
+
+  /**
+   * Reloads the page, brought up to date first. A plugin's site may serve a
+   * copy it built from the vault, which an edit to the vault file doesn't
+   * change, so the site is asked to refresh it (BrowserSite.refresh); and
+   * one whose server restarted since is opened at its new address. A reload
+   * asked for while one is running runs once that one is done, so a change
+   * made meanwhile isn't missed. Throws, after reloading, with what the site
+   * said when it couldn't bring the page up to date.
+   */
+  reloadPage(): Promise<void> {
+    if (this.reloading) {
+      this.reloadAgain = true;
+      return this.reloading;
+    }
+    const run = async (): Promise<void> => {
+      let problem: string | null = null;
+      do {
+        this.reloadAgain = false;
+        problem = await this.reloadOnce();
+      } while (this.reloadAgain);
+      if (problem) throw new Error(problem);
+    };
+    this.reloading = run().finally(() => (this.reloading = null));
+    return this.reloading;
+  }
+
+  private async reloadOnce(): Promise<string | null> {
+    const page = await this.whenReady();
+    const url = this.currentUrl();
+    let problem: string | null = null;
+    if (this.registeredSiteId && url && /^https?:/i.test(url)) {
+      problem = await this.browser.refreshSitePage(this, url);
+      const moved = await this.browser.movedSiteUrl(this, url);
+      if (moved) {
+        await this.navigate(moved);
+        return problem;
+      }
+    }
+    page.reload();
+    return problem;
+  }
+
+  private async reloadReporting(): Promise<void> {
+    try {
+      await this.reloadPage();
+    } catch (err) {
+      new Notice(`Terminus: ${err instanceof Error ? err.message : String(err)}`, 8000);
+    }
+  }
+
+  /** From AgentBrowser when a file the page is built from changes: reloads
+   *  it once the writes have settled. */
+  sourceChanged(source: string): void {
+    window.clearTimeout(this.sourceTimer);
+    const delay = /\.md$/i.test(source) ? NOTE_SETTLE_MS : SOURCE_SETTLE_MS;
+    const fire = (): void => {
+      if (this.review?.isComposing) {
+        this.sourceTimer = window.setTimeout(fire, COMPOSING_RETRY_MS);
+        return;
+      }
+      void this.reloadReporting();
+    };
+    this.sourceTimer = window.setTimeout(fire, delay);
   }
 
   /**

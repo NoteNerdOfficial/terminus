@@ -32,6 +32,14 @@ export interface BrowserSite {
    * notes can tell the agent which file to change. Null when it doesn't know.
    */
   sourceFor?(pageUrl: string): string | null;
+  /**
+   * Optional: brings a page up to date before the browser reloads it, for
+   * a site that serves a copy built from the vault, which an edit to the
+   * vault file doesn't change. Terminus calls it on Reload, and when the
+   * file sourceFor names for the page changes. Throw with a message the
+   * user can act on; the page is reloaded either way.
+   */
+  refresh?(pageUrl: string): Promise<void>;
 }
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
@@ -55,6 +63,7 @@ export class BrowserSiteRegistry {
       description: typeof site.description === "string" ? site.description.trim().slice(0, 300) : undefined,
       open: () => site.open(),
       sourceFor: typeof site.sourceFor === "function" ? (url) => site.sourceFor!(url) : undefined,
+      refresh: typeof site.refresh === "function" ? (url) => Promise.resolve(site.refresh!(url)) : undefined,
     };
     this.sites.set(site.id, entry);
     this.changed();

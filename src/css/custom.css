@@ -5152,6 +5152,17 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
   display: block;
 }
 
+/* On the page, but on a slide or screen that isn't up: not a problem, just where it is. */
+.terminus-review-other-view {
+  display: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-review-card.is-other-view .terminus-review-other-view {
+  display: block;
+}
+
 /* Replies: set in from the comment on a tinted ground, each with who said it. */
 .terminus-review-thread {
   display: flex;

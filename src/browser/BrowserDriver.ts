@@ -2,6 +2,7 @@ import type { ConsoleLevel, DebuggerSession, GuestPage } from "terminus-node-bri
 import { parseKey } from "./keys";
 import { formatSnapshot, parseAxTree, type Snapshot } from "./snapshot";
 import type { Fingerprint, PickedElement } from "./review";
+import { PINS_FOR, PLACE_OF, SCROLL_TO_PIN, SHOWN_AT, isPinPlace, isPinState, type PinPlace, type PinQuery, type PinState } from "./pinPlace";
 
 export interface ConsoleEntry {
   level: ConsoleLevel;
@@ -43,12 +44,6 @@ function isFingerprint(value: unknown): value is Fingerprint {
   if (typeof value !== "object" || value === null) return false;
   const f = value as Record<string, unknown>;
   return typeof f.text === "string" && typeof f.attrs === "object" && f.attrs !== null && typeof f.styles === "object" && f.styles !== null;
-}
-
-function isRect(value: unknown): value is Rect {
-  if (typeof value !== "object" || value === null) return false;
-  const r = value as Record<string, unknown>;
-  return [r.x, r.y, r.width, r.height].every((n) => typeof n === "number" && Number.isFinite(n));
 }
 
 /**
@@ -128,18 +123,6 @@ const FINGERPRINTS_FOR = String.raw`function (selectors) {
     const attrs = {};
     for (const name of ATTRS) { const v = el.getAttribute(name); if (v !== null) attrs[name] = v.slice(0, 300); }
     return { text: (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 500), attrs, styles, viewport: window.innerWidth };
-  });
-}`;
-
-/** Runs in the page: each selector's element's box in the viewport, or null. */
-const RECTS_FOR = `function (selectors) {
-  return selectors.map((sel) => {
-    let el = null;
-    try { el = document.querySelector(sel); } catch (e) { return null; }
-    if (!el) return null;
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) return null;
-    return { x: r.left, y: r.top, width: r.width, height: r.height };
   });
 }`;
 
@@ -388,7 +371,33 @@ export class BrowserDriver {
       includeUserAgentShadowDOM: false,
       ignorePointerEventsNone: true,
     }).catch(() => null)) as { backendNodeId?: unknown } | null;
-    return typeof result?.backendNodeId === "number" ? result.backendNodeId : null;
+    if (typeof result?.backendNodeId !== "number") return null;
+    return (await this.shownNodeAt(result.backendNodeId, x, y).catch(() => null)) ?? result.backendNodeId;
+  }
+
+  /** The element at a point that can be seen: see SHOWN_AT. Runs on
+   *  every pointer move while picking, so the page objects it makes are
+   *  grouped and let go each time. */
+  private async shownNodeAt(backendNodeId: number, x: number, y: number): Promise<number | null> {
+    const objectGroup = "terminus-pick";
+    try {
+      const resolved = (await this.send("DOM.resolveNode", { backendNodeId, objectGroup })) as { object?: { objectId?: unknown } } | null;
+      const objectId = resolved?.object?.objectId;
+      if (typeof objectId !== "string") return null;
+      const found = (await this.send("Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: SHOWN_AT,
+        arguments: [{ value: x }, { value: y }],
+        returnByValue: false,
+        objectGroup,
+      })) as { result?: { objectId?: unknown } } | null;
+      const shownId = found?.result?.objectId;
+      if (typeof shownId !== "string") return null;
+      const described = (await this.send("DOM.describeNode", { objectId: shownId })) as { node?: { backendNodeId?: unknown } } | null;
+      return typeof described?.node?.backendNodeId === "number" ? described.node.backendNodeId : null;
+    } finally {
+      await this.send("Runtime.releaseObjectGroup", { objectGroup }).catch(() => undefined);
+    }
   }
 
   /** Outlines an element with Chrome's own highlight, or clears it with null. */
@@ -408,10 +417,9 @@ export class BrowserDriver {
   }
 
   /** Scrolls a selector's element to the middle of the viewport. */
-  async scrollIntoView(selector: string): Promise<boolean> {
-    const found = await this.evaluate(
-      `(() => { let el = null; try { el = document.querySelector(${JSON.stringify(selector)}); } catch (e) {} if (!el) return false; el.scrollIntoView({ block: "center", inline: "nearest" }); return true; })()`
-    );
+  /** Scrolls a review pin's element into view. False when it isn't on the page. */
+  async scrollToPin(query: PinQuery): Promise<boolean> {
+    const found = await this.evaluate(`(${SCROLL_TO_PIN})(${JSON.stringify(query)})`);
     return found === true;
   }
 
@@ -421,8 +429,9 @@ export class BrowserDriver {
     await this.highlight(null);
   }
 
-  /** What a picked element is, and where it is in the page's viewport. */
-  async describeNode(backendNodeId: number): Promise<{ element: PickedElement; rect: Rect | null }> {
+  /** What a picked element is, where it is in the page's viewport, and
+   *  which screen of the page it's on (see pinPlace.ts). */
+  async describeNode(backendNodeId: number): Promise<{ element: PickedElement; rect: Rect | null; place: PinPlace | null }> {
     let result: unknown;
     try {
       result = await this.session().send("DOM.resolveNode", { backendNodeId });
@@ -434,21 +443,23 @@ export class BrowserDriver {
     const value = await this.callOn(objectId, DESCRIBE_ELEMENT, [], "the element");
     const described = value as { element?: PickedElement; rect?: Rect } | null;
     if (!described?.element) throw new DriverError("page_error", "The page didn't describe the element");
-    return { element: described.element, rect: described.rect ?? null };
+    // Only for placing its pin: a page that won't say still gets its note.
+    const place = await this.callOn(objectId, PLACE_OF, [], "the element").catch(() => null);
+    return { element: described.element, rect: described.rect ?? null, place: isPinPlace(place) ? place : null };
   }
 
   /**
-   * Where each selector's element is now, in the page's viewport (CSS
-   * pixels), or null for one that isn't on the page or has no size.
-   * Reads only; never reported as the agent's activity.
+   * Where each review pin's element is now, in the page's viewport (CSS
+   * pixels), or whether it's on another slide or screen, or gone (see
+   * pinPlace.ts). Reads only; never reported as the agent's activity.
    */
-  async rectsFor(selectors: string[]): Promise<(Rect | null)[]> {
-    if (selectors.length === 0) return [];
-    const value = await this.evaluate(`(${RECTS_FOR})(${JSON.stringify(selectors)})`);
-    return Array.isArray(value) ? value.map((rect) => (isRect(rect) ? rect : null)) : selectors.map(() => null);
+  async pinsFor(queries: PinQuery[]): Promise<PinState[]> {
+    if (queries.length === 0) return [];
+    const value = await this.evaluate(`(${PINS_FOR})(${JSON.stringify(queries)})`);
+    if (!Array.isArray(value)) throw new DriverError("page_error", "The page didn't answer");
+    return queries.map((_, i) => (isPinState(value[i]) ? value[i] : { state: "missing" }));
   }
 
-  /** How each selector's element looks now, or null where it's missing. Reads only. */
   async fingerprintsFor(selectors: string[]): Promise<(Fingerprint | null)[]> {
     if (selectors.length === 0) return [];
     const value = await this.evaluate(`(${FINGERPRINTS_FOR})(${JSON.stringify(selectors)})`);

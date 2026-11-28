@@ -9,12 +9,14 @@ import {
   pathBasename,
   pathDirname,
   pathJoin,
+  realPathIfExists,
   writeFileBytes,
 } from "terminus-node-bridge";
 import type TerminusPlugin from "../main";
 import { AGENT_BROWSER_PARTITION, AGENT_BROWSER_VIEW_TYPE, AgentBrowserView } from "./AgentBrowserView";
 import { isAllowedBrowserUrl, parseServeRequest } from "./policy";
 import { ReviewBook, composeReviewPrompt, siteOfPageKey, type ReviewNote } from "./review";
+import { pageDependsOn } from "./pageFiles";
 import { BrowserSiteRegistry, withoutQuery } from "./sites";
 import { StaticSites } from "./StaticSites";
 
@@ -52,6 +54,9 @@ export class AgentBrowser {
   readonly review = new ReviewBook();
   private sessionPrepared = false;
   private nextId = 1;
+  /** The vault's folder with symlinks resolved, once known: a served
+   *  folder's path is resolved, so a vault file is matched both ways. */
+  private vaultRealBase: string | null = null;
 
   constructor(private readonly plugin: TerminusPlugin) {
     this.sites = new StaticSites(() => plugin.reviewServer.getPort());
@@ -65,6 +70,60 @@ export class AgentBrowser {
     this.plugin.app.workspace.onLayoutReady(() => {
       for (const leaf of this.plugin.app.workspace.getLeavesOfType(AGENT_BROWSER_VIEW_TYPE)) leaf.detach();
     });
+    // An edit to the file behind a page shows without a Reload: Obsidian
+    // reports changes made outside it too, such as an agent's.
+    void realPathIfExists(this.plugin.getVaultBasePath()).then((real) => (this.vaultRealBase = real));
+    this.plugin.registerEvent(this.plugin.app.vault.on("modify", (file) => this.vaultFileChanged(file.path)));
+  }
+
+  private vaultFileChanged(vaultPath: string): void {
+    const base = this.plugin.getVaultBasePath();
+    const paths = [pathJoin(base, vaultPath)];
+    if (this.vaultRealBase && this.vaultRealBase !== base) paths.push(pathJoin(this.vaultRealBase, vaultPath));
+    const bases = [base, ...(this.vaultRealBase ? [this.vaultRealBase] : [])];
+    for (const view of this.views()) {
+      const url = view.currentUrl();
+      if (!url) continue;
+      const source = this.sourceFor(view, url);
+      if (source && paths.some((path) => pageDependsOn(source, path, bases))) view.sourceChanged(source);
+    }
+  }
+
+  /**
+   * Brings a registered site's page up to date before it's reloaded (see
+   * BrowserSite.refresh). Returns the site's complaint, or null.
+   */
+  async refreshSitePage(view: AgentBrowserView, url: string): Promise<string | null> {
+    const site = view.registeredSiteId ? this.registry.get(view.registeredSiteId) : undefined;
+    if (!site?.refresh) return null;
+    try {
+      await site.refresh(url);
+      return null;
+    } catch (err) {
+      return `${site.name}: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  /**
+   * Where a registered site's page is now, when the site has moved to
+   * another address since it was opened (its server restarted on another
+   * port, as a plugin reload does); null when it hasn't. The same page and
+   * fragment, at the address the site gives now, token and all.
+   */
+  async movedSiteUrl(view: AgentBrowserView, url: string): Promise<string | null> {
+    if (!view.registeredSiteId) return null;
+    const fresh = await this.siteUrl(view.registeredSiteId).catch(() => null);
+    if (!fresh) return null;
+    try {
+      const now = new URL(url);
+      const next = new URL(fresh);
+      if (next.origin === now.origin) return null;
+      next.pathname = now.pathname;
+      next.hash = now.hash;
+      return next.toString();
+    } catch {
+      return null;
+    }
   }
 
   /** Called from onunload. */

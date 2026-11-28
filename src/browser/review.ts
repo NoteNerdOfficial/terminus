@@ -16,6 +16,8 @@
  * its own.
  */
 
+import type { PinPlace } from "./pinPlace";
+
 /** What the user wants done about an element: see INTENT_HINTS. */
 export type ReviewIntent = "change" | "question" | "keep";
 export type ReviewStatus = "open" | "sent" | "answered" | "fixed" | "resolved";
@@ -119,6 +121,9 @@ export interface ReviewNote {
   /** Where on the element the user clicked, as fractions across and down
    *  it, so its pin stays on that spot as the page moves. */
   anchor: { rx: number; ry: number } | null;
+  /** Which slide or screen of the page it was left on, so its pin shows
+   *  only there (see pinPlace.ts). Null when the page didn't say. */
+  place: PinPlace | null;
   /** Keep only: how the element looked when kept, to notice a change. */
   baseline: Fingerprint | null;
   /** Keep only: set while the element doesn't match its baseline. */
@@ -150,6 +155,7 @@ export class ReviewBook {
     screenshotPath: string | null;
     baseline?: Fingerprint | null;
     anchor?: { rx: number; ry: number } | null;
+    place?: PinPlace | null;
   }): ReviewNote {
     const text = cleanText(input.text);
     // A Keep says enough on its own; anything else needs words.
@@ -170,6 +176,7 @@ export class ReviewBook {
       screenshotPath: input.screenshotPath,
       sentTo: null,
       anchor: input.anchor ?? null,
+      place: input.place ?? null,
       baseline: input.intent === "keep" ? (input.baseline ?? null) : null,
       drift: null,
       createdAt: at,
@@ -222,6 +229,16 @@ export class ReviewBook {
     }
     if (removed) this.emit(null);
     return removed;
+  }
+
+  /**
+   * The text a pin's element has now, when it was edited where it stands,
+   * so the pin finds it straight away next time. Not a change anyone needs
+   * telling about, so nothing listening hears of it.
+   */
+  retext(id: string, text: string): void {
+    const note = this.notes.get(id);
+    if (note?.place) note.place = { ...note.place, text };
   }
 
   /** After the user sends notes to an agent. */

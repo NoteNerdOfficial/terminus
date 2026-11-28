@@ -4,6 +4,7 @@ import { INTENTS, INTENT_ICONS, bindTextKeys, renderComposerFields, renderShortc
 import type { AgentBrowser } from "./AgentBrowser";
 import type { AgentBrowserView } from "./AgentBrowserView";
 import type { Rect } from "./BrowserDriver";
+import { pinInSight, type PinPlace, type PinState } from "./pinPlace";
 import { INTENT_HINTS, INTENT_LABELS, STATUS_LABELS, elementLabel, siteOfPageKey, type Fingerprint, type PickedElement, type ReviewIntent, type ReviewNote } from "./review";
 
 /** How often pins follow their elements while the page scrolls or changes. */
@@ -23,6 +24,8 @@ const KEEP_CHECK_DELAY_MS = 800;
 interface Pending {
   element: PickedElement;
   rect: Rect | null;
+  /** Which slide or screen it's on. */
+  place: PinPlace | null;
   /** Where the user clicked, in the page's viewport. */
   point: { x: number; y: number };
   screenshotPath: string | null;
@@ -55,7 +58,8 @@ export class ReviewLayer {
   private pending: Pending | null = null;
   private pollTimer = 0;
   private polling = false;
-  private rects = new Map<string, Rect | null>();
+  /** Where each pin's element is now, from the last poll. */
+  private pins = new Map<string, PinState>();
   private pinEls = new Map<string, HTMLElement>();
   private focusedNote: string | null = null;
   /** Which note's follow-up or edit box is open in the tray. */
@@ -106,6 +110,12 @@ export class ReviewLayer {
 
   get trayOpen(): boolean {
     return this.trayEl.isShown();
+  }
+
+  /** Whether the user is writing a comment, an edit or a follow-up, which a
+   *  reload of the page would throw away. */
+  get isComposing(): boolean {
+    return this.pending !== null || this.editing !== null;
   }
 
   /** Notes on the page showing now. */
@@ -214,7 +224,7 @@ export class ReviewLayer {
     // Off, or it would be in the element's screenshot.
     await driver.highlight(null);
     this.pickSurface.hide();
-    let described: { element: PickedElement; rect: Rect | null };
+    let described: { element: PickedElement; rect: Rect | null; place: PinPlace | null };
     try {
       described = await driver.describeNode(backendNodeId);
     } catch (err) {
@@ -298,6 +308,7 @@ export class ReviewLayer {
         screenshotPath: pending.screenshotPath,
         baseline,
         anchor: anchorWithin(pending.point, pending.rect),
+        place: pending.place,
       });
       this.focusedNote = note.id;
     } catch (err) {
@@ -327,7 +338,7 @@ export class ReviewLayer {
   /** From the view when the page changes: pins for the new page. */
   pageChanged(): void {
     this.closeComposer();
-    this.rects.clear();
+    this.pins.clear();
     this.render();
     void this.view.driver.highlight(null);
     this.scheduleKeepCheck();
@@ -433,27 +444,34 @@ export class ReviewLayer {
   /**
    * Puts each pin's tip where the user clicked, kept in step with the
    * element: the point is saved as a fraction across and down it, so the
-   * pin follows a scroll, a reflow or a resize. Pins that would land on the
-   * same spot sit side by side.
+   * pin follows a scroll, a reflow or a resize. A pin shows only while its
+   * element is showing on the slide or screen it was left on, and its tip
+   * can be seen: one scrolled out of the pane hides rather than sticking to
+   * the edge, where it would look like it belonged to something else. Pins
+   * that would land on the same spot sit side by side.
    */
   private placePins(): void {
     const taken = new Map<string, number>();
-    const width = this.layerEl.clientWidth;
+    const viewport = { width: this.layerEl.clientWidth, height: this.layerEl.clientHeight };
     for (const [id, pin] of this.pinEls) {
-      const rect = this.rects.get(id);
+      const state = this.pins.get(id);
       const note = this.browser.review.get(id);
-      if (!rect || !note) {
+      if (!state || state.state !== "shown" || !note) {
+        pin.hide();
+        continue;
+      }
+      const anchor = note.anchor ?? { rx: 1, ry: 0 };
+      const x = state.x + anchor.rx * state.width;
+      const y = state.y + anchor.ry * state.height;
+      if (!pinInSight(x, y, state.clip, viewport)) {
         pin.hide();
         continue;
       }
       pin.show();
-      const anchor = note.anchor ?? { rx: 1, ry: 0 };
-      const x = rect.x + anchor.rx * rect.width;
-      const y = rect.y + anchor.ry * rect.height;
       const spot = `${Math.round(x / 12)}:${Math.round(y / 12)}`;
       const shift = taken.get(spot) ?? 0;
       taken.set(spot, shift + pin.offsetWidth + 3);
-      const left = Math.max(2, Math.min(x - PIN_TIP_X + shift, width - pin.offsetWidth - 4));
+      const left = Math.max(2, Math.min(x - PIN_TIP_X + shift, viewport.width - pin.offsetWidth - 4));
       pin.style.left = `${left}px`;
       pin.style.top = `${Math.max(2, y - PIN_HEIGHT)}px`;
     }
@@ -471,8 +489,12 @@ export class ReviewLayer {
       }
       if (this.view.isShown()) {
         try {
-          const rects = await this.view.driver.rectsFor(notes.map((n) => n.element.selector));
-          notes.forEach((note, i) => this.rects.set(note.id, rects[i] ?? null));
+          const states = await this.view.driver.pinsFor(notes.map((n) => ({ selector: n.element.selector, tag: n.element.tag, place: n.place })));
+          notes.forEach((note, i) => {
+            const state = states[i] ?? { state: "missing" };
+            this.pins.set(note.id, state);
+            if (state.state === "shown" && state.text !== undefined) this.browser.review.retext(note.id, state.text);
+          });
         } catch {
           // Loading, or gone: try again next tick.
         }
@@ -484,17 +506,20 @@ export class ReviewLayer {
     void tick();
   }
 
-  /** Tray cards whose element isn't on the page say so. */
+  /** Tray cards whose element isn't on the page, or is on another slide
+   *  or screen of it, say so. */
   private markMissing(notes: ReviewNote[]): void {
     for (const note of notes) {
       const card = this.trayEl.querySelector(`[data-note="${note.id}"]`);
-      card?.toggleClass("is-missing", this.rects.has(note.id) && this.rects.get(note.id) === null);
+      const state = this.pins.get(note.id)?.state;
+      card?.toggleClass("is-missing", state === "missing");
+      card?.toggleClass("is-other-view", state === "elsewhere");
     }
   }
 
   private outlineFor(id: string): void {
-    const rect = this.rects.get(id);
-    if (rect) this.showOutline(rect);
+    const state = this.pins.get(id);
+    if (state?.state === "shown") this.showOutline(state);
   }
 
   private showOutline(rect: Rect): void {
@@ -628,6 +653,7 @@ export class ReviewLayer {
     if (first?.by === "user") card.createDiv({ cls: "terminus-review-comment", text: first.text });
     card.createDiv({ cls: "terminus-review-element", text: elementLabel(note.element) });
     if (note.intent !== "keep") card.createDiv({ cls: "terminus-review-missing", text: "Not on the page now: it may have changed or moved." });
+    card.createDiv({ cls: "terminus-review-other-view", text: "On another slide or screen of this page, or out of sight." });
     if (note.drift) {
       const drift = card.createDiv({ cls: "terminus-review-drift" });
       drift.createDiv({ cls: "terminus-review-drift-title", text: "Changed since you kept it" });
@@ -735,7 +761,7 @@ export class ReviewLayer {
   private async reveal(note: ReviewNote): Promise<void> {
     this.focusedNote = note.id;
     try {
-      await this.view.driver.scrollIntoView(note.element.selector);
+      await this.view.driver.scrollToPin({ selector: note.element.selector, tag: note.element.tag, place: note.place });
     } catch {
       // Not on the page; the card already says so.
     }

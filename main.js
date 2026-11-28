@@ -83,12 +83,12 @@ var require_fs = __commonJS({
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.pathJoin = pathJoin19;
     exports.pathBasename = pathBasename15;
-    exports.pathDirname = pathDirname5;
-    exports.pathRelative = pathRelative14;
+    exports.pathDirname = pathDirname6;
+    exports.pathRelative = pathRelative15;
     exports.pathResolve = pathResolve2;
     exports.pathExtname = pathExtname2;
     exports.pathIsAbsolute = pathIsAbsolute2;
-    exports.realPathIfExists = realPathIfExists3;
+    exports.realPathIfExists = realPathIfExists4;
     exports.fileKind = fileKind3;
     exports.readFileBytesIfExists = readFileBytesIfExists2;
     exports.fileExistsSync = fileExistsSync6;
@@ -112,10 +112,10 @@ var require_fs = __commonJS({
     function pathBasename15(filePath, ext) {
       return nodePath.basename(filePath, ext);
     }
-    function pathDirname5(filePath) {
+    function pathDirname6(filePath) {
       return nodePath.dirname(filePath);
     }
-    function pathRelative14(from, to) {
+    function pathRelative15(from, to) {
       return nodePath.relative(from, to);
     }
     function pathResolve2(...segments) {
@@ -127,7 +127,7 @@ var require_fs = __commonJS({
     function pathIsAbsolute2(filePath) {
       return nodePath.isAbsolute(filePath);
     }
-    async function realPathIfExists3(filePath) {
+    async function realPathIfExists4(filePath) {
       try {
         return await fsPromises.realpath(filePath);
       } catch (err) {
@@ -954,7 +954,7 @@ var TerminusMenu = class {
 };
 
 // src/main.ts
-var import_terminus_node_bridge37 = __toESM(require_dist());
+var import_terminus_node_bridge38 = __toESM(require_dist());
 
 // src/server/ReviewServer.ts
 var import_terminus_node_bridge = __toESM(require_dist());
@@ -21388,7 +21388,7 @@ var ReviewBook = class {
     this.listeners = /* @__PURE__ */ new Set();
   }
   add(input) {
-    var _a7, _b;
+    var _a7, _b, _c2;
     const text = cleanText(input.text);
     if (!text && input.intent !== "keep") throw new Error("A comment needs some text");
     if (this.notes.size >= MAX_NOTES) throw new Error(`There are already ${MAX_NOTES} review notes; clear some first`);
@@ -21407,7 +21407,8 @@ var ReviewBook = class {
       screenshotPath: input.screenshotPath,
       sentTo: null,
       anchor: (_a7 = input.anchor) != null ? _a7 : null,
-      baseline: input.intent === "keep" ? (_b = input.baseline) != null ? _b : null : null,
+      place: (_b = input.place) != null ? _b : null,
+      baseline: input.intent === "keep" ? (_c2 = input.baseline) != null ? _c2 : null : null,
       drift: null,
       createdAt: at3,
       updatedAt: at3
@@ -21453,6 +21454,15 @@ var ReviewBook = class {
     }
     if (removed) this.emit(null);
     return removed;
+  }
+  /**
+   * The text a pin's element has now, when it was edited where it stands,
+   * so the pin finds it straight away next time. Not a change anyone needs
+   * telling about, so nothing listening hears of it.
+   */
+  retext(id, text) {
+    const note = this.notes.get(id);
+    if (note == null ? void 0 : note.place) note.place = { ...note.place, text };
   }
   /** After the user sends notes to an agent. */
   markSent(ids, token) {
@@ -25670,6 +25680,317 @@ function formatSnapshot(nodes, maxLines = MAX_SNAPSHOT_LINES) {
   return { text: lines.join("\n"), refs, labels, truncated };
 }
 
+// src/browser/pinPlace.ts
+var HELPERS = String.raw`
+  const VIEW_ATTRS = ["data-osp-view", "data-slide", "data-page", "data-view", "data-step", "data-index", "name", "aria-label"];
+  const VIEW_SCAN_LIMIT = 600;
+  const CONTEXT_LIMIT = 12;
+  const POPUP_ROLES = /^(dialog|alertdialog|menu|listbox|tooltip)$/;
+  const POPUP_CLASS = /(^|[-_])(modal|sheet|bottomsheet|drawer|popup|popover|dialog|dropdown|menu|toast|tooltip|overlay|lightbox|snackbar)([-_]|$)/i;
+  const STATE_CLASS = /^(is|has)-|(^|[-_])(open|opened|active|show|shown|showing|visible|in|out|enter|entering|entered|leave|leaving|exit|exiting|hidden|closed|closing|expanded|collapsed|on|off|up|down|animating|animated|transition|transitioning|current|present|past|future|selected)$/i;
+  const flat = (s, n) => (s || "").replace(/\s+/g, " ").trim().slice(0, n);
+  const textOf = (el) => flat(el.textContent, 200);
+
+  // Vault Publisher's own overlay sits at the top of a page it serves; it
+  // must not count as one of a deck's pages.
+  const childElements = (node) =>
+    Array.from(node && node.children ? node.children : []).filter((el) => el.id !== "osp-overlay-host");
+
+  // Whether this element itself is shown, saying nothing about its parents.
+  function shownSelf(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.hasAttribute("hidden")) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+    const style = getComputedStyle(el);
+    if (style.display === "none") return false;
+    if (style.visibility === "hidden" || style.visibility === "collapse") return false;
+    if (style.opacity === "0") return false;
+    // display: contents draws no box of its own, but its children do.
+    if (style.display === "contents") return true;
+    return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  }
+
+  // Whether this element is shown, parents included.
+  function showing(el) {
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      if (!shownSelf(node)) return false;
+    }
+    return true;
+  }
+
+  // What a page of a deck is called: what its author named it, else where
+  // it sits (with the count, so inserting a slide changes every key below
+  // rather than handing one slide's name to the next).
+  function viewKeyOf(el) {
+    if (el.id) return "#" + el.id;
+    for (const name of VIEW_ATTRS) {
+      const value = el.getAttribute(name);
+      if (value) return name + "=" + value;
+    }
+    const kids = childElements(el.parentNode);
+    return el.tagName.toLowerCase() + ":" + kids.indexOf(el) + "/" + kids.length;
+  }
+
+  // Every run of same-tag siblings with exactly one shown and at least one
+  // hidden: the signature of a deck, whatever built it.
+  function deckGroups() {
+    if (!document.body) return [];
+    const found = [];
+    const queue = [document.body];
+    let seen = 0;
+    while (queue.length && seen < VIEW_SCAN_LIMIT) {
+      const kids = childElements(queue.shift());
+      const groups = new Map();
+      const shown = [];
+      for (const kid of kids) {
+        seen++;
+        const up = shownSelf(kid);
+        if (up) shown.push(kid);
+        const tag = kid.tagName;
+        if (!groups.has(tag)) groups.set(tag, { members: [], shown: [] });
+        const group = groups.get(tag);
+        group.members.push(kid);
+        if (up) group.shown.push(kid);
+      }
+      for (const group of groups.values()) {
+        if (group.shown.length === 1 && group.members.length > 1) found.push({ members: group.members, shown: group.shown[0] });
+      }
+      queue.push(...shown);
+    }
+    return found;
+  }
+
+  function currentViewKey(groups) {
+    return groups.map((group) => viewKeyOf(group.shown)).sort().join(">");
+  }
+
+  // The query and fragment that tell an app's screens apart. A fragment
+  // that names an element on the page is a place to scroll to, not a
+  // screen, so it's left out; a token-shaped "t" (Vault Publisher's) too.
+  function currentRoute() {
+    const params = location.search.slice(1).split("&").filter((p) => p && !/^t=[a-z0-9]{24,32}$/i.test(p)).sort();
+    let hash = location.hash.length > 1 ? location.hash : "";
+    if (hash) {
+      let id = hash.slice(1);
+      try { id = decodeURIComponent(id); } catch (e) {}
+      if (document.getElementById(id) || document.getElementsByName(id).length) hash = "";
+    }
+    const route = (params.length ? "?" + params.join("&") : "") + hash;
+    return route || null;
+  }
+
+  function stableClasses(el) {
+    return String(el.getAttribute("class") || "").split(/\s+/).filter((c) => c && !STATE_CLASS.test(c)).sort();
+  }
+
+  // A name for a sheet, popup or menu nobody named: what it says it is,
+  // without the classes that only say whether it's open.
+  function popupKeyOf(el) {
+    const tag = el.tagName.toLowerCase();
+    const role = el.getAttribute("role") || "";
+    const classes = stableClasses(el);
+    const says = tag === "dialog" || POPUP_ROLES.test(role) || el.getAttribute("aria-modal") === "true" ||
+      el.hasAttribute("popover") || classes.some((c) => POPUP_CLASS.test(c));
+    if (!says) return "";
+    if (classes.length) return "~" + tag + "." + classes.join(".");
+    if (role) return "~" + tag + "[role=" + role + "]";
+    return "~" + tag;
+  }
+
+  function contextKeyOf(el) {
+    if (el.id) return "#" + el.id;
+    for (const name of VIEW_ATTRS) {
+      const value = el.getAttribute(name);
+      if (value) return name + "=" + value;
+    }
+    return popupKeyOf(el);
+  }
+
+  // The nearest named thing an element is inside, a few levels up at most:
+  // further up is the app's outer frame, which never closes.
+  function contextOf(node) {
+    let up = 0;
+    for (let el = node; el && el.nodeType === 1; el = el.parentElement) {
+      if (el === document.body || el === document.documentElement) break;
+      if (++up > CONTEXT_LIMIT) break;
+      const key = contextKeyOf(el);
+      if (key) return { key, el };
+    }
+    return null;
+  }
+
+  function contextNodes(key) {
+    if (!key) return [];
+    if (key[0] === "#") {
+      const one = document.getElementById(key.slice(1));
+      return one ? [one] : [];
+    }
+    if (key[0] === "~") {
+      const tag = key.slice(1).split(/[.[]/)[0] || "*";
+      return Array.from(document.getElementsByTagName(tag)).filter((el) => popupKeyOf(el) === key);
+    }
+    const eq = key.indexOf("=");
+    if (eq === -1) return [];
+    const name = key.slice(0, eq);
+    const value = key.slice(eq + 1);
+    let found = [];
+    try { found = Array.from(document.querySelectorAll("[" + name + "]")); } catch (e) { return []; }
+    return found.filter((el) => el.getAttribute(name) === value);
+  }
+
+  // What clips an element: ancestors that hide their overflow, and the
+  // window for something held to it. The document itself isn't a clip: a
+  // paragraph below the fold is on the page.
+  function clipOf(el) {
+    let clip = null;
+    const cut = (box) => {
+      if (!clip) { clip = { left: box.left, top: box.top, right: box.right, bottom: box.bottom }; return; }
+      clip.left = Math.max(clip.left, box.left);
+      clip.top = Math.max(clip.top, box.top);
+      clip.right = Math.min(clip.right, box.right);
+      clip.bottom = Math.min(clip.bottom, box.bottom);
+    };
+    let fixed = getComputedStyle(el).position === "fixed";
+    for (let at = el.parentElement; at; at = at.parentElement) {
+      if (at === document.body || at === document.documentElement) break;
+      const style = getComputedStyle(at);
+      if (style.position === "fixed") fixed = true;
+      if (style.overflowX !== "visible" || style.overflowY !== "visible") {
+        const box = at.getBoundingClientRect();
+        if (box.width || box.height) cut(box);
+      }
+    }
+    if (fixed) cut({ left: 0, top: 0, right: innerWidth, bottom: innerHeight });
+    return clip;
+  }
+
+  function inSight(el) {
+    const clip = clipOf(el);
+    if (!clip) return true;
+    const box = el.getBoundingClientRect();
+    const w = Math.min(box.right, clip.right) - Math.max(box.left, clip.left);
+    const h = Math.min(box.bottom, clip.bottom) - Math.max(box.top, clip.top);
+    return w > 1 && h > 1;
+  }
+
+  function contextShowing(key) {
+    return contextNodes(key).some((el) => showing(el) && inSight(el));
+  }
+`;
+var PLACE_OF = String.raw`function () {
+  ${HELPERS}
+  const el = this.nodeType === 1 ? this : this.parentElement;
+  if (!el) return null;
+  const context = contextOf(el);
+  return { route: currentRoute(), view: currentViewKey(deckGroups()), context: context ? context.key : null, text: textOf(el) };
+}`;
+var SHOWN_AT = String.raw`function (x, y) {
+  ${HELPERS}
+  const el = this.nodeType === 1 ? this : this.parentElement;
+  if (el && showing(el)) return el;
+  for (const candidate of document.elementsFromPoint(x, y)) {
+    if (showing(candidate)) return candidate;
+  }
+  return el;
+}`;
+var PINS_FOR = String.raw`function (queries) {
+  ${HELPERS}
+  let groups = null;
+  let viewKey = null;
+  let route;
+  const deck = () => groups || (groups = deckGroups());
+  const view = () => (viewKey === null ? (viewKey = currentViewKey(deck())) : viewKey);
+
+  // The element again: by its selector while that still finds an element
+  // of the same tag and text; else the one element anywhere with that tag
+  // and text (it moved); else the selector's, if the tag still fits (its
+  // text was edited, which is what a Change asks for).
+  function resolve(q) {
+    let el = null;
+    try { el = document.querySelector(q.selector); } catch (e) {}
+    const sameTag = !!el && el.tagName.toLowerCase() === q.tag;
+    const text = q.place ? q.place.text : "";
+    if (sameTag && (!text || textOf(el) === text)) return { el };
+    if (text) {
+      const matches = Array.from(document.getElementsByTagName(q.tag)).filter((m) => textOf(m) === text);
+      const pick = matches.length === 1 ? matches : matches.filter(showing);
+      if (pick.length === 1) return { el: pick[0] };
+    }
+    return sameTag ? { el, adopted: true } : null;
+  }
+
+  // On the page of the deck it was left on: the same pages up, or the
+  // named ones it was left on still showing, or its own element showing
+  // inside the page that's up (a key can differ over a banner that rotates).
+  function onThisView(place, el) {
+    if (!place.view || place.view === view()) return true;
+    const parts = place.view.split(">");
+    if (parts.every((part) => contextNodes(part).some((n) => showing(n) && inSight(n)))) return true;
+    return deck().some((group) => group.shown.contains(el));
+  }
+
+  // Still inside the thing it was left in, and that's open.
+  function inContext(place, el) {
+    if (!place.context) return true;
+    for (let at = el, up = 0; at && at.nodeType === 1 && up <= CONTEXT_LIMIT; at = at.parentElement, up++) {
+      if (contextKeyOf(at) === place.context) return showing(at) && inSight(at);
+    }
+    // Moved out of it, or it's named differently now: whether it's open.
+    return contextShowing(place.context);
+  }
+
+  return queries.map((q) => {
+    const place = q.place;
+    if (place) {
+      if (route === undefined) route = currentRoute();
+      if ((place.route || null) !== route) return { state: "elsewhere" };
+    }
+    const found = resolve(q);
+    if (!found) return { state: "missing" };
+    const el = found.el;
+    if (!showing(el)) return { state: "elsewhere" };
+    if (place && (!onThisView(place, el) || !inContext(place, el))) return { state: "elsewhere" };
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return { state: "elsewhere" };
+    const shown = { state: "shown", x: r.left, y: r.top, width: r.width, height: r.height, clip: clipOf(el) };
+    // Its text was edited in place: remember the new text, once the page
+    // has finished loading, so the next look finds it straight away.
+    if (found.adopted && document.readyState === "complete") shown.text = textOf(el);
+    return shown;
+  });
+}`;
+var SCROLL_TO_PIN = String.raw`function (q) {
+  ${HELPERS}
+  let el = null;
+  try { el = document.querySelector(q.selector); } catch (e) {}
+  const text = q.place ? q.place.text : "";
+  if (!(el && el.tagName.toLowerCase() === q.tag && (!text || textOf(el) === text)) && text) {
+    const matches = Array.from(document.getElementsByTagName(q.tag)).filter((m) => textOf(m) === text);
+    if (matches.length === 1) el = matches[0];
+  }
+  if (!el || el.tagName.toLowerCase() !== q.tag) return false;
+  el.scrollIntoView({ block: "center", inline: "nearest" });
+  return true;
+}`;
+function isPinPlace(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const p2 = value;
+  return (p2.route === null || typeof p2.route === "string") && typeof p2.view === "string" && (p2.context === null || typeof p2.context === "string") && typeof p2.text === "string";
+}
+function isPinState(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const s15 = value;
+  if (s15.state === "elsewhere" || s15.state === "missing") return true;
+  return s15.state === "shown" && [s15.x, s15.y, s15.width, s15.height].every((n) => typeof n === "number" && Number.isFinite(n));
+}
+function pinInSight(x, y2, clip2, viewport) {
+  const slack = 2;
+  if (x < -slack || y2 < -slack || x > viewport.width + slack || y2 > viewport.height + slack) return false;
+  if (!clip2) return true;
+  if (clip2.right <= clip2.left || clip2.bottom <= clip2.top) return false;
+  return x >= clip2.left - slack && x <= clip2.right + slack && y2 >= clip2.top - slack && y2 <= clip2.bottom + slack;
+}
+
 // src/browser/BrowserDriver.ts
 var DriverError = class extends Error {
   constructor(code, message) {
@@ -25686,11 +26007,6 @@ function isFingerprint(value) {
   if (typeof value !== "object" || value === null) return false;
   const f = value;
   return typeof f.text === "string" && typeof f.attrs === "object" && f.attrs !== null && typeof f.styles === "object" && f.styles !== null;
-}
-function isRect(value) {
-  if (typeof value !== "object" || value === null) return false;
-  const r = value;
-  return [r.x, r.y, r.width, r.height].every((n) => typeof n === "number" && Number.isFinite(n));
 }
 var DESCRIBE_ELEMENT = String.raw`function () {
   const el = this.nodeType === 1 ? this : this.parentElement;
@@ -25758,16 +26074,6 @@ var FINGERPRINTS_FOR = String.raw`function (selectors) {
     const attrs = {};
     for (const name of ATTRS) { const v = el.getAttribute(name); if (v !== null) attrs[name] = v.slice(0, 300); }
     return { text: (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 500), attrs, styles, viewport: window.innerWidth };
-  });
-}`;
-var RECTS_FOR = `function (selectors) {
-  return selectors.map((sel) => {
-    let el = null;
-    try { el = document.querySelector(sel); } catch (e) { return null; }
-    if (!el) return null;
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) return null;
-    return { x: r.left, y: r.top, width: r.width, height: r.height };
   });
 }`;
 var sleep = (ms3) => new Promise((resolve) => window.setTimeout(resolve, ms3));
@@ -25966,13 +26272,40 @@ var BrowserDriver = class {
   }
   /** The element at a point in the page's viewport (CSS pixels), or null. */
   async nodeAt(x, y2) {
+    var _a7;
     const result = await this.send("DOM.getNodeForLocation", {
       x: Math.round(x),
       y: Math.round(y2),
       includeUserAgentShadowDOM: false,
       ignorePointerEventsNone: true
     }).catch(() => null);
-    return typeof (result == null ? void 0 : result.backendNodeId) === "number" ? result.backendNodeId : null;
+    if (typeof (result == null ? void 0 : result.backendNodeId) !== "number") return null;
+    return (_a7 = await this.shownNodeAt(result.backendNodeId, x, y2).catch(() => null)) != null ? _a7 : result.backendNodeId;
+  }
+  /** The element at a point that can be seen: see SHOWN_AT. Runs on
+   *  every pointer move while picking, so the page objects it makes are
+   *  grouped and let go each time. */
+  async shownNodeAt(backendNodeId, x, y2) {
+    var _a7, _b, _c2;
+    const objectGroup = "terminus-pick";
+    try {
+      const resolved = await this.send("DOM.resolveNode", { backendNodeId, objectGroup });
+      const objectId = (_a7 = resolved == null ? void 0 : resolved.object) == null ? void 0 : _a7.objectId;
+      if (typeof objectId !== "string") return null;
+      const found = await this.send("Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: SHOWN_AT,
+        arguments: [{ value: x }, { value: y2 }],
+        returnByValue: false,
+        objectGroup
+      });
+      const shownId = (_b = found == null ? void 0 : found.result) == null ? void 0 : _b.objectId;
+      if (typeof shownId !== "string") return null;
+      const described = await this.send("DOM.describeNode", { objectId: shownId });
+      return typeof ((_c2 = described == null ? void 0 : described.node) == null ? void 0 : _c2.backendNodeId) === "number" ? described.node.backendNodeId : null;
+    } finally {
+      await this.send("Runtime.releaseObjectGroup", { objectGroup }).catch(() => void 0);
+    }
   }
   /** Outlines an element with Chrome's own highlight, or clears it with null. */
   async highlight(backendNodeId) {
@@ -25989,10 +26322,9 @@ var BrowserDriver = class {
     await this.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: Math.round(x), y: Math.round(y2), deltaX, deltaY }).catch(() => void 0);
   }
   /** Scrolls a selector's element to the middle of the viewport. */
-  async scrollIntoView(selector) {
-    const found = await this.evaluate(
-      `(() => { let el = null; try { el = document.querySelector(${JSON.stringify(selector)}); } catch (e) {} if (!el) return false; el.scrollIntoView({ block: "center", inline: "nearest" }); return true; })()`
-    );
+  /** Scrolls a review pin's element into view. False when it isn't on the page. */
+  async scrollToPin(query) {
+    const found = await this.evaluate(`(${SCROLL_TO_PIN})(${JSON.stringify(query)})`);
     return found === true;
   }
   async stopPicking() {
@@ -26001,7 +26333,8 @@ var BrowserDriver = class {
     if (!((_a7 = this.debugger) == null ? void 0 : _a7.isAttached())) return;
     await this.highlight(null);
   }
-  /** What a picked element is, and where it is in the page's viewport. */
+  /** What a picked element is, where it is in the page's viewport, and
+   *  which screen of the page it's on (see pinPlace.ts). */
   async describeNode(backendNodeId) {
     var _a7, _b;
     let result;
@@ -26015,19 +26348,20 @@ var BrowserDriver = class {
     const value = await this.callOn(objectId, DESCRIBE_ELEMENT, [], "the element");
     const described = value;
     if (!(described == null ? void 0 : described.element)) throw new DriverError("page_error", "The page didn't describe the element");
-    return { element: described.element, rect: (_b = described.rect) != null ? _b : null };
+    const place = await this.callOn(objectId, PLACE_OF, [], "the element").catch(() => null);
+    return { element: described.element, rect: (_b = described.rect) != null ? _b : null, place: isPinPlace(place) ? place : null };
   }
   /**
-   * Where each selector's element is now, in the page's viewport (CSS
-   * pixels), or null for one that isn't on the page or has no size.
-   * Reads only; never reported as the agent's activity.
+   * Where each review pin's element is now, in the page's viewport (CSS
+   * pixels), or whether it's on another slide or screen, or gone (see
+   * pinPlace.ts). Reads only; never reported as the agent's activity.
    */
-  async rectsFor(selectors) {
-    if (selectors.length === 0) return [];
-    const value = await this.evaluate(`(${RECTS_FOR})(${JSON.stringify(selectors)})`);
-    return Array.isArray(value) ? value.map((rect) => isRect(rect) ? rect : null) : selectors.map(() => null);
+  async pinsFor(queries) {
+    if (queries.length === 0) return [];
+    const value = await this.evaluate(`(${PINS_FOR})(${JSON.stringify(queries)})`);
+    if (!Array.isArray(value)) throw new DriverError("page_error", "The page didn't answer");
+    return queries.map((_3, i8) => isPinState(value[i8]) ? value[i8] : { state: "missing" });
   }
-  /** How each selector's element looks now, or null where it's missing. Reads only. */
   async fingerprintsFor(selectors) {
     if (selectors.length === 0) return [];
     const value = await this.evaluate(`(${FINGERPRINTS_FOR})(${JSON.stringify(selectors)})`);
@@ -26225,7 +26559,8 @@ var ReviewLayer = class {
     this.pending = null;
     this.pollTimer = 0;
     this.polling = false;
-    this.rects = /* @__PURE__ */ new Map();
+    /** Where each pin's element is now, from the last poll. */
+    this.pins = /* @__PURE__ */ new Map();
     this.pinEls = /* @__PURE__ */ new Map();
     this.focusedNote = null;
     /** Which note's follow-up or edit box is open in the tray. */
@@ -26266,6 +26601,11 @@ var ReviewLayer = class {
   }
   get trayOpen() {
     return this.trayEl.isShown();
+  }
+  /** Whether the user is writing a comment, an edit or a follow-up, which a
+   *  reload of the page would throw away. */
+  get isComposing() {
+    return this.pending !== null || this.editing !== null;
   }
   /** Notes on the page showing now. */
   notesHere() {
@@ -26442,7 +26782,8 @@ var ReviewLayer = class {
         text,
         screenshotPath: pending.screenshotPath,
         baseline,
-        anchor: anchorWithin(pending.point, pending.rect)
+        anchor: anchorWithin(pending.point, pending.rect),
+        place: pending.place
       });
       this.focusedNote = note.id;
     } catch (err) {
@@ -26469,7 +26810,7 @@ var ReviewLayer = class {
   /** From the view when the page changes: pins for the new page. */
   pageChanged() {
     this.closeComposer();
-    this.rects.clear();
+    this.pins.clear();
     this.render();
     void this.view.driver.highlight(null);
     this.scheduleKeepCheck();
@@ -26566,28 +26907,35 @@ var ReviewLayer = class {
   /**
    * Puts each pin's tip where the user clicked, kept in step with the
    * element: the point is saved as a fraction across and down it, so the
-   * pin follows a scroll, a reflow or a resize. Pins that would land on the
-   * same spot sit side by side.
+   * pin follows a scroll, a reflow or a resize. A pin shows only while its
+   * element is showing on the slide or screen it was left on, and its tip
+   * can be seen: one scrolled out of the pane hides rather than sticking to
+   * the edge, where it would look like it belonged to something else. Pins
+   * that would land on the same spot sit side by side.
    */
   placePins() {
     var _a7, _b;
     const taken = /* @__PURE__ */ new Map();
-    const width = this.layerEl.clientWidth;
+    const viewport = { width: this.layerEl.clientWidth, height: this.layerEl.clientHeight };
     for (const [id, pin] of this.pinEls) {
-      const rect = this.rects.get(id);
+      const state = this.pins.get(id);
       const note = this.browser.review.get(id);
-      if (!rect || !note) {
+      if (!state || state.state !== "shown" || !note) {
+        pin.hide();
+        continue;
+      }
+      const anchor = (_a7 = note.anchor) != null ? _a7 : { rx: 1, ry: 0 };
+      const x = state.x + anchor.rx * state.width;
+      const y2 = state.y + anchor.ry * state.height;
+      if (!pinInSight(x, y2, state.clip, viewport)) {
         pin.hide();
         continue;
       }
       pin.show();
-      const anchor = (_a7 = note.anchor) != null ? _a7 : { rx: 1, ry: 0 };
-      const x = rect.x + anchor.rx * rect.width;
-      const y2 = rect.y + anchor.ry * rect.height;
       const spot = `${Math.round(x / 12)}:${Math.round(y2 / 12)}`;
       const shift = (_b = taken.get(spot)) != null ? _b : 0;
       taken.set(spot, shift + pin.offsetWidth + 3);
-      const left = Math.max(2, Math.min(x - PIN_TIP_X + shift, width - pin.offsetWidth - 4));
+      const left = Math.max(2, Math.min(x - PIN_TIP_X + shift, viewport.width - pin.offsetWidth - 4));
       pin.style.left = `${left}px`;
       pin.style.top = `${Math.max(2, y2 - PIN_HEIGHT)}px`;
     }
@@ -26604,10 +26952,12 @@ var ReviewLayer = class {
       }
       if (this.view.isShown()) {
         try {
-          const rects = await this.view.driver.rectsFor(notes.map((n) => n.element.selector));
+          const states = await this.view.driver.pinsFor(notes.map((n) => ({ selector: n.element.selector, tag: n.element.tag, place: n.place })));
           notes.forEach((note, i8) => {
             var _a7;
-            return this.rects.set(note.id, (_a7 = rects[i8]) != null ? _a7 : null);
+            const state = (_a7 = states[i8]) != null ? _a7 : { state: "missing" };
+            this.pins.set(note.id, state);
+            if (state.state === "shown" && state.text !== void 0) this.browser.review.retext(note.id, state.text);
           });
         } catch (e) {
         }
@@ -26618,16 +26968,20 @@ var ReviewLayer = class {
     };
     void tick();
   }
-  /** Tray cards whose element isn't on the page say so. */
+  /** Tray cards whose element isn't on the page, or is on another slide
+   *  or screen of it, say so. */
   markMissing(notes) {
+    var _a7;
     for (const note of notes) {
       const card = this.trayEl.querySelector(`[data-note="${note.id}"]`);
-      card == null ? void 0 : card.toggleClass("is-missing", this.rects.has(note.id) && this.rects.get(note.id) === null);
+      const state = (_a7 = this.pins.get(note.id)) == null ? void 0 : _a7.state;
+      card == null ? void 0 : card.toggleClass("is-missing", state === "missing");
+      card == null ? void 0 : card.toggleClass("is-other-view", state === "elsewhere");
     }
   }
   outlineFor(id) {
-    const rect = this.rects.get(id);
-    if (rect) this.showOutline(rect);
+    const state = this.pins.get(id);
+    if ((state == null ? void 0 : state.state) === "shown") this.showOutline(state);
   }
   showOutline(rect) {
     this.outlineEl.style.left = `${rect.x}px`;
@@ -26750,6 +27104,7 @@ var ReviewLayer = class {
     if ((first == null ? void 0 : first.by) === "user") card.createDiv({ cls: "terminus-review-comment", text: first.text });
     card.createDiv({ cls: "terminus-review-element", text: elementLabel(note.element) });
     if (note.intent !== "keep") card.createDiv({ cls: "terminus-review-missing", text: "Not on the page now: it may have changed or moved." });
+    card.createDiv({ cls: "terminus-review-other-view", text: "On another slide or screen of this page, or out of sight." });
     if (note.drift) {
       const drift = card.createDiv({ cls: "terminus-review-drift" });
       drift.createDiv({ cls: "terminus-review-drift-title", text: "Changed since you kept it" });
@@ -26853,7 +27208,7 @@ var ReviewLayer = class {
   async reveal(note) {
     this.focusedNote = note.id;
     try {
-      await this.view.driver.scrollIntoView(note.element.selector);
+      await this.view.driver.scrollToPin({ selector: note.element.selector, tag: note.element.tag, place: note.place });
     } catch (e) {
     }
     this.render();
@@ -26949,7 +27304,8 @@ var BrowserSiteRegistry = class {
       name: site.name.trim().slice(0, 80),
       description: typeof site.description === "string" ? site.description.trim().slice(0, 300) : void 0,
       open: () => site.open(),
-      sourceFor: typeof site.sourceFor === "function" ? (url) => site.sourceFor(url) : void 0
+      sourceFor: typeof site.sourceFor === "function" ? (url) => site.sourceFor(url) : void 0,
+      refresh: typeof site.refresh === "function" ? (url) => Promise.resolve(site.refresh(url)) : void 0
     };
     this.sites.set(site.id, entry);
     this.changed();
@@ -26992,6 +27348,9 @@ var AGENT_BROWSER_VIEW_TYPE = "terminus-agent-browser";
 var AGENT_BROWSER_PARTITION = "terminus-agent-browser";
 var ERR_ABORTED = -3;
 var ACTING_MS = 2500;
+var SOURCE_SETTLE_MS = 400;
+var NOTE_SETTLE_MS = 1500;
+var COMPOSING_RETRY_MS = 1e3;
 var AgentBrowserView = class extends import_obsidian26.ItemView {
   constructor(leaf, browser) {
     super(leaf);
@@ -27017,6 +27376,10 @@ var AgentBrowserView = class extends import_obsidian26.ItemView {
     this.offReview = null;
     this.cursor = null;
     this.actingTimer = 0;
+    this.sourceTimer = 0;
+    /** A reload in progress, and whether another was asked for meanwhile. */
+    this.reloading = null;
+    this.reloadAgain = false;
     /** Folders served for this view, stopped when it closes. */
     this.servedSiteIds = /* @__PURE__ */ new Set();
     /** What agents drive the page through. */
@@ -27107,10 +27470,7 @@ var AgentBrowserView = class extends import_obsidian26.ItemView {
       return (_a8 = this.review) == null ? void 0 : _a8.toggleTray();
     });
     this.notesButton.addClass("terminus-agent-browser-notes");
-    this.barButton(bar, "rotate-cw", "Reload", () => {
-      var _a8;
-      return (_a8 = this.page) == null ? void 0 : _a8.reload();
-    });
+    this.barButton(bar, "rotate-cw", "Reload", () => void this.reloadReporting());
     this.noticeEl = contentEl.createDiv({ cls: "terminus-agent-browser-notice" });
     this.noticeEl.hide();
     const body = contentEl.createDiv({ cls: "terminus-agent-browser-body" });
@@ -27180,6 +27540,7 @@ var AgentBrowserView = class extends import_obsidian26.ItemView {
     (_b = this.offReview) == null ? void 0 : _b.call(this);
     this.offReview = null;
     window.clearTimeout(this.actingTimer);
+    window.clearTimeout(this.sourceTimer);
     (_c2 = this.cursor) == null ? void 0 : _c2.dispose();
     this.driver.onActivity = null;
     this.driver.onConsoleError = null;
@@ -27208,6 +27569,68 @@ var AgentBrowserView = class extends import_obsidian26.ItemView {
       page.clearHistory();
       this.historyCleared = true;
     }
+  }
+  /**
+   * Reloads the page, brought up to date first. A plugin's site may serve a
+   * copy it built from the vault, which an edit to the vault file doesn't
+   * change, so the site is asked to refresh it (BrowserSite.refresh); and
+   * one whose server restarted since is opened at its new address. A reload
+   * asked for while one is running runs once that one is done, so a change
+   * made meanwhile isn't missed. Throws, after reloading, with what the site
+   * said when it couldn't bring the page up to date.
+   */
+  reloadPage() {
+    if (this.reloading) {
+      this.reloadAgain = true;
+      return this.reloading;
+    }
+    const run = async () => {
+      let problem = null;
+      do {
+        this.reloadAgain = false;
+        problem = await this.reloadOnce();
+      } while (this.reloadAgain);
+      if (problem) throw new Error(problem);
+    };
+    this.reloading = run().finally(() => this.reloading = null);
+    return this.reloading;
+  }
+  async reloadOnce() {
+    const page = await this.whenReady();
+    const url = this.currentUrl();
+    let problem = null;
+    if (this.registeredSiteId && url && /^https?:/i.test(url)) {
+      problem = await this.browser.refreshSitePage(this, url);
+      const moved = await this.browser.movedSiteUrl(this, url);
+      if (moved) {
+        await this.navigate(moved);
+        return problem;
+      }
+    }
+    page.reload();
+    return problem;
+  }
+  async reloadReporting() {
+    try {
+      await this.reloadPage();
+    } catch (err) {
+      new import_obsidian26.Notice(`Terminus: ${err instanceof Error ? err.message : String(err)}`, 8e3);
+    }
+  }
+  /** From AgentBrowser when a file the page is built from changes: reloads
+   *  it once the writes have settled. */
+  sourceChanged(source) {
+    window.clearTimeout(this.sourceTimer);
+    const delay = /\.md$/i.test(source) ? NOTE_SETTLE_MS : SOURCE_SETTLE_MS;
+    const fire = () => {
+      var _a7;
+      if ((_a7 = this.review) == null ? void 0 : _a7.isComposing) {
+        this.sourceTimer = window.setTimeout(fire, COMPOSING_RETRY_MS);
+        return;
+      }
+      void this.reloadReporting();
+    };
+    this.sourceTimer = window.setTimeout(fire, delay);
   }
   /**
    * Runs an agent's click without taking the user's keyboard focus: a click
@@ -30391,7 +30814,7 @@ var BrowserApi = class {
         });
       case "browser.reload":
         return this.act(caller, params, async (view) => {
-          (await view.whenReady()).reload();
+          await view.reloadPage();
           await view.driver.waitForLoad();
         });
       case "browser.snapshot":
@@ -31249,10 +31672,21 @@ async function provisionSkill(vaultBasePath, enabled, browser) {
 }
 
 // src/browser/AgentBrowser.ts
-var import_terminus_node_bridge35 = __toESM(require_dist());
+var import_terminus_node_bridge36 = __toESM(require_dist());
+
+// src/browser/pageFiles.ts
+var import_terminus_node_bridge34 = __toESM(require_dist());
+function pageDependsOn(source, changed, vaultBases) {
+  if (changed === source) return true;
+  if (!/\.html?$/i.test(source) || /\.md$/i.test(changed)) return false;
+  const folder = (0, import_terminus_node_bridge34.pathDirname)(source);
+  if (vaultBases.includes(folder)) return false;
+  const relative = (0, import_terminus_node_bridge34.pathRelative)(folder, changed);
+  return relative !== "" && !relative.startsWith("..") && !/^([a-zA-Z]:|[\\/])/.test(relative);
+}
 
 // src/browser/StaticSites.ts
-var import_terminus_node_bridge34 = __toESM(require_dist());
+var import_terminus_node_bridge35 = __toESM(require_dist());
 var INDEX_FILE = "index.html";
 var StaticSites = class {
   constructor(port) {
@@ -31261,9 +31695,9 @@ var StaticSites = class {
   }
   /** Starts serving a folder. Throws if it isn't one. */
   async serve(folder, ownerToken) {
-    const root = await (0, import_terminus_node_bridge34.realPathIfExists)(folder);
-    if (!root || await (0, import_terminus_node_bridge34.fileKind)(root) !== "directory") throw new Error(`Not a folder: ${folder}`);
-    const id = (0, import_terminus_node_bridge34.randomHex)(16);
+    const root = await (0, import_terminus_node_bridge35.realPathIfExists)(folder);
+    if (!root || await (0, import_terminus_node_bridge35.fileKind)(root) !== "directory") throw new Error(`Not a folder: ${folder}`);
+    const id = (0, import_terminus_node_bridge35.randomHex)(16);
     const site = { id, root, ownerToken, baseUrl: `http://127.0.0.1:${this.port()}${SERVE_PREFIX}${id}/` };
     this.sites.set(id, site);
     return site;
@@ -31289,8 +31723,8 @@ var StaticSites = class {
     if (request.kind === "invalid") return send(res, 404, "Not found");
     const site = this.sites.get(request.siteId);
     if (!site) return send(res, 404, "This page is no longer being served");
-    let target = (0, import_terminus_node_bridge34.pathJoin)(site.root, ...request.segments);
-    let kind = await (0, import_terminus_node_bridge34.fileKind)(target);
+    let target = (0, import_terminus_node_bridge35.pathJoin)(site.root, ...request.segments);
+    let kind = await (0, import_terminus_node_bridge35.fileKind)(target);
     if (kind === "directory") {
       if (!request.wantsDirectory) {
         const path = (_c2 = ((_b = req.url) != null ? _b : "").split(/[?#]/, 1)[0]) != null ? _c2 : "";
@@ -31298,16 +31732,16 @@ var StaticSites = class {
         res.end();
         return;
       }
-      target = (0, import_terminus_node_bridge34.pathJoin)(target, INDEX_FILE);
-      kind = await (0, import_terminus_node_bridge34.fileKind)(target);
+      target = (0, import_terminus_node_bridge35.pathJoin)(target, INDEX_FILE);
+      kind = await (0, import_terminus_node_bridge35.fileKind)(target);
     }
     if (kind !== "file") return send(res, 404, "Not found");
-    const real = await (0, import_terminus_node_bridge34.realPathIfExists)(target);
-    if (!real || !isServableRelativePath((0, import_terminus_node_bridge34.pathRelative)(site.root, real))) return send(res, 404, "Not found");
-    const bytes = await (0, import_terminus_node_bridge34.readFileBytesIfExists)(real);
+    const real = await (0, import_terminus_node_bridge35.realPathIfExists)(target);
+    if (!real || !isServableRelativePath((0, import_terminus_node_bridge35.pathRelative)(site.root, real))) return send(res, 404, "Not found");
+    const bytes = await (0, import_terminus_node_bridge35.readFileBytesIfExists)(real);
     if (!bytes) return send(res, 404, "Not found");
     res.writeHead(200, {
-      "Content-Type": contentTypeFor((0, import_terminus_node_bridge34.pathExtname)(real)),
+      "Content-Type": contentTypeFor((0, import_terminus_node_bridge35.pathExtname)(real)),
       "Content-Length": String(bytes.length),
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
@@ -31331,6 +31765,9 @@ var AgentBrowser = class {
     this.review = new ReviewBook();
     this.sessionPrepared = false;
     this.nextId = 1;
+    /** The vault's folder with symlinks resolved, once known: a served
+     *  folder's path is resolved, so a vault file is matched both ways. */
+    this.vaultRealBase = null;
     this.sites = new StaticSites(() => plugin.reviewServer.getPort());
   }
   /** Called once from onload. */
@@ -31340,6 +31777,55 @@ var AgentBrowser = class {
     this.plugin.app.workspace.onLayoutReady(() => {
       for (const leaf of this.plugin.app.workspace.getLeavesOfType(AGENT_BROWSER_VIEW_TYPE)) leaf.detach();
     });
+    void (0, import_terminus_node_bridge36.realPathIfExists)(this.plugin.getVaultBasePath()).then((real) => this.vaultRealBase = real);
+    this.plugin.registerEvent(this.plugin.app.vault.on("modify", (file) => this.vaultFileChanged(file.path)));
+  }
+  vaultFileChanged(vaultPath) {
+    const base = this.plugin.getVaultBasePath();
+    const paths = [(0, import_terminus_node_bridge36.pathJoin)(base, vaultPath)];
+    if (this.vaultRealBase && this.vaultRealBase !== base) paths.push((0, import_terminus_node_bridge36.pathJoin)(this.vaultRealBase, vaultPath));
+    const bases = [base, ...this.vaultRealBase ? [this.vaultRealBase] : []];
+    for (const view of this.views()) {
+      const url = view.currentUrl();
+      if (!url) continue;
+      const source = this.sourceFor(view, url);
+      if (source && paths.some((path) => pageDependsOn(source, path, bases))) view.sourceChanged(source);
+    }
+  }
+  /**
+   * Brings a registered site's page up to date before it's reloaded (see
+   * BrowserSite.refresh). Returns the site's complaint, or null.
+   */
+  async refreshSitePage(view, url) {
+    const site = view.registeredSiteId ? this.registry.get(view.registeredSiteId) : void 0;
+    if (!(site == null ? void 0 : site.refresh)) return null;
+    try {
+      await site.refresh(url);
+      return null;
+    } catch (err) {
+      return `${site.name}: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+  /**
+   * Where a registered site's page is now, when the site has moved to
+   * another address since it was opened (its server restarted on another
+   * port, as a plugin reload does); null when it hasn't. The same page and
+   * fragment, at the address the site gives now, token and all.
+   */
+  async movedSiteUrl(view, url) {
+    if (!view.registeredSiteId) return null;
+    const fresh = await this.siteUrl(view.registeredSiteId).catch(() => null);
+    if (!fresh) return null;
+    try {
+      const now = new URL(url);
+      const next = new URL(fresh);
+      if (next.origin === now.origin) return null;
+      next.pathname = now.pathname;
+      next.hash = now.hash;
+      return next.toString();
+    } catch (e) {
+      return null;
+    }
   }
   /** Called from onunload. */
   unload() {
@@ -31351,12 +31837,12 @@ var AgentBrowser = class {
   /** False when this Obsidian doesn't give plugins the Electron access the
    *  browser needs. */
   available() {
-    return (0, import_terminus_node_bridge35.isElectronRemoteAvailable)();
+    return (0, import_terminus_node_bridge36.isElectronRemoteAvailable)();
   }
   /** Locks the session down before its first page loads. */
   prepareSession() {
     if (this.sessionPrepared) return;
-    (0, import_terminus_node_bridge35.configureBrowserSession)(AGENT_BROWSER_PARTITION, { allowNavigation: isAllowedBrowserUrl });
+    (0, import_terminus_node_bridge36.configureBrowserSession)(AGENT_BROWSER_PARTITION, { allowNavigation: isAllowedBrowserUrl });
     this.sessionPrepared = true;
   }
   views() {
@@ -31368,11 +31854,11 @@ var AgentBrowser = class {
    * serve is the caller's decision; this serves whatever it's given.
    */
   async serve(path, ownerToken) {
-    const kind = await (0, import_terminus_node_bridge35.fileKind)(path);
+    const kind = await (0, import_terminus_node_bridge36.fileKind)(path);
     if (kind === null) throw new Error(`Nothing at ${path}`);
-    const folder = kind === "directory" ? path : (0, import_terminus_node_bridge35.pathDirname)(path);
+    const folder = kind === "directory" ? path : (0, import_terminus_node_bridge36.pathDirname)(path);
     const site = await this.sites.serve(folder, ownerToken);
-    const entry = kind === "directory" ? "" : encodeURIComponent((0, import_terminus_node_bridge35.pathBasename)(path));
+    const entry = kind === "directory" ? "" : encodeURIComponent((0, import_terminus_node_bridge36.pathBasename)(path));
     return { url: site.baseUrl + entry, siteId: site.id };
   }
   async open(spec) {
@@ -31460,12 +31946,12 @@ var AgentBrowser = class {
   sourceFor(view, url) {
     var _a7;
     const served = this.servedFile(view, url);
-    if (served) return (0, import_terminus_node_bridge35.pathJoin)(served.root, served.relative);
+    if (served) return (0, import_terminus_node_bridge36.pathJoin)(served.root, served.relative);
     if (view.registeredSiteId) {
       const site = this.registry.get(view.registeredSiteId);
       try {
         const source = (_a7 = site == null ? void 0 : site.sourceFor) == null ? void 0 : _a7.call(site, url);
-        if (typeof source === "string" && source) return (0, import_terminus_node_bridge35.pathJoin)(this.plugin.getVaultBasePath(), source);
+        if (typeof source === "string" && source) return (0, import_terminus_node_bridge36.pathJoin)(this.plugin.getVaultBasePath(), source);
       } catch (e) {
       }
     }
@@ -31522,7 +32008,7 @@ var AgentBrowser = class {
       browserId: canReply ? view.publicId : null,
       canReply,
       showPath: (path) => {
-        const relative = (0, import_terminus_node_bridge35.pathRelative)(vault, path);
+        const relative = (0, import_terminus_node_bridge36.pathRelative)(vault, path);
         return relative && !relative.startsWith("..") ? relative : path;
       }
     });
@@ -31573,10 +32059,10 @@ var AgentBrowser = class {
   }
   /** Saves a picked element's image where the agent can Read it. */
   async saveReviewImage(noteKey, png) {
-    const folder = (0, import_terminus_node_bridge35.pathJoin)((0, import_terminus_node_bridge35.osTempDir)(), "terminus-browser");
-    await (0, import_terminus_node_bridge35.makeDirRecursive)(folder);
-    const path = (0, import_terminus_node_bridge35.pathJoin)(folder, `review-${noteKey}-${Date.now()}.png`);
-    await (0, import_terminus_node_bridge35.writeFileBytes)(path, png);
+    const folder = (0, import_terminus_node_bridge36.pathJoin)((0, import_terminus_node_bridge36.osTempDir)(), "terminus-browser");
+    await (0, import_terminus_node_bridge36.makeDirRecursive)(folder);
+    const path = (0, import_terminus_node_bridge36.pathJoin)(folder, `review-${noteKey}-${Date.now()}.png`);
+    await (0, import_terminus_node_bridge36.writeFileBytes)(path, png);
     return path;
   }
   /** The colour of the agent's group, as a CSS value, or null when it has none. */
@@ -31603,7 +32089,7 @@ var AgentBrowser = class {
       for (const id of view2.servedSiteIds) {
         const site = this.sites.get(id);
         if (site && url.startsWith(site.baseUrl)) {
-          return `${(0, import_terminus_node_bridge35.pathBasename)(site.root)}/${safeDecode((_a7 = url.slice(site.baseUrl.length).split(/[?#]/, 1)[0]) != null ? _a7 : "")}`;
+          return `${(0, import_terminus_node_bridge36.pathBasename)(site.root)}/${safeDecode((_a7 = url.slice(site.baseUrl.length).split(/[?#]/, 1)[0]) != null ? _a7 : "")}`;
         }
       }
     }
@@ -31805,14 +32291,14 @@ function locateKeep(doc, keep, lineOf) {
 var import_obsidian42 = require("obsidian");
 var import_state2 = require("@codemirror/state");
 var import_view2 = require("@codemirror/view");
-var import_terminus_node_bridge36 = __toESM(require_dist());
+var import_terminus_node_bridge37 = __toESM(require_dist());
 var refreshKeepMarks = import_state2.StateEffect.define();
 function keepMarksExtension(keeps, vaultBasePath) {
   const build = (view) => {
     var _a7;
     const file = (_a7 = view.state.field(import_obsidian42.editorInfoField, false)) == null ? void 0 : _a7.file;
     if (!file) return import_view2.Decoration.none;
-    const list = keeps.forFile((0, import_terminus_node_bridge36.pathJoin)(vaultBasePath(), file.path));
+    const list = keeps.forFile((0, import_terminus_node_bridge37.pathJoin)(vaultBasePath(), file.path));
     if (list.length === 0) return import_view2.Decoration.none;
     const doc = view.state.doc;
     const text = doc.toString();
@@ -32048,7 +32534,7 @@ var TerminusPlugin = class extends import_obsidian44.Plugin {
     );
     this.addSettingTab(new TerminusSettingTab(this.app, this));
     await provisionResources(this.getPluginDir());
-    this.actionLog = new ActionLog((0, import_terminus_node_bridge37.pathJoin)(this.getPluginDir(), "action-log.json"));
+    this.actionLog = new ActionLog((0, import_terminus_node_bridge38.pathJoin)(this.getPluginDir(), "action-log.json"));
     await this.actionLog.load();
     this.steerQueue.on("change", () => {
       this.app.workspace.requestSaveLayout();
@@ -32346,7 +32832,7 @@ var TerminusPlugin = class extends import_obsidian44.Plugin {
     this.pendingChangesStore.on("recorded", (change) => {
       const broken = this.noteKeeps.checkEdit(change.diff.filePath, change.diff.oldText, change.diff.newText, change.panelLabel);
       if (broken.length === 0) return;
-      const name = (0, import_terminus_node_bridge37.pathBasename)(change.diff.filePath);
+      const name = (0, import_terminus_node_bridge38.pathBasename)(change.diff.filePath);
       new import_obsidian44.Notice(
         `Terminus: ${change.panelLabel} changed ${broken.length === 1 ? "text" : `${broken.length} passages`} you marked Keep in ${name}. Its edit is waiting for review.`,
         1e4
@@ -32354,7 +32840,7 @@ var TerminusPlugin = class extends import_obsidian44.Plugin {
     });
     this.pendingChangesStore.on("resolved", (item) => {
       if (this.noteKeeps.brokenIn(item.diff.filePath).length === 0) return;
-      void (0, import_terminus_node_bridge37.readTextFileIfExists)(item.diff.filePath).then((text) => {
+      void (0, import_terminus_node_bridge38.readTextFileIfExists)(item.diff.filePath).then((text) => {
         if (text !== null) this.noteKeeps.recheck(item.diff.filePath, text);
       });
     });
@@ -32691,9 +33177,9 @@ var TerminusPlugin = class extends import_obsidian44.Plugin {
     if (!accepted && !await confirmCollisionReject(this.app, [oldest])) return;
     try {
       await this.pendingChangesStore.resolveItem(oldest.id, accepted);
-      new import_obsidian44.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge37.pathBasename)(oldest.diff.filePath)}`);
+      new import_obsidian44.Notice(`Terminus: ${accepted ? "kept" : "reverted"} ${(0, import_terminus_node_bridge38.pathBasename)(oldest.diff.filePath)}`);
     } catch (err) {
-      new import_obsidian44.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge37.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
+      new import_obsidian44.Notice(`Terminus: failed to ${accepted ? "keep" : "revert"} ${(0, import_terminus_node_bridge38.pathBasename)(oldest.diff.filePath)}: ${errorMessage2(err)}`);
     }
   }
   async getPython3Bin() {
@@ -32721,7 +33207,7 @@ var TerminusPlugin = class extends import_obsidian44.Plugin {
     return getHookBridgePath(this.app, this.manifest);
   }
   getPluginDir() {
-    return (0, import_terminus_node_bridge37.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
+    return (0, import_terminus_node_bridge38.pathJoin)(this.getVaultBasePath(), this.app.vault.configDir, "plugins", this.manifest.id);
   }
   /**
    * Every leaf of a view type, including ones Obsidian hasn't loaded yet
@@ -32988,7 +33474,7 @@ ${result}`)) return;
     if (items.length === 0 || !terminal || !this.feedbackReadiness(token).ready) return;
     const base = this.getVaultBasePath();
     const prompt = composeFeedbackPrompt(items, (absolute) => {
-      const relative = (0, import_terminus_node_bridge37.pathRelative)(base, absolute);
+      const relative = (0, import_terminus_node_bridge38.pathRelative)(base, absolute);
       return relative.startsWith("..") ? absolute : relative;
     });
     if (!terminal.typeIntoInput(prompt)) return;

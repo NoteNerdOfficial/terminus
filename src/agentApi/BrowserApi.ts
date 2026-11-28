@@ -98,7 +98,9 @@ export class BrowserApi {
         });
       case "browser.reload":
         return this.act(caller, params, async (view) => {
-          (await view.whenReady()).reload();
+          // Brought up to date first: a plugin's site may serve a copy it
+          // built, which the agent's edit to the vault file didn't change.
+          await view.reloadPage();
           await view.driver.waitForLoad();
         });
       case "browser.snapshot":
