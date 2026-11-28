@@ -457,6 +457,9 @@ export function composeReviewPrompt(notes: ReviewNote[], options: PromptOptions)
       lines.push(`### ${note.id} · ${INTENT_FOR_AGENT[note.intent]} · ${elementLabel(element)}`);
       if (note.sourcePath && note.sourcePath !== first.sourcePath) lines.push(`File: ${inlineCode(options.showPath(note.sourcePath))}`);
       lines.push(`Selector: ${inlineCode(element.selector)}`);
+      // The selector is the frame's document's, not the page's.
+      const frame = note.place?.frame;
+      if (frame && "path" in frame) lines.push(`In a frame showing: ${inlineCode(frame.src)}`);
       if (element.html) lines.push(`Element: ${inlineCode(inline(element.html, 240))}`);
       if (note.screenshotPath) lines.push(`Screenshot (Read it to see the element): ${inlineCode(note.screenshotPath)}`);
       const previous = note.thread.slice(0, -1);

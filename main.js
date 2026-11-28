@@ -21614,7 +21614,7 @@ function elementLabel(element) {
   return name ? `${element.tag} "${inline(name, 60)}"` : element.tag;
 }
 function composeReviewPrompt(notes, options) {
-  var _a7, _b;
+  var _a7, _b, _c2;
   if (notes.length === 0) return "";
   const pages = /* @__PURE__ */ new Map();
   for (const note of notes) {
@@ -21635,6 +21635,8 @@ function composeReviewPrompt(notes, options) {
       lines.push(`### ${note.id} \xB7 ${INTENT_FOR_AGENT[note.intent]} \xB7 ${elementLabel(element)}`);
       if (note.sourcePath && note.sourcePath !== first.sourcePath) lines.push(`File: ${inlineCode(options.showPath(note.sourcePath))}`);
       lines.push(`Selector: ${inlineCode(element.selector)}`);
+      const frame = (_b = note.place) == null ? void 0 : _b.frame;
+      if (frame && "path" in frame) lines.push(`In a frame showing: ${inlineCode(frame.src)}`);
       if (element.html) lines.push(`Element: ${inlineCode(inline(element.html, 240))}`);
       if (note.screenshotPath) lines.push(`Screenshot (Read it to see the element): ${inlineCode(note.screenshotPath)}`);
       const previous = note.thread.slice(0, -1);
@@ -21648,7 +21650,7 @@ function composeReviewPrompt(notes, options) {
       lines.push("");
     }
   }
-  const standing = ((_b = options.standingKeeps) != null ? _b : []).filter((note) => !notes.includes(note));
+  const standing = ((_c2 = options.standingKeeps) != null ? _c2 : []).filter((note) => !notes.includes(note));
   if (standing.length) {
     lines.push("## Still keep, from before", "");
     for (const note of standing) {
@@ -25682,26 +25684,117 @@ function formatSnapshot(nodes, maxLines = MAX_SNAPSHOT_LINES) {
 
 // src/browser/pinPlace.ts
 var HELPERS = String.raw`
+  const BLOCK_SELECTOR = "p, h1, h2, h3, h4, h5, h6, li, blockquote, table, figure, pre, .callout, " +
+    "main, header, footer, nav, aside, section, article, dialog, form, fieldset, details, summary, button, a, label, td, th, [role]";
   const VIEW_ATTRS = ["data-osp-view", "data-slide", "data-page", "data-view", "data-step", "data-index", "name", "aria-label"];
   const VIEW_SCAN_LIMIT = 600;
+  const SCROLLER_SCAN_LIMIT = 1500;
   const CONTEXT_LIMIT = 12;
+  const TAP_MEMORY_MS = 600000;
+  const TRAIL_LIMIT = 6;
   const POPUP_ROLES = /^(dialog|alertdialog|menu|listbox|tooltip)$/;
   const POPUP_CLASS = /(^|[-_])(modal|sheet|bottomsheet|drawer|popup|popover|dialog|dropdown|menu|toast|tooltip|overlay|lightbox|snackbar)([-_]|$)/i;
   const STATE_CLASS = /^(is|has)-|(^|[-_])(open|opened|active|show|shown|showing|visible|in|out|enter|entering|entered|leave|leaving|exit|exiting|hidden|closed|closing|expanded|collapsed|on|off|up|down|animating|animated|transition|transitioning|current|present|past|future|selected)$/i;
-  const flat = (s, n) => (s || "").replace(/\s+/g, " ").trim().slice(0, n);
-  const textOf = (el) => flat(el.textContent, 200);
+  const REVEAL_ATTRS = ["class", "style", "hidden", "open", "inert", "aria-hidden", "aria-expanded", "data-state", "data-open", "data-visible"];
+  const REVEAL_DEPTH = 4;
+  const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
+  const textOf = (el) => norm(el.textContent).slice(0, 200);
+  const clamp01 = (n) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5);
 
-  // Vault Publisher's own overlay sits at the top of a page it serves; it
-  // must not count as one of a deck's pages.
+  // ---- Documents and frames ----
+
+  const viewOf = (el) => (el.ownerDocument && el.ownerDocument.defaultView) || window;
+  const styleOf = (el) => viewOf(el).getComputedStyle(el);
+  const topWin = (() => { try { return window.top && window.top.document ? window.top : window; } catch (e) { return window; } })();
+
+  // The <iframe> a document is shown in, or null for the top page (or a
+  // frame from another site, which can't be reached).
+  function frameOf(doc) {
+    try { return doc && doc.defaultView ? doc.defaultView.frameElement : null; } catch (e) { return null; }
+  }
+  function isCrossOriginFrame(doc) {
+    try { return doc.defaultView !== doc.defaultView.top && !doc.defaultView.frameElement; } catch (e) { return true; }
+  }
+  function frameKeyOf(frame) {
+    if (frame.id) return "#" + frame.id;
+    const name = frame.getAttribute("name");
+    if (name) return "name=" + name;
+    const all = Array.from(frame.ownerDocument.getElementsByTagName("iframe"));
+    return "iframe:" + all.indexOf(frame) + "/" + all.length;
+  }
+  function framePath(doc) {
+    const path = [];
+    for (let frame = frameOf(doc); frame; frame = frameOf(frame.ownerDocument)) path.unshift(frameKeyOf(frame));
+    return path;
+  }
+  function frameByKey(doc, key) {
+    const all = Array.from(doc.getElementsByTagName("iframe"));
+    if (key[0] === "#") return all.find((f) => f.id === key.slice(1)) || null;
+    if (key.startsWith("name=")) return all.find((f) => f.getAttribute("name") === key.slice(5)) || null;
+    const m = /^iframe:(\d+)\/(\d+)$/.exec(key);
+    return m && all.length === Number(m[2]) ? all[Number(m[1])] || null : null;
+  }
+  // The frame element and document a path names, from the top page.
+  function walkPath(path) {
+    let doc = topWin.document;
+    let frame = null;
+    for (const key of path || []) {
+      frame = frameByKey(doc, key);
+      if (!frame) return null;
+      try { doc = frame.contentDocument; } catch (e) { doc = null; }
+      if (!doc) return null;
+    }
+    return { doc, frame };
+  }
+  const withoutToken = (search) => search.slice(1).split("&").filter((p) => p && !/^t=[a-z0-9]{24,32}$/i.test(p)).sort();
+  // The screen a frame is showing: its own address, which a framed app
+  // changes as it moves between screens.
+  function frameRoute(doc) {
+    const l = doc.defaultView.location;
+    const params = withoutToken(l.search);
+    return l.pathname + (params.length ? "?" + params.join("&") : "") + l.hash;
+  }
+
+  // The part of the top viewport a frame's content shows in.
+  function glassOf(frame) {
+    const r = topRect(frame);
+    const outer = frame.offsetWidth ? r.width / frame.offsetWidth : 1;
+    const left = r.left + frame.clientLeft * outer;
+    const top = r.top + frame.clientTop * outer;
+    const width = frame.clientWidth * outer;
+    const height = frame.clientHeight * outer;
+    return { left, top, width, height, right: left + width, bottom: top + height, scale: outer };
+  }
+  // An element's box in the top page's viewport, through any frames.
+  function topRect(el) {
+    const r = el.getBoundingClientRect();
+    const frame = frameOf(el.ownerDocument);
+    if (!frame) return { left: r.left, top: r.top, width: r.width, height: r.height, right: r.right, bottom: r.bottom };
+    const g = glassOf(frame);
+    const left = g.left + r.left * g.scale;
+    const top = g.top + r.top * g.scale;
+    return { left, top, width: r.width * g.scale, height: r.height * g.scale, right: left + r.width * g.scale, bottom: top + r.height * g.scale };
+  }
+  // A point in the top viewport, in a document's own viewport.
+  function localPoint(doc, x, y) {
+    const frame = frameOf(doc);
+    if (!frame) return { x, y };
+    // The glass's scale already includes any frames around this one.
+    const g = glassOf(frame);
+    return { x: (x - g.left) / g.scale, y: (y - g.top) / g.scale };
+  }
+
+  // ---- Shown or not ----
+
+  // Our own overlays never count as one of a deck's pages.
   const childElements = (node) =>
     Array.from(node && node.children ? node.children : []).filter((el) => el.id !== "osp-overlay-host");
 
-  // Whether this element itself is shown, saying nothing about its parents.
   function shownSelf(el) {
     if (!el || el.nodeType !== 1) return false;
     if (el.hasAttribute("hidden")) return false;
     if (el.getAttribute("aria-hidden") === "true") return false;
-    const style = getComputedStyle(el);
+    const style = styleOf(el);
     if (style.display === "none") return false;
     if (style.visibility === "hidden" || style.visibility === "collapse") return false;
     if (style.opacity === "0") return false;
@@ -25710,17 +25803,174 @@ var HELPERS = String.raw`
     return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
   }
 
-  // Whether this element is shown, parents included.
+  // Shown, parents included, and on out through the frame it's in: a
+  // device frame that's hidden hides everything on its screen.
   function showing(el) {
-    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
-      if (!shownSelf(node)) return false;
+    let node = el;
+    while (node) {
+      for (let at = node; at && at.nodeType === 1; at = at.parentElement) {
+        if (!shownSelf(at)) return false;
+      }
+      node = frameOf(node.ownerDocument);
     }
     return true;
   }
 
-  // What a page of a deck is called: what its author named it, else where
-  // it sits (with the count, so inserting a slide changes every key below
-  // rather than handing one slide's name to the next).
+  // What clips an element: ancestors that hide their overflow, the window
+  // for something held to it, and the glass of each frame it's in. The
+  // document itself isn't a clip: a paragraph below the fold is on the page.
+  function clipOf(node) {
+    let clip = null;
+    const cut = (box) => {
+      if (!clip) { clip = { left: box.left, top: box.top, right: box.right, bottom: box.bottom }; return; }
+      clip.left = Math.max(clip.left, box.left);
+      clip.top = Math.max(clip.top, box.top);
+      clip.right = Math.min(clip.right, box.right);
+      clip.bottom = Math.min(clip.bottom, box.bottom);
+    };
+    let el = node;
+    while (el) {
+      const doc = el.ownerDocument;
+      let fixed = styleOf(el).position === "fixed";
+      for (let at = el.parentElement; at; at = at.parentElement) {
+        if (at === doc.body || at === doc.documentElement) break;
+        const style = styleOf(at);
+        if (style.position === "fixed") fixed = true;
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") {
+          const box = topRect(at);
+          if (box.width || box.height) cut(box);
+        }
+      }
+      const frame = frameOf(doc);
+      if (frame) {
+        cut(glassOf(frame));
+        el = frame;
+      } else {
+        if (fixed) cut({ left: 0, top: 0, right: topWin.innerWidth, bottom: topWin.innerHeight });
+        el = null;
+      }
+    }
+    return clip;
+  }
+
+  function inSight(el) {
+    const clip = clipOf(el);
+    if (!clip) return true;
+    const box = topRect(el);
+    const w = Math.min(box.right, clip.right) - Math.max(box.left, clip.left);
+    const h = Math.min(box.bottom, clip.bottom) - Math.max(box.top, clip.top);
+    return w > 1 && h > 1;
+  }
+  const openNow = (el) => showing(el) && inSight(el);
+
+  // ---- What a pin is on ----
+
+  // FNV-1a, 32 bit, base 36: the same as Vault Publisher's anchor.ts.
+  function hashText(value) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < value.length; i++) {
+      hash ^= value.charCodeAt(i);
+      hash = (hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>> 0;
+    }
+    return hash.toString(36);
+  }
+  const baseOf = (id) => { const cut = id.lastIndexOf("-"); return cut === -1 ? id : id.slice(0, cut); };
+
+  // The elements that scroll their own content: their rows are anchors too.
+  function scrollersIn(doc) {
+    const out = [];
+    const all = doc.body ? doc.body.getElementsByTagName("*") : [];
+    let asked = 0;
+    for (let i = 0; i < all.length && asked < SCROLLER_SCAN_LIMIT; i++) {
+      const el = all[i];
+      if (el.children.length < 2 || el.id === "osp-overlay-host") continue;
+      asked++;
+      const style = styleOf(el);
+      if (/^(auto|scroll)$/.test(style.overflowY) || /^(auto|scroll)$/.test(style.overflowX)) out.push(el);
+    }
+    return out;
+  }
+
+  // Every anchorable element in a document, by id. Kept until the document
+  // changes, and a couple of seconds at most, for scrollers a style change
+  // made. Ids are worked out here, never written into the page.
+  function blocksOf(doc) {
+    const now = Date.now();
+    const cache = doc.__terminusBlocks;
+    if (cache && (!cache.dirty || now - cache.at < 300) && now - cache.at < 2000) return cache;
+    if (!doc.__terminusObserver && doc.documentElement) {
+      try {
+        const observer = new doc.defaultView.MutationObserver(() => { if (doc.__terminusBlocks) doc.__terminusBlocks.dirty = true; });
+        observer.observe(doc.documentElement, { childList: true, subtree: true, characterData: true });
+        doc.__terminusObserver = observer;
+      } catch (e) {}
+    }
+    const byId = new Map();
+    const idOf = new Map();
+    const seen = new Map();
+    const add = (el) => {
+      if (idOf.has(el) || el.id === "osp-overlay-host") return;
+      const text = norm(el.textContent);
+      if (!text) return;
+      const base = hashText(el.tagName.toLowerCase() + "\u0000" + text);
+      const count = seen.get(base) || 0;
+      seen.set(base, count + 1);
+      const id = count === 0 ? base : base + "-" + count;
+      byId.set(id, el);
+      idOf.set(el, id);
+    };
+    for (const el of doc.querySelectorAll(BLOCK_SELECTOR)) add(el);
+    for (const scroller of scrollersIn(doc)) for (const row of scroller.children) add(row);
+    const fresh = { byId, idOf, dirty: false, at: now };
+    doc.__terminusBlocks = fresh;
+    return fresh;
+  }
+  function nearestBlock(el) {
+    const doc = el.ownerDocument;
+    const blocks = blocksOf(doc);
+    for (let at = el; at && at.nodeType === 1; at = at.parentElement) {
+      if (at === doc.body || at === doc.documentElement) break;
+      if (blocks.idOf.has(at)) return at;
+    }
+    return null;
+  }
+  // The one unclaimed element with a lost id's tag and text; none when
+  // there are two, which would be a guess.
+  function recovered(doc, id, claimed) {
+    const base = baseOf(id);
+    let found = null;
+    for (const [key, el] of blocksOf(doc).byId) {
+      if (baseOf(key) !== base && key !== base) continue;
+      if (claimed.has(el)) continue;
+      if (found) return null;
+      found = el;
+    }
+    return found;
+  }
+  function copiesOf(doc, id) {
+    const base = baseOf(id);
+    let n = 0;
+    for (const key of blocksOf(doc).byId.keys()) if (baseOf(key) === base || key === base) n++;
+    return n;
+  }
+
+  // ---- Screens ----
+
+  // The top page's query and fragment. A fragment that names an element
+  // is a place to scroll to, not a screen.
+  function currentRoute() {
+    const doc = topWin.document;
+    const l = topWin.location;
+    const params = withoutToken(l.search);
+    let hash = l.hash.length > 1 ? l.hash : "";
+    if (hash) {
+      let id = hash.slice(1);
+      try { id = decodeURIComponent(id); } catch (e) {}
+      if (doc.getElementById(id) || doc.getElementsByName(id).length) hash = "";
+    }
+    return (params.length ? "?" + params.join("&") : "") + hash || null;
+  }
+
   function viewKeyOf(el) {
     if (el.id) return "#" + el.id;
     for (const name of VIEW_ATTRS) {
@@ -25731,12 +25981,11 @@ var HELPERS = String.raw`
     return el.tagName.toLowerCase() + ":" + kids.indexOf(el) + "/" + kids.length;
   }
 
-  // Every run of same-tag siblings with exactly one shown and at least one
-  // hidden: the signature of a deck, whatever built it.
-  function deckGroups() {
-    if (!document.body) return [];
+  // Every run of same-tag siblings with exactly one shown: a deck's pages.
+  function deckGroups(doc) {
+    if (!doc.body) return [];
     const found = [];
-    const queue = [document.body];
+    const queue = [doc.body];
     let seen = 0;
     while (queue.length && seen < VIEW_SCAN_LIMIT) {
       const kids = childElements(queue.shift());
@@ -25746,9 +25995,8 @@ var HELPERS = String.raw`
         seen++;
         const up = shownSelf(kid);
         if (up) shown.push(kid);
-        const tag = kid.tagName;
-        if (!groups.has(tag)) groups.set(tag, { members: [], shown: [] });
-        const group = groups.get(tag);
+        if (!groups.has(kid.tagName)) groups.set(kid.tagName, { members: [], shown: [] });
+        const group = groups.get(kid.tagName);
         group.members.push(kid);
         if (up) group.shown.push(kid);
       }
@@ -25759,30 +26007,11 @@ var HELPERS = String.raw`
     }
     return found;
   }
-
-  function currentViewKey(groups) {
-    return groups.map((group) => viewKeyOf(group.shown)).sort().join(">");
-  }
-
-  // The query and fragment that tell an app's screens apart. A fragment
-  // that names an element on the page is a place to scroll to, not a
-  // screen, so it's left out; a token-shaped "t" (Vault Publisher's) too.
-  function currentRoute() {
-    const params = location.search.slice(1).split("&").filter((p) => p && !/^t=[a-z0-9]{24,32}$/i.test(p)).sort();
-    let hash = location.hash.length > 1 ? location.hash : "";
-    if (hash) {
-      let id = hash.slice(1);
-      try { id = decodeURIComponent(id); } catch (e) {}
-      if (document.getElementById(id) || document.getElementsByName(id).length) hash = "";
-    }
-    const route = (params.length ? "?" + params.join("&") : "") + hash;
-    return route || null;
-  }
+  const currentViewKey = (doc) => deckGroups(doc).map((g) => viewKeyOf(g.shown)).sort().join(">");
 
   function stableClasses(el) {
     return String(el.getAttribute("class") || "").split(/\s+/).filter((c) => c && !STATE_CLASS.test(c)).sort();
   }
-
   // A name for a sheet, popup or menu nobody named: what it says it is,
   // without the classes that only say whether it's open.
   function popupKeyOf(el) {
@@ -25796,7 +26025,6 @@ var HELPERS = String.raw`
     if (role) return "~" + tag + "[role=" + role + "]";
     return "~" + tag;
   }
-
   function contextKeyOf(el) {
     if (el.id) return "#" + el.id;
     for (const name of VIEW_ATTRS) {
@@ -25805,104 +26033,127 @@ var HELPERS = String.raw`
     }
     return popupKeyOf(el);
   }
-
   // The nearest named thing an element is inside, a few levels up at most:
-  // further up is the app's outer frame, which never closes.
+  // further up is the app's outer frame, which never closes. Inside: from
+  // its parent, or an element with an id would be its own dialog, and read
+  // as closed the moment it was rewritten.
   function contextOf(node) {
+    const doc = node.ownerDocument;
     let up = 0;
-    for (let el = node; el && el.nodeType === 1; el = el.parentElement) {
-      if (el === document.body || el === document.documentElement) break;
+    for (let el = node.parentElement; el && el.nodeType === 1; el = el.parentElement) {
+      if (el === doc.body || el === doc.documentElement) break;
       if (++up > CONTEXT_LIMIT) break;
       const key = contextKeyOf(el);
       if (key) return { key, el };
     }
     return null;
   }
-
-  function contextNodes(key) {
+  function contextNodes(doc, key) {
     if (!key) return [];
     if (key[0] === "#") {
-      const one = document.getElementById(key.slice(1));
+      const one = doc.getElementById(key.slice(1));
       return one ? [one] : [];
     }
     if (key[0] === "~") {
       const tag = key.slice(1).split(/[.[]/)[0] || "*";
-      return Array.from(document.getElementsByTagName(tag)).filter((el) => popupKeyOf(el) === key);
+      return Array.from(doc.getElementsByTagName(tag)).filter((el) => popupKeyOf(el) === key);
     }
     const eq = key.indexOf("=");
     if (eq === -1) return [];
     const name = key.slice(0, eq);
     const value = key.slice(eq + 1);
     let found = [];
-    try { found = Array.from(document.querySelectorAll("[" + name + "]")); } catch (e) { return []; }
+    try { found = Array.from(doc.querySelectorAll("[" + name + "]")); } catch (e) { return []; }
     return found.filter((el) => el.getAttribute(name) === value);
   }
 
-  // What clips an element: ancestors that hide their overflow, and the
-  // window for something held to it. The document itself isn't a clip: a
-  // paragraph below the fold is on the page.
-  function clipOf(el) {
-    let clip = null;
-    const cut = (box) => {
-      if (!clip) { clip = { left: box.left, top: box.top, right: box.right, bottom: box.bottom }; return; }
-      clip.left = Math.max(clip.left, box.left);
-      clip.top = Math.max(clip.top, box.top);
-      clip.right = Math.min(clip.right, box.right);
-      clip.bottom = Math.min(clip.bottom, box.bottom);
-    };
-    let fixed = getComputedStyle(el).position === "fixed";
-    for (let at = el.parentElement; at; at = at.parentElement) {
-      if (at === document.body || at === document.documentElement) break;
-      const style = getComputedStyle(at);
-      if (style.position === "fixed") fixed = true;
-      if (style.overflowX !== "visible" || style.overflowY !== "visible") {
-        const box = at.getBoundingClientRect();
-        if (box.width || box.height) cut(box);
-      }
+  // The open element a context key names, for this pin: of several alike
+  // (every bottom sheet is a div.sheet), the one holding its element.
+  function holderFor(doc, key, target) {
+    const open = contextNodes(doc, key).filter(openNow);
+    if (target) {
+      const holding = open.find((h) => h.contains(target) || target.contains(h));
+      if (holding) return holding;
+      if (key[0] === "~" && open.length) return null;
     }
-    if (fixed) cut({ left: 0, top: 0, right: innerWidth, bottom: innerHeight });
-    return clip;
+    return open[0] || null;
   }
 
-  function inSight(el) {
-    const clip = clipOf(el);
-    if (!clip) return true;
-    const box = el.getBoundingClientRect();
-    const w = Math.min(box.right, clip.right) - Math.max(box.left, clip.left);
-    const h = Math.min(box.bottom, clip.bottom) - Math.max(box.top, clip.top);
-    return w > 1 && h > 1;
+  // On the page of the deck it was left on: the same pages up, the named
+  // ones it was left on still showing, or its element showing inside the
+  // page that's up (a key can differ over a banner that rotates).
+  function onThisView(doc, place, el) {
+    if (!place.view) return true;
+    if (place.view === currentViewKey(doc)) return true;
+    if (place.view.split(">").every((part) => contextNodes(doc, part).some(openNow))) return true;
+    return !!el && showing(el) && deckGroups(doc).some((g) => g.shown.contains(el));
   }
 
-  function contextShowing(key) {
-    return contextNodes(key).some((el) => showing(el) && inSight(el));
-  }
+  // ---- Names, for the tray ----
 
-  // The element again: by its selector while that still finds an element
-  // of the same tag and text; else the one element anywhere with that tag
-  // and text (it moved); else the selector's, if the tag still fits (its
-  // text was edited, which is what a Change asks for).
-  function resolve(q) {
-    let el = null;
-    try { el = document.querySelector(q.selector); } catch (e) {}
-    const sameTag = !!el && el.tagName.toLowerCase() === q.tag;
-    const text = q.place ? q.place.text : "";
-    if (sameTag && (!text || textOf(el) === text)) return { el };
-    if (text) {
-      const matches = Array.from(document.getElementsByTagName(q.tag)).filter((m) => textOf(m) === text);
-      const pick = matches.length === 1 ? matches : matches.filter(showing);
-      if (pick.length === 1) return { el: pick[0] };
+  function popupLabel(key) {
+    const body = String(key).slice(1);
+    const role = /\[role=([^\]]+)\]/.exec(body);
+    const bits = body.replace(/\[.*$/, "").split(".");
+    for (let i = 1; i < bits.length; i++) {
+      const said = POPUP_CLASS.exec(bits[i]);
+      if (said) return said[2].toLowerCase();
     }
-    return sameTag ? { el, adopted: true } : null;
+    if (role) return role[1];
+    return bits[1] || bits[0] || "popup";
+  }
+  function viewLabel(key) {
+    return String(key).split(">").map((part) => {
+      if (part[0] === "#") return part.slice(1);
+      if (part[0] === "~") return popupLabel(part);
+      const eq = part.indexOf("=");
+      if (eq !== -1) return part.slice(eq + 1);
+      const m = /:(\d+)\/(\d+)$/.exec(part);
+      return m ? "slide " + (Number(m[1]) + 1) + " of " + m[2] : part;
+    }).join(" / ");
+  }
+  function screenLabel(route) {
+    const text = String(route || "");
+    const cut = text.search(/[?#]/);
+    const path = cut === -1 ? text : text.slice(0, cut);
+    const rest = cut === -1 ? "" : text.slice(cut);
+    let name = (path.split("/").pop() || "").replace(/\.html?$/i, "");
+    if (!name || name === "index") { const dirs = path.split("/").filter(Boolean); name = dirs.length > 1 ? dirs[dirs.length - 2] : ""; }
+    return [name, rest].filter(Boolean).join(" ") || "the first screen";
   }
 
-  // What has a context open: a few attributes, on it and its ancestors.
-  const REVEAL_ATTRS = ["class", "style", "hidden", "open", "inert", "aria-hidden", "aria-expanded", "data-state", "data-open", "data-visible"];
-  const REVEAL_DEPTH = 4;
+  // ---- Clicks that led somewhere ----
+
+  // Where a document is, as a trail compares it: the page's route at the
+  // top; the frame and its screen inside one.
+  function placeOf(doc) {
+    return frameOf(doc) ? framePath(doc).join(">") + "@" + frameRoute(doc) : String(currentRoute() || "");
+  }
+  // The recent clicks in this document since its address was last what it
+  // is now, oldest first, leaving out those inside the dialog the pin is in
+  // (they were on it, not on the way to it).
+  function trailTo(doc, holder) {
+    const taps = topWin.__terminusTapLog || [];
+    const here = placeOf(doc);
+    const path = framePath(doc).join(">");
+    const now = Date.now();
+    const out = [];
+    for (let i = taps.length - 1; i >= 0; i--) {
+      const tap = taps[i];
+      if (tap.path.join(">") !== path) continue;
+      if (now - tap.at >= TAP_MEMORY_MS || tap.place !== here) break;
+      const el = holder ? blocksOf(doc).byId.get(tap.block) : null;
+      if (holder && el && holder.contains(el)) continue;
+      out.unshift({ path: tap.path, block: tap.block, text: tap.text });
+    }
+    return out.slice(-TRAIL_LIMIT);
+  }
+
   function revealStateOf(holder) {
     const out = [];
     let el = holder;
     for (let level = 0; level < REVEAL_DEPTH; level++) {
-      if (!el || el.nodeType !== 1 || el === document.body || el === document.documentElement) break;
+      if (!el || el.nodeType !== 1 || el === el.ownerDocument.body || el === el.ownerDocument.documentElement) break;
       const attrs = {};
       for (const name of REVEAL_ATTRS) {
         const value = el.getAttribute(name);
@@ -25913,71 +26164,179 @@ var HELPERS = String.raw`
     }
     return out;
   }
-`;
-var PLACE_OF = String.raw`function () {
-  ${HELPERS}
-  const el = this.nodeType === 1 ? this : this.parentElement;
-  if (!el) return null;
-  const context = contextOf(el);
-  const place = { route: currentRoute(), view: currentViewKey(deckGroups()), context: context ? context.key : null, text: textOf(el) };
-  if (context) place.reveal = revealStateOf(context.el);
-  return place;
-}`;
-var SHOWN_AT = String.raw`function (x, y) {
-  ${HELPERS}
-  const el = this.nodeType === 1 ? this : this.parentElement;
-  if (el && showing(el)) return el;
-  for (const candidate of document.elementsFromPoint(x, y)) {
-    if (showing(candidate)) return candidate;
+
+  // ---- Finding a pin's element ----
+
+  // The document a pin is in, or why it can't be reached.
+  function docFor(place) {
+    if (!place || !place.frame) return { doc: topWin.document, frame: null };
+    if (place.frame.crossOrigin) return { why: "cross-origin" };
+    const found = walkPath(place.frame.path);
+    return found ? found : { why: "no-frame" };
   }
-  return el;
+
+  // The picked element by its selector, if that still finds one of the
+  // same tag, checked against its text; else the one element with its tag
+  // and text; else the selector's, if the tag fits (edited where it stands).
+  function bySelector(doc, q) {
+    let el = null;
+    try { el = doc.querySelector(q.selector); } catch (e) {}
+    const text = q.place ? q.place.text : "";
+    const fits = !!el && el.tagName.toLowerCase() === q.tag;
+    if (fits && (!text || textOf(el) === text)) return { el };
+    if (text) {
+      const matches = Array.from(doc.getElementsByTagName(q.tag)).filter((m) => textOf(m) === text);
+      const pick = matches.length === 1 ? matches : matches.filter(showing);
+      if (pick.length === 1) return { el: pick[0] };
+    }
+    return fits ? { el, adopted: true } : null;
+  }
+
+  // The element a pin is on: its block by id; else the one unclaimed block
+  // its id renumbered to; else the picked element by its selector, which
+  // keeps a pin on an element the agent rewrote where it stands (Vault
+  // Publisher reports those as lost; here checking the fix is the point).
+  function anchorFor(doc, q, exact, claimed) {
+    const place = q.place;
+    if (place && place.block) {
+      if (exact) return { el: exact };
+      const moved = recovered(doc, place.block, claimed);
+      if (moved) return { el: moved };
+    }
+    const found = bySelector(doc, q);
+    if (!found) return null;
+    return { el: found.el, viaSelector: true, adopted: !!found.adopted };
+  }
+`;
+var PLACE_OF = String.raw`function (x, y) {
+  ${HELPERS}
+  const picked = this.nodeType === 1 ? this : this.parentElement;
+  if (!picked) return null;
+  const doc = picked.ownerDocument;
+  const block = nearestBlock(picked);
+  const on = topRect(block || picked);
+  const own = topRect(picked);
+  const context = contextOf(picked);
+  const place = {
+    route: currentRoute(),
+    view: currentViewKey(doc),
+    context: context ? context.key : null,
+    text: textOf(picked),
+    block: block ? blocksOf(doc).idOf.get(block) : null,
+    rx: clamp01((x - on.left) / on.width),
+    ry: clamp01((y - on.top) / on.height),
+    erx: clamp01((x - own.left) / own.width),
+    ery: clamp01((y - own.top) / own.height),
+    frame: null,
+    px: x + topWin.scrollX,
+    py: y + topWin.scrollY,
+    rect: { x: own.left, y: own.top, width: own.width, height: own.height },
+    trail: [],
+  };
+  if (context) {
+    place.reveal = revealStateOf(context.el);
+    const area = topRect(context.el);
+    if (area.width && area.height) {
+      place.cx = clamp01((x - area.left) / area.width);
+      place.cy = clamp01((y - area.top) / area.height);
+    }
+  }
+  if (isCrossOriginFrame(doc)) {
+    place.frame = { crossOrigin: true };
+  } else if (frameOf(doc)) {
+    place.frame = { path: framePath(doc), route: frameRoute(doc), src: doc.defaultView.location.pathname };
+    const glass = glassOf(frameOf(doc));
+    place.fx = clamp01((x - glass.left) / glass.width);
+    place.fy = clamp01((y - glass.top) / glass.height);
+  }
+  place.trail = trailTo(doc, context ? context.el : null);
+  return place;
 }`;
 var PINS_FOR = String.raw`function (queries) {
   ${HELPERS}
-  let groups = null;
-  let viewKey = null;
-  let route;
-  const deck = () => groups || (groups = deckGroups());
-  const view = () => (viewKey === null ? (viewKey = currentViewKey(deck())) : viewKey);
+  const docs = queries.map((q) => docFor(q.place));
 
-  // On the page of the deck it was left on: the same pages up, or the
-  // named ones it was left on still showing, or its own element showing
-  // inside the page that's up (a key can differ over a banner that rotates).
-  function onThisView(place, el) {
-    if (!place.view || place.view === view()) return true;
-    const parts = place.view.split(">");
-    if (parts.every((part) => contextNodes(part).some((n) => showing(n) && inSight(n)))) return true;
-    return deck().some((group) => group.shown.contains(el));
-  }
-
-  // Still inside the thing it was left in, and that's open.
-  function inContext(place, el) {
-    if (!place.context) return true;
-    for (let at = el, up = 0; at && at.nodeType === 1 && up <= CONTEXT_LIMIT; at = at.parentElement, up++) {
-      if (contextKeyOf(at) === place.context) return showing(at) && inSight(at);
+  // Exact ids first, all of them, so a pin that lost its suffix isn't
+  // recovered onto an element another pin holds.
+  const claimed = new Map();
+  const exact = queries.map((q, i) => {
+    const doc = docs[i].doc;
+    if (!doc || !q.place || !q.place.block) return null;
+    const el = blocksOf(doc).byId.get(q.place.block) || null;
+    if (el) {
+      if (!claimed.has(doc)) claimed.set(doc, new Set());
+      claimed.get(doc).add(el);
     }
-    // Moved out of it, or it's named differently now: whether it's open.
-    return contextShowing(place.context);
-  }
+    return el;
+  });
 
-  return queries.map((q) => {
+  return queries.map((q, i) => {
     const place = q.place;
+    const d = docs[i];
+    if (!d.doc) return { state: "missing", why: d.why };
+    const doc = d.doc;
+
+    // Another screen of the page, or of the device's.
     if (place) {
-      if (route === undefined) route = currentRoute();
-      if ((place.route || null) !== route) return { state: "elsewhere" };
+      if ((place.route || null) !== currentRoute()) return { state: "elsewhere", kind: "screen", where: screenLabel(place.route) };
+      if (d.frame) {
+        if (!showing(d.frame)) return { state: "elsewhere" };
+        if (place.frame.route && frameRoute(doc) !== place.frame.route) return { state: "elsewhere", kind: "screen", where: screenLabel(place.frame.route) };
+      }
     }
-    const found = resolve(q);
-    if (!found) return { state: "missing" };
-    const el = found.el;
-    if (!showing(el)) return { state: "elsewhere" };
-    if (place && (!onThisView(place, el) || !inContext(place, el))) return { state: "elsewhere" };
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) return { state: "elsewhere" };
-    const shown = { state: "shown", x: r.left, y: r.top, width: r.width, height: r.height, clip: clipOf(el) };
-    // Its text was edited in place: remember the new text, once the page
-    // has finished loading, so the next look finds it straight away.
-    if (found.adopted && document.readyState === "complete") shown.text = textOf(el);
-    return shown;
+
+    const found = anchorFor(doc, q, exact[i], claimed.get(doc) || new Set());
+    let target = found ? found.el : null;
+
+    // Inside something that isn't open: a dismissed dialog, a sheet slid
+    // shut, a menu that closed. There's nowhere honest to draw it.
+    let holder = null;
+    if (place && place.context) {
+      holder = holderFor(doc, place.context, target);
+      if (!holder) return { state: "elsewhere", kind: "closed", where: viewLabel(place.context) };
+    }
+
+    // On another slide of the deck, or inside something collapsed.
+    if (target && !showing(target)) return place && place.view ? { state: "elsewhere", kind: "view", where: viewLabel(place.view) } : { state: "elsewhere" };
+    if (place && !onThisView(doc, place, target)) return { state: "elsewhere", kind: "view", where: viewLabel(place.view) };
+
+    // A pin on a popover's text, anchored to the section the popover sits
+    // in: the popover is nearer, and its box is what the pin moves with.
+    if (target && holder && holder !== target && target.contains(holder) && place.cx !== undefined) target = null;
+
+    if (target) {
+      const box = topRect(target);
+      if (box.width === 0 && box.height === 0) return { state: "elsewhere" };
+      const own = found.viaSelector;
+      const rx = place ? (own ? place.erx : place.rx) : undefined;
+      const ry = place ? (own ? place.ery : place.ry) : undefined;
+      const x = box.left + (rx === undefined ? 1 : rx) * box.width;
+      const y = box.top + (ry === undefined ? 0 : ry) * box.height;
+      const shown = { state: "shown", x, y, rect: { x: box.left, y: box.top, width: box.width, height: box.height }, clip: clipOf(target) };
+      if (found.adopted && doc.readyState === "complete") shown.text = textOf(target);
+      return shown;
+    }
+
+    // Its element is gone. Why, for the tray: the text is there twice now;
+    // it's in a sheet like this one but maybe another; or it's rewritten.
+    const why = place && place.block && copiesOf(doc, place.block) > 1 ? "duplicate"
+      : place && place.context && place.context[0] === "~" ? "other-sheet" : "rewritten";
+    if (!place) return { state: "missing", why };
+
+    // On an app, text changes for reasons nobody edited, so the pin stays
+    // where it was dropped: on its dialog, on the device's glass, on the page.
+    if (holder && place.cx !== undefined) {
+      const area = topRect(holder);
+      return { state: "shown", x: area.left + place.cx * area.width, y: area.top + place.cy * area.height, rect: null, clip: clipOf(holder), lost: why };
+    }
+    if (d.frame && place.fx !== undefined) {
+      const glass = glassOf(d.frame);
+      return { state: "shown", x: glass.left + place.fx * glass.width, y: glass.top + place.fy * glass.height, rect: null, clip: glass, lost: why };
+    }
+    if (!d.frame && place.px !== undefined) {
+      return { state: "shown", x: place.px - topWin.scrollX, y: place.py - topWin.scrollY, rect: null, clip: null, lost: why };
+    }
+    return { state: "missing", why };
   });
 }`;
 var GO_TO_PIN = String.raw`function (q) {
@@ -25994,9 +26353,8 @@ var GO_TO_PIN = String.raw`function (q) {
     }
   };
 
-  // The last note's dialog, put back the way the page had it.
-  const last = window.__terminusPeek;
-  window.__terminusPeek = null;
+  const last = topWin.__terminusPeek;
+  topWin.__terminusPeek = null;
   if (last) {
     for (const change of last.slice().reverse()) {
       if (!change.el.isConnected || change.el.getAttribute(change.name) !== change.after) continue;
@@ -26005,16 +26363,23 @@ var GO_TO_PIN = String.raw`function (q) {
   }
 
   const place = q.place;
-  if (place && (place.route || null) !== currentRoute()) return "route";
+  if (place && (place.route || null) !== currentRoute()) return { result: "route" };
+  const d = docFor(place);
+  if (!d.doc) return { result: "missing" };
+  const doc = d.doc;
+  if (d.frame && place.frame.route && frameRoute(doc) !== place.frame.route) {
+    try { d.frame.contentWindow.location.href = new URL(place.frame.route, doc.defaultView.location.href).href; } catch (e) { return { result: "missing" }; }
+    return { result: "frame" };
+  }
 
   // Turn the deck, a level at a time: an inner deck is only found once the
   // outer one is on the right page.
   if (place && place.view) {
     const wanted = place.view.split(">");
     for (let round = 0; round < 4; round++) {
-      if (currentViewKey(deckGroups()) === place.view) break;
+      if (currentViewKey(doc) === place.view) break;
       let moved = false;
-      for (const group of deckGroups()) {
+      for (const group of deckGroups(doc)) {
         if (wanted.includes(viewKeyOf(group.shown))) continue;
         const member = group.members.find((m) => m !== group.shown && wanted.includes(viewKeyOf(m)));
         if (member) { swap(group.shown, member); moved = true; }
@@ -26023,44 +26388,139 @@ var GO_TO_PIN = String.raw`function (q) {
     }
   }
 
-  const found = resolve(q);
-  if (!found) return "missing";
-  const el = found.el;
+  const find = () => anchorFor(doc, q, place && place.block ? blocksOf(doc).byId.get(place.block) || null : null, new Set());
+  let found = find();
 
-  // Open the dialog it was left in, if that has closed.
-  if (place && place.context && place.reveal && place.reveal.length && !(showing(el) && inSight(el))) {
-    const holders = contextNodes(place.context);
-    const holder = holders.find((h) => h.contains(el)) || holders[0];
-    const changes = [];
-    let at = holder;
-    for (const saved of place.reveal) {
-      if (!at || at.nodeType !== 1 || at === document.body) break;
-      for (const name of REVEAL_ATTRS) {
-        const want = Object.prototype.hasOwnProperty.call(saved, name) ? saved[name] : null;
-        const have = at.getAttribute(name);
-        if (want === have) continue;
-        changes.push({ el: at, name, before: have, after: want });
-        if (want === null) at.removeAttribute(name); else at.setAttribute(name, want);
+  // Open the dialog it was left in, if that has closed but is still there.
+  if (place && place.context && place.reveal && place.reveal.length && !(found && openNow(found.el))) {
+    const holders = contextNodes(doc, place.context);
+    const holder = (found && holders.find((h) => h.contains(found.el))) || holders[0];
+    if (holder) {
+      const changes = [];
+      let at = holder;
+      for (const saved of place.reveal) {
+        if (!at || at.nodeType !== 1 || at === doc.body) break;
+        for (const name of REVEAL_ATTRS) {
+          const want = Object.prototype.hasOwnProperty.call(saved, name) ? saved[name] : null;
+          const have = at.getAttribute(name);
+          if (want === have) continue;
+          changes.push({ el: at, name, before: have, after: want });
+          if (want === null) at.removeAttribute(name); else at.setAttribute(name, want);
+        }
+        at = at.parentElement;
       }
-      at = at.parentElement;
+      if (changes.length) topWin.__terminusPeek = changes;
+      found = find();
     }
-    if (changes.length) window.__terminusPeek = changes;
   }
 
-  el.scrollIntoView({ block: "center", inline: "center" });
-  return showing(el) && inSight(el) ? "shown" : "hidden";
+  const there = !!found && openNow(found.el);
+  if (!there && place && place.trail && place.trail.length) return { result: "trail", steps: place.trail.length };
+  if (!found) return { result: "missing" };
+  if (d.frame) d.frame.scrollIntoView({ block: "nearest", inline: "nearest" });
+  found.el.scrollIntoView({ block: "center", inline: "center" });
+  return { result: openNow(found.el) ? "shown" : "hidden" };
+}`;
+var REPLAY_STEP = String.raw`function (step) {
+  ${HELPERS}
+  const found = walkPath(step.path);
+  if (!found) return false;
+  const blocks = blocksOf(found.doc);
+  let el = blocks.byId.get(step.block) || null;
+  if (!el) {
+    const base = baseOf(step.block);
+    const alike = Array.from(blocks.byId).filter(([key]) => baseOf(key) === base).map(([, e]) => e);
+    if (alike.length === 1) el = alike[0];
+  }
+  if (!el) return false;
+  el.click();
+  return true;
+}`;
+var TAP_RECORDER = String.raw`(() => {
+  ${HELPERS}
+  if (window.__terminusTapTimer) return;
+  const hook = (doc) => {
+    if (!doc || doc.__terminusTaps) return;
+    doc.__terminusTaps = true;
+    // Captured on pointerdown, before the click has had any effect, so
+    // the address it's recorded at is the one it was made at.
+    doc.addEventListener("pointerdown", (event) => {
+      const t = event.target;
+      if (!t || t.nodeType !== 1) return;
+      const block = nearestBlock(t);
+      if (!block) return;
+      const taps = topWin.__terminusTapLog || (topWin.__terminusTapLog = []);
+      taps.push({ path: framePath(doc), block: blocksOf(doc).idOf.get(block), text: textOf(block).slice(0, 120), place: placeOf(doc), at: Date.now() });
+      if (taps.length > 16) taps.shift();
+    }, true);
+  };
+  const hookFrames = (doc) => {
+    for (const frame of doc.getElementsByTagName("iframe")) {
+      let inner = null;
+      try { inner = frame.contentDocument; } catch (e) {}
+      if (inner) { hook(inner); hookFrames(inner); }
+    }
+  };
+  hook(document);
+  hookFrames(document);
+  window.__terminusTapTimer = setInterval(() => hookFrames(document), 1000);
+})()`;
+var SHOWN_AT = String.raw`function (x, y) {
+  ${HELPERS}
+  const el = this.nodeType === 1 ? this : this.parentElement;
+  if (el && showing(el)) return el;
+  const doc = el ? el.ownerDocument : document;
+  const local = localPoint(doc, x, y);
+  for (const candidate of doc.elementsFromPoint(local.x, local.y)) {
+    if (showing(candidate)) return candidate;
+  }
+  return el;
+}`;
+var FINGERPRINTS_FOR = String.raw`function (queries) {
+  ${HELPERS}
+  const STYLES = ["color", "background-color", "background-image", "font-family", "font-size", "font-weight", "font-style",
+    "text-decoration-line", "text-transform", "text-align", "letter-spacing", "display", "visibility", "opacity",
+    "border-top-width", "border-top-style", "border-top-color", "border-radius", "box-shadow"];
+  const ATTRS = ["class", "src", "href", "alt", "title", "aria-label", "placeholder", "type", "disabled"];
+  return queries.map((q) => {
+    const d = docFor(q.place);
+    if (!d.doc) return null;
+    const found = bySelector(d.doc, q);
+    if (!found) return null;
+    const el = found.el;
+    const cs = styleOf(el);
+    const styles = {};
+    for (const name of STYLES) styles[name] = cs.getPropertyValue(name);
+    const attrs = {};
+    for (const name of ATTRS) { const v = el.getAttribute(name); if (v !== null) attrs[name] = v.slice(0, 300); }
+    return { text: (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 500), attrs, styles, viewport: viewOf(el).innerWidth };
+  });
 }`;
 function isPinPlace(value) {
   if (typeof value !== "object" || value === null) return false;
   const p2 = value;
   return (p2.route === null || typeof p2.route === "string") && typeof p2.view === "string" && (p2.context === null || typeof p2.context === "string") && typeof p2.text === "string";
 }
+var finite = (n) => typeof n === "number" && Number.isFinite(n);
 function isPinState(value) {
   if (typeof value !== "object" || value === null) return false;
   const s15 = value;
-  if (s15.state === "elsewhere" || s15.state === "missing") return true;
-  return s15.state === "shown" && [s15.x, s15.y, s15.width, s15.height].every((n) => typeof n === "number" && Number.isFinite(n));
+  if (s15.state === "elsewhere") return true;
+  if (s15.state === "missing") return typeof s15.why === "string";
+  return s15.state === "shown" && finite(s15.x) && finite(s15.y);
 }
+function isGoResult(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const r = value.result;
+  return r === "shown" || r === "hidden" || r === "missing" || r === "route" || r === "frame" || r === "trail";
+}
+var LOST_REASONS = {
+  duplicate: "Lost its place: this text is now on the page more than once, so it can't tell which.",
+  rewritten: "Lost its place: what it was on has changed or moved.",
+  "other-sheet": "Lost its place: it isn't in the one showing now. It may be in a different one, or changed since.",
+  "cross-origin": "In a frame from another site, which the browser can't look inside.",
+  "no-frame": "In a frame that isn't on the page now."
+};
 function pinInSight(x, y2, clip2, viewport) {
   const slack = 2;
   if (x < -slack || y2 < -slack || x > viewport.width + slack || y2 > viewport.height + slack) return false;
@@ -26136,23 +26596,6 @@ var DESCRIBE_ELEMENT = String.raw`function () {
     },
     rect: { x: r.left, y: r.top, width: r.width, height: r.height },
   };
-}`;
-var FINGERPRINTS_FOR = String.raw`function (selectors) {
-  const STYLES = ["color", "background-color", "background-image", "font-family", "font-size", "font-weight", "font-style",
-    "text-decoration-line", "text-transform", "text-align", "letter-spacing", "display", "visibility", "opacity",
-    "border-top-width", "border-top-style", "border-top-color", "border-radius", "box-shadow"];
-  const ATTRS = ["class", "src", "href", "alt", "title", "aria-label", "placeholder", "type", "disabled"];
-  return selectors.map((sel) => {
-    let el = null;
-    try { el = document.querySelector(sel); } catch (e) { return null; }
-    if (!el) return null;
-    const cs = getComputedStyle(el);
-    const styles = {};
-    for (const name of STYLES) styles[name] = cs.getPropertyValue(name);
-    const attrs = {};
-    for (const name of ATTRS) { const v = el.getAttribute(name); if (v !== null) attrs[name] = v.slice(0, 300); }
-    return { text: (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 500), attrs, styles, viewport: window.innerWidth };
-  });
 }`;
 var sleep = (ms3) => new Promise((resolve) => window.setTimeout(resolve, ms3));
 var BrowserDriver = class {
@@ -26403,7 +26846,16 @@ var BrowserDriver = class {
   /** Takes the user to a review pin's element: see GO_TO_PIN. */
   async goToPin(query) {
     const result = await this.evaluate(`(${GO_TO_PIN})(${JSON.stringify(query)})`);
-    return result === "route" || result === "shown" || result === "hidden" ? result : "missing";
+    return isGoResult(result) ? result : { result: "missing" };
+  }
+  /** Clicks one step of the trail that led to a pin: see REPLAY_STEP. */
+  async replayStep(step) {
+    return await this.evaluate(`(${REPLAY_STEP})(${JSON.stringify(step)})`) === true;
+  }
+  /** Starts remembering the user's clicks on a page that just loaded, for
+   *  retracing them to a pin (see TAP_RECORDER). Quiet when it can't. */
+  async installTapRecorder() {
+    await this.evaluate(TAP_RECORDER).catch(() => void 0);
   }
   async stopPicking() {
     var _a7;
@@ -26412,9 +26864,9 @@ var BrowserDriver = class {
     await this.highlight(null);
   }
   /** What a picked element is, where it is in the page's viewport, and
-   *  which screen of the page it's on (see pinPlace.ts). */
-  async describeNode(backendNodeId) {
-    var _a7, _b;
+   *  where its pin goes (see pinPlace.ts), given where the click was. */
+  async describeNode(backendNodeId, point) {
+    var _a7, _b, _c2, _d;
     let result;
     try {
       result = await this.session().send("DOM.resolveNode", { backendNodeId });
@@ -26426,8 +26878,9 @@ var BrowserDriver = class {
     const value = await this.callOn(objectId, DESCRIBE_ELEMENT, [], "the element");
     const described = value;
     if (!(described == null ? void 0 : described.element)) throw new DriverError("page_error", "The page didn't describe the element");
-    const place = await this.callOn(objectId, PLACE_OF, [], "the element").catch(() => null);
-    return { element: described.element, rect: (_b = described.rect) != null ? _b : null, place: isPinPlace(place) ? place : null };
+    const place = await this.callOn(objectId, PLACE_OF, [point.x, point.y], "the element").catch(() => null);
+    if (!isPinPlace(place)) return { element: described.element, rect: (_b = described.rect) != null ? _b : null, place: null };
+    return { element: described.element, rect: (_d = (_c2 = place.rect) != null ? _c2 : described.rect) != null ? _d : null, place };
   }
   /**
    * Where each review pin's element is now, in the page's viewport (CSS
@@ -26438,11 +26891,11 @@ var BrowserDriver = class {
     if (queries.length === 0) return [];
     const value = await this.evaluate(`(${PINS_FOR})(${JSON.stringify(queries)})`);
     if (!Array.isArray(value)) throw new DriverError("page_error", "The page didn't answer");
-    return queries.map((_3, i8) => isPinState(value[i8]) ? value[i8] : { state: "missing" });
+    return queries.map((_3, i8) => isPinState(value[i8]) ? value[i8] : { state: "missing", why: "rewritten" });
   }
-  async fingerprintsFor(selectors) {
-    if (selectors.length === 0) return [];
-    const value = await this.evaluate(`(${FINGERPRINTS_FOR})(${JSON.stringify(selectors)})`);
+  async fingerprintsFor(queries) {
+    if (queries.length === 0) return [];
+    const value = await this.evaluate(`(${FINGERPRINTS_FOR})(${JSON.stringify(queries)})`);
     if (!Array.isArray(value)) throw new DriverError("page_error", "The page didn't answer");
     return value.map((entry) => isFingerprint(entry) ? entry : null);
   }
@@ -26616,6 +27069,8 @@ var BrowserDriver = class {
 
 // src/browser/ReviewLayer.ts
 var import_obsidian25 = require("obsidian");
+var FRAME_SETTLE_MS = 600;
+var RETRACE_STEP_MS = 350;
 var PIN_POLL_MS = 120;
 var PIN_HEIGHT = 22;
 var PIN_TIP_X = 1;
@@ -26785,7 +27240,7 @@ var ReviewLayer = class {
     this.pickSurface.hide();
     let described;
     try {
-      described = await driver.describeNode(backendNodeId);
+      described = await driver.describeNode(backendNodeId, point);
     } catch (err) {
       new import_obsidian25.Notice(`Terminus: ${err instanceof Error ? err.message : String(err)}`);
       if (this.picking) this.pickSurface.show();
@@ -26847,7 +27302,9 @@ var ReviewLayer = class {
   async addNote(pending, intent, text) {
     var _a7, _b, _c2;
     const url = (_a7 = this.view.currentUrl()) != null ? _a7 : "";
-    const baseline = intent === "keep" ? (_b = (await this.view.driver.fingerprintsFor([pending.element.selector]).catch(() => [null]))[0]) != null ? _b : null : null;
+    const query = { selector: pending.element.selector, tag: pending.element.tag, place: pending.place };
+    const baseline = intent === "keep" ? (_b = (await this.view.driver.fingerprintsFor([query]).catch(() => [null]))[0]) != null ? _b : null : null;
+    const place = pending.place;
     try {
       const note = this.browser.review.add({
         pageKey: this.browser.pageKey(this.view, url),
@@ -26860,7 +27317,7 @@ var ReviewLayer = class {
         text,
         screenshotPath: pending.screenshotPath,
         baseline,
-        anchor: anchorWithin(pending.point, pending.rect),
+        anchor: (place == null ? void 0 : place.rx) !== void 0 && place.ry !== void 0 ? { rx: place.rx, ry: place.ry } : anchorWithin(pending.point, pending.rect),
         place: pending.place
       });
       this.focusedNote = note.id;
@@ -26910,7 +27367,7 @@ var ReviewLayer = class {
     if (keeps.length === 0) return;
     let looks;
     try {
-      looks = await this.view.driver.fingerprintsFor(keeps.map((note) => note.element.selector));
+      looks = await this.view.driver.fingerprintsFor(keeps.map(queryFor));
     } catch (e) {
       return;
     }
@@ -26992,7 +27449,7 @@ var ReviewLayer = class {
    * that would land on the same spot sit side by side.
    */
   placePins() {
-    var _a7, _b;
+    var _a7;
     const taken = /* @__PURE__ */ new Map();
     const viewport = { width: this.layerEl.clientWidth, height: this.layerEl.clientHeight };
     for (const [id, pin] of this.pinEls) {
@@ -27002,16 +27459,15 @@ var ReviewLayer = class {
         pin.hide();
         continue;
       }
-      const anchor = (_a7 = note.anchor) != null ? _a7 : { rx: 1, ry: 0 };
-      const x = state.x + anchor.rx * state.width;
-      const y2 = state.y + anchor.ry * state.height;
+      const { x, y: y2 } = state;
+      pin.toggleClass("is-lost", state.lost !== void 0);
       if (!pinInSight(x, y2, state.clip, viewport)) {
         pin.hide();
         continue;
       }
       pin.show();
       const spot = `${Math.round(x / 12)}:${Math.round(y2 / 12)}`;
-      const shift = (_b = taken.get(spot)) != null ? _b : 0;
+      const shift = (_a7 = taken.get(spot)) != null ? _a7 : 0;
       taken.set(spot, shift + pin.offsetWidth + 3);
       const left = Math.max(2, Math.min(x - PIN_TIP_X + shift, viewport.width - pin.offsetWidth - 4));
       pin.style.left = `${left}px`;
@@ -27030,10 +27486,10 @@ var ReviewLayer = class {
       }
       if (this.view.isShown()) {
         try {
-          const states = await this.view.driver.pinsFor(notes.map((n) => ({ selector: n.element.selector, tag: n.element.tag, place: n.place })));
+          const states = await this.view.driver.pinsFor(notes.map(queryFor));
           notes.forEach((note, i8) => {
             var _a7;
-            const state = (_a7 = states[i8]) != null ? _a7 : { state: "missing" };
+            const state = (_a7 = states[i8]) != null ? _a7 : { state: "missing", why: "rewritten" };
             this.pins.set(note.id, state);
             if (state.state === "shown" && state.text !== void 0) this.browser.review.retext(note.id, state.text);
           });
@@ -27046,20 +27502,26 @@ var ReviewLayer = class {
     };
     void tick();
   }
-  /** Tray cards whose element isn't on the page, or is on another slide
-   *  or screen of it, say so. */
+  /** Each tray card says where its element is when that isn't plainly
+   *  on screen: on another slide or screen, in a closed dialog, or lost,
+   *  and why. Retrace shows where only clicks get there. */
   markMissing(notes) {
-    var _a7;
+    var _a7, _b, _c2;
     for (const note of notes) {
       const card = this.trayEl.querySelector(`[data-note="${note.id}"]`);
-      const state = (_a7 = this.pins.get(note.id)) == null ? void 0 : _a7.state;
-      card == null ? void 0 : card.toggleClass("is-missing", state === "missing");
-      card == null ? void 0 : card.toggleClass("is-other-view", state === "elsewhere");
+      if (!card) continue;
+      const state = this.pins.get(note.id);
+      const text = state ? whereText(state) : "";
+      const where = card.querySelector(".terminus-review-where");
+      if (where && where.textContent !== text) where.setText(text);
+      card.toggleClass("is-away", text !== "");
+      card.toggleClass("is-lost", (state == null ? void 0 : state.state) === "missing" || (state == null ? void 0 : state.state) === "shown" && state.lost !== void 0);
+      card.toggleClass("can-retrace", state !== void 0 && state.state !== "shown" && ((_c2 = (_b = (_a7 = note.place) == null ? void 0 : _a7.trail) == null ? void 0 : _b.length) != null ? _c2 : 0) > 0);
     }
   }
   outlineFor(id) {
     const state = this.pins.get(id);
-    if ((state == null ? void 0 : state.state) === "shown") this.showOutline(state);
+    if ((state == null ? void 0 : state.state) === "shown" && state.rect) this.showOutline(state.rect);
   }
   showOutline(rect) {
     this.outlineEl.style.left = `${rect.x}px`;
@@ -27161,7 +27623,7 @@ var ReviewLayer = class {
     return siteOfPageKey(note.pageKey) === siteOfPageKey(this.browser.pageKey(this.view, url));
   }
   renderCard(list, note) {
-    var _a7;
+    var _a7, _b, _c2, _d;
     const card = list.createDiv({ cls: "terminus-review-card", attr: { "data-note": note.id, "data-status": note.status } });
     card.toggleClass("is-focused", note.id === this.focusedNote);
     card.toggleClass("has-drift", note.drift !== null);
@@ -27181,8 +27643,17 @@ var ReviewLayer = class {
     const [first, ...rest] = note.thread;
     if ((first == null ? void 0 : first.by) === "user") card.createDiv({ cls: "terminus-review-comment", text: first.text });
     card.createDiv({ cls: "terminus-review-element", text: elementLabel(note.element) });
-    if (note.intent !== "keep") card.createDiv({ cls: "terminus-review-missing", text: "Not on the page now: it may have changed or moved." });
-    card.createDiv({ cls: "terminus-review-other-view", text: "On another slide or screen of this page, or out of sight." });
+    card.createDiv({ cls: "terminus-review-where" });
+    const steps = (_c2 = (_b = (_a7 = note.place) == null ? void 0 : _a7.trail) == null ? void 0 : _b.length) != null ? _c2 : 0;
+    if (steps) {
+      const retrace = card.createEl("button", {
+        cls: "terminus-review-retrace",
+        text: `Retrace ${steps === 1 ? "1 click" : `${steps} clicks`}`,
+        attr: { type: "button" }
+      });
+      (0, import_obsidian25.setTooltip)(retrace, "Click again what you clicked to get to this screen, then show the comment. It runs the page's own code, so a click that changed something changes it again.");
+      retrace.addEventListener("click", () => void this.retrace(note));
+    }
     if (note.drift) {
       const drift = card.createDiv({ cls: "terminus-review-drift" });
       drift.createDiv({ cls: "terminus-review-drift-title", text: "Changed since you kept it" });
@@ -27201,7 +27672,7 @@ var ReviewLayer = class {
         row.createDiv({ cls: "terminus-review-entry-text", text: entry.text });
       }
     }
-    if (((_a7 = this.editing) == null ? void 0 : _a7.id) === note.id) {
+    if (((_d = this.editing) == null ? void 0 : _d.id) === note.id) {
       this.renderEditBox(card, note, this.editing.kind);
       return;
     }
@@ -27284,31 +27755,54 @@ var ReviewLayer = class {
   }
   /**
    * Takes the user to the note's element wherever it is on the page: the
-   * screen it was left on, the slide of a deck, the dialog it was in (see
-   * GO_TO_PIN), scrolled into view and outlined.
+   * screen it was left on (the page's, or a device frame's), the slide of
+   * a deck, the dialog it was in (see GO_TO_PIN), scrolled into view and
+   * outlined. Where only clicks get there, says so: repeating them is the
+   * user's call (Retrace on the card).
    */
   async reveal(note) {
     var _a7, _b;
     this.focusedNote = note.id;
     const driver = this.view.driver;
-    const query = { selector: note.element.selector, tag: note.element.tag, place: note.place };
-    let result = await driver.goToPin(query).catch(() => "missing");
-    if (result === "route") {
+    const query = queryFor(note);
+    const number = note.id.slice(1);
+    let go2 = await driver.goToPin(query).catch(() => ({ result: "missing" }));
+    for (let tries = 0; tries < 3 && (go2.result === "route" || go2.result === "frame"); tries++) {
       try {
-        await this.view.navigate(this.view.urlForPage(note) + ((_b = (_a7 = note.place) == null ? void 0 : _a7.route) != null ? _b : ""));
-        await driver.waitForLoad().catch(() => void 0);
-        result = await driver.goToPin(query).catch(() => "missing");
+        if (go2.result === "route") {
+          await this.view.navigate(this.view.urlForPage(note) + ((_b = (_a7 = note.place) == null ? void 0 : _a7.route) != null ? _b : ""));
+          await driver.waitForLoad().catch(() => void 0);
+        } else {
+          await sleep2(FRAME_SETTLE_MS);
+        }
       } catch (err) {
         new import_obsidian25.Notice(`Terminus: ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
+      go2 = await driver.goToPin(query).catch(() => ({ result: "missing" }));
     }
-    const number = note.id.slice(1);
-    if (result === "missing") new import_obsidian25.Notice(`Terminus: what comment ${number} is about isn't on the page now. It may have changed or moved.`);
-    else if (result !== "shown") new import_obsidian25.Notice(`Terminus: comment ${number} is on this page, but in a part of it that only the page itself can open.`);
+    if (go2.result === "missing") new import_obsidian25.Notice(`Terminus: what comment ${number} is about isn't on the page now.`);
+    else if (go2.result === "trail") new import_obsidian25.Notice(`Terminus: comment ${number} is on a screen only clicks get to. Retrace on its card clicks the way there again.`, 8e3);
+    else if (go2.result !== "shown") new import_obsidian25.Notice(`Terminus: comment ${number} is on this page, but in a part of it that only the page itself can open.`);
     this.render();
     window.setTimeout(() => this.outlineFor(note.id), PIN_POLL_MS * 2);
     window.setTimeout(() => this.outlineEl.hide(), 1600);
+  }
+  /** Clicks again what the user clicked to get to the note's screen, then
+   *  shows it. Only on the user's say-so: the clicks run the page's code. */
+  async retrace(note) {
+    var _a7, _b;
+    const trail = (_b = (_a7 = note.place) == null ? void 0 : _a7.trail) != null ? _b : [];
+    const driver = this.view.driver;
+    for (const [i8, step] of trail.entries()) {
+      const clicked = await driver.replayStep(step).catch(() => false);
+      if (!clicked) {
+        new import_obsidian25.Notice(`Terminus: couldn't retrace click ${i8 + 1} of ${trail.length} ("${step.text}"): it isn't on the page now.`);
+        break;
+      }
+      await sleep2(RETRACE_STEP_MS);
+    }
+    await this.reveal({ ...note, place: note.place ? { ...note.place, trail: [] } : null });
   }
   // ---- Sending ----
   /** Open notes on this page and the site's other pages. */
@@ -27372,6 +27866,18 @@ function statusLabel(note) {
   if (note.drift) return note.status === "open" ? "Changed \xB7 not sent" : "Changed";
   return note.status === "open" ? "Not sent" : "Agent told";
 }
+function queryFor(note) {
+  return { selector: note.element.selector, tag: note.element.tag, place: note.place };
+}
+function whereText(state) {
+  if (state.state === "missing") return LOST_REASONS[state.why];
+  if (state.state === "shown") return state.lost ? `${LOST_REASONS[state.lost]} Shown where you left it.` : "";
+  if (state.where && state.kind === "screen") return `On another screen of this page (${state.where}).`;
+  if (state.where && state.kind === "closed") return `In the ${state.where}, which is closed now.`;
+  if (state.where && state.kind === "view") return `On ${state.where}, which isn't showing.`;
+  return "On another slide or screen of this page, or out of sight.";
+}
+var sleep2 = (ms3) => new Promise((resolve) => window.setTimeout(resolve, ms3));
 function anchorWithin(point, rect) {
   if (!rect || rect.width <= 0 || rect.height <= 0) return null;
   const clamp = (n) => Math.min(1, Math.max(0, n));
@@ -27575,7 +28081,10 @@ var AgentBrowserView = class extends import_obsidian26.ItemView {
       attr: { partition: AGENT_BROWSER_PARTITION, src: "about:blank" }
     });
     this.ready = new Promise((resolve) => this.resolveReady = resolve);
-    webview.addEventListener("dom-ready", () => this.onDomReady());
+    webview.addEventListener("dom-ready", () => {
+      this.onDomReady();
+      void this.driver.installTapRecorder();
+    });
     webview.addEventListener("did-start-navigation", (e) => this.onStartNavigation(e));
     webview.addEventListener("did-navigate", (e) => this.onNavigated(e.url, false));
     webview.addEventListener("did-navigate-in-page", (e) => this.onNavigated(e.url, true));

@@ -218,7 +218,12 @@ export class AgentBrowserView extends ItemView {
       attr: { partition: AGENT_BROWSER_PARTITION, src: "about:blank" },
     });
     this.ready = new Promise((resolve) => (this.resolveReady = resolve));
-    webview.addEventListener("dom-ready", () => this.onDomReady());
+    webview.addEventListener("dom-ready", () => {
+      this.onDomReady();
+      // Remembers the user's clicks on each page, for retracing them to a
+      // review pin on a screen only clicks reach (see TAP_RECORDER).
+      void this.driver.installTapRecorder();
+    });
     webview.addEventListener("did-start-navigation", (e) => this.onStartNavigation(e as StartNavigationEvent));
     webview.addEventListener("did-navigate", (e) => this.onNavigated((e as NavigateEvent).url, false));
     webview.addEventListener("did-navigate-in-page", (e) => this.onNavigated((e as NavigateEvent).url, true));

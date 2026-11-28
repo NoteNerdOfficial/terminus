@@ -2,7 +2,23 @@ import type { ConsoleLevel, DebuggerSession, GuestPage } from "terminus-node-bri
 import { parseKey } from "./keys";
 import { formatSnapshot, parseAxTree, type Snapshot } from "./snapshot";
 import type { Fingerprint, PickedElement } from "./review";
-import { PINS_FOR, PLACE_OF, GO_TO_PIN, SHOWN_AT, isPinPlace, isPinState, type PinPlace, type PinQuery, type PinState } from "./pinPlace";
+import {
+  FINGERPRINTS_FOR,
+  GO_TO_PIN,
+  PINS_FOR,
+  PLACE_OF,
+  REPLAY_STEP,
+  SHOWN_AT,
+  TAP_RECORDER,
+  isGoResult,
+  isPinPlace,
+  isPinState,
+  type GoResult,
+  type PinPlace,
+  type PinQuery,
+  type PinState,
+  type TrailStep,
+} from "./pinPlace";
 
 export interface ConsoleEntry {
   level: ConsoleLevel;
@@ -101,29 +117,6 @@ const DESCRIBE_ELEMENT = String.raw`function () {
     },
     rect: { x: r.left, y: r.top, width: r.width, height: r.height },
   };
-}`;
-
-/**
- * Runs in the page: how each selector's element looks (see Fingerprint in
- * review.ts), or null when it isn't there. Sizes and positions are left out
- * on purpose: they change when the pane is resized.
- */
-const FINGERPRINTS_FOR = String.raw`function (selectors) {
-  const STYLES = ["color", "background-color", "background-image", "font-family", "font-size", "font-weight", "font-style",
-    "text-decoration-line", "text-transform", "text-align", "letter-spacing", "display", "visibility", "opacity",
-    "border-top-width", "border-top-style", "border-top-color", "border-radius", "box-shadow"];
-  const ATTRS = ["class", "src", "href", "alt", "title", "aria-label", "placeholder", "type", "disabled"];
-  return selectors.map((sel) => {
-    let el = null;
-    try { el = document.querySelector(sel); } catch (e) { return null; }
-    if (!el) return null;
-    const cs = getComputedStyle(el);
-    const styles = {};
-    for (const name of STYLES) styles[name] = cs.getPropertyValue(name);
-    const attrs = {};
-    for (const name of ATTRS) { const v = el.getAttribute(name); if (v !== null) attrs[name] = v.slice(0, 300); }
-    return { text: (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 500), attrs, styles, viewport: window.innerWidth };
-  });
 }`;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -418,9 +411,20 @@ export class BrowserDriver {
 
   /** Scrolls a selector's element to the middle of the viewport. */
   /** Takes the user to a review pin's element: see GO_TO_PIN. */
-  async goToPin(query: PinQuery): Promise<"route" | "missing" | "shown" | "hidden"> {
+  async goToPin(query: PinQuery): Promise<GoResult> {
     const result = await this.evaluate(`(${GO_TO_PIN})(${JSON.stringify(query)})`);
-    return result === "route" || result === "shown" || result === "hidden" ? result : "missing";
+    return isGoResult(result) ? result : { result: "missing" };
+  }
+
+  /** Clicks one step of the trail that led to a pin: see REPLAY_STEP. */
+  async replayStep(step: TrailStep): Promise<boolean> {
+    return (await this.evaluate(`(${REPLAY_STEP})(${JSON.stringify(step)})`)) === true;
+  }
+
+  /** Starts remembering the user's clicks on a page that just loaded, for
+   *  retracing them to a pin (see TAP_RECORDER). Quiet when it can't. */
+  async installTapRecorder(): Promise<void> {
+    await this.evaluate(TAP_RECORDER).catch(() => undefined);
   }
 
   async stopPicking(): Promise<void> {
@@ -430,8 +434,8 @@ export class BrowserDriver {
   }
 
   /** What a picked element is, where it is in the page's viewport, and
-   *  which screen of the page it's on (see pinPlace.ts). */
-  async describeNode(backendNodeId: number): Promise<{ element: PickedElement; rect: Rect | null; place: PinPlace | null }> {
+   *  where its pin goes (see pinPlace.ts), given where the click was. */
+  async describeNode(backendNodeId: number, point: { x: number; y: number }): Promise<{ element: PickedElement; rect: Rect | null; place: PinPlace | null }> {
     let result: unknown;
     try {
       result = await this.session().send("DOM.resolveNode", { backendNodeId });
@@ -444,8 +448,10 @@ export class BrowserDriver {
     const described = value as { element?: PickedElement; rect?: Rect } | null;
     if (!described?.element) throw new DriverError("page_error", "The page didn't describe the element");
     // Only for placing its pin: a page that won't say still gets its note.
-    const place = await this.callOn(objectId, PLACE_OF, [], "the element").catch(() => null);
-    return { element: described.element, rect: described.rect ?? null, place: isPinPlace(place) ? place : null };
+    const place = await this.callOn(objectId, PLACE_OF, [point.x, point.y], "the element").catch(() => null);
+    if (!isPinPlace(place)) return { element: described.element, rect: described.rect ?? null, place: null };
+    // The box in the top page's viewport, through any frame it's in.
+    return { element: described.element, rect: place.rect ?? described.rect ?? null, place };
   }
 
   /**
@@ -457,12 +463,12 @@ export class BrowserDriver {
     if (queries.length === 0) return [];
     const value = await this.evaluate(`(${PINS_FOR})(${JSON.stringify(queries)})`);
     if (!Array.isArray(value)) throw new DriverError("page_error", "The page didn't answer");
-    return queries.map((_, i) => (isPinState(value[i]) ? value[i] : { state: "missing" }));
+    return queries.map((_, i): PinState => (isPinState(value[i]) ? value[i] : { state: "missing", why: "rewritten" }));
   }
 
-  async fingerprintsFor(selectors: string[]): Promise<(Fingerprint | null)[]> {
-    if (selectors.length === 0) return [];
-    const value = await this.evaluate(`(${FINGERPRINTS_FOR})(${JSON.stringify(selectors)})`);
+  async fingerprintsFor(queries: PinQuery[]): Promise<(Fingerprint | null)[]> {
+    if (queries.length === 0) return [];
+    const value = await this.evaluate(`(${FINGERPRINTS_FOR})(${JSON.stringify(queries)})`);
     if (!Array.isArray(value)) throw new DriverError("page_error", "The page didn't answer");
     return value.map((entry) => (isFingerprint(entry) ? entry : null));
   }

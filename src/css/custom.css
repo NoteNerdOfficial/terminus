@@ -5142,25 +5142,36 @@ body:not(.is-phone) .workspace-split.mod-root .workspace-split:has(.workspace-ta
   overflow-wrap: anywhere;
 }
 
-.terminus-review-missing {
-  display: none;
-  color: var(--text-warning);
-  font-size: var(--font-ui-smaller);
-}
-
-.terminus-review-card.is-missing .terminus-review-missing {
-  display: block;
-}
-
-/* On the page, but on a slide or screen that isn't up: not a problem, just where it is. */
-.terminus-review-other-view {
+/* Where a comment is when it isn't plainly on screen: another slide or
+   screen, a closed dialog, or lost (in the warning colour). */
+.terminus-review-where {
   display: none;
   color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
 
-.terminus-review-card.is-other-view .terminus-review-other-view {
+.terminus-review-card.is-away .terminus-review-where {
   display: block;
+}
+
+.terminus-review-card.is-lost .terminus-review-where {
+  color: var(--text-warning);
+}
+
+.terminus-review-retrace {
+  display: none;
+  align-self: flex-start;
+  font-size: var(--font-ui-smaller);
+}
+
+.terminus-review-card.can-retrace .terminus-review-retrace {
+  display: inline-flex;
+}
+
+/* A pin drawn where it was dropped because its element is gone. */
+.terminus-review-layer .terminus-review-pin.is-lost {
+  opacity: 0.6;
+  border-style: dashed;
 }
 
 /* Replies: set in from the comment on a tinted ground, each with who said it. */

@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { pageDependsOn } from "../src/browser/pageFiles";
 import { BrowserSiteRegistry } from "../src/browser/sites";
-import { ReviewBook } from "../src/browser/review";
+import { ReviewBook, composeReviewPrompt } from "../src/browser/review";
 import { isPinPlace, isPinState, pinInSight } from "../src/browser/pinPlace";
 
 describe("which file changes reload a page", () => {
@@ -88,8 +88,11 @@ describe("pin places", () => {
     assert.equal(isPinPlace(place), true);
     assert.equal(isPinPlace({ route: null, view: "", context: null }), false);
     assert.equal(isPinState({ state: "elsewhere" }), true);
-    assert.equal(isPinState({ state: "shown", x: 1, y: 2, width: 3, height: 4, clip: null }), true);
-    assert.equal(isPinState({ state: "shown", x: 1, y: 2, width: Infinity, height: 4, clip: null }), false);
+    assert.equal(isPinState({ state: "elsewhere", kind: "view", where: "slide 2 of 3" }), true);
+    assert.equal(isPinState({ state: "shown", x: 1, y: 2, rect: null, clip: null, lost: "rewritten" }), true);
+    assert.equal(isPinState({ state: "shown", x: Infinity, y: 2, rect: null, clip: null }), false);
+    assert.equal(isPinState({ state: "missing", why: "duplicate" }), true);
+    assert.equal(isPinState({ state: "missing" }), false);
     assert.equal(isPinState(null), false);
   });
 });
@@ -108,5 +111,25 @@ describe("whether a pin can be seen", () => {
     assert.equal(pinInSight(200, 200, clip, viewport), true);
     assert.equal(pinInSight(500, 200, clip, viewport), false);
     assert.equal(pinInSight(200, 200, { left: 0, top: 0, right: 0, bottom: 0 }, viewport), false);
+  });
+});
+
+describe("a comment inside a frame", () => {
+  it("tells the agent which frame the selector belongs to", () => {
+    const book = new ReviewBook(() => 1);
+    const note = book.add({
+      pageKey: "file:/vault/phone/index.html",
+      pageUrl: "phone/index.html",
+      href: "http://127.0.0.1:1/serve/x/index.html",
+      pageTitle: "Phone",
+      sourcePath: null,
+      element: { selector: "#count", tag: "p", role: "", name: "", text: "3 results", html: "<p id=count>" },
+      intent: "change",
+      text: "Bold the number",
+      screenshotPath: null,
+      place: { route: null, view: "", context: "~div.sheet", text: "3 results", frame: { path: ["#screen"], route: "/phone/app.html", src: "/phone/app.html" } },
+    });
+    const prompt = composeReviewPrompt([note], { browserId: null, canReply: false, showPath: (p) => p });
+    assert.match(prompt, /In a frame showing: `\/phone\/app\.html`/);
   });
 });

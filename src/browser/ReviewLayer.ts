@@ -4,9 +4,13 @@ import { INTENTS, INTENT_ICONS, bindTextKeys, renderComposerFields, renderShortc
 import type { AgentBrowser } from "./AgentBrowser";
 import type { AgentBrowserView } from "./AgentBrowserView";
 import type { Rect } from "./BrowserDriver";
-import { pinInSight, type PinPlace, type PinState } from "./pinPlace";
+import { LOST_REASONS, pinInSight, type PinPlace, type PinQuery, type PinState } from "./pinPlace";
 import { INTENT_HINTS, INTENT_LABELS, STATUS_LABELS, elementLabel, siteOfPageKey, type Fingerprint, type PickedElement, type ReviewIntent, type ReviewNote } from "./review";
 
+/** How long a device frame gets to load the screen it was sent to. */
+const FRAME_SETTLE_MS = 600;
+/** Between retraced clicks: long enough for an app to react to each. */
+const RETRACE_STEP_MS = 350;
 /** How often pins follow their elements while the page scrolls or changes. */
 const PIN_POLL_MS = 120;
 /** A pin's size, and where its tip is: the bottom-left corner. */
@@ -226,7 +230,7 @@ export class ReviewLayer {
     this.pickSurface.hide();
     let described: { element: PickedElement; rect: Rect | null; place: PinPlace | null };
     try {
-      described = await driver.describeNode(backendNodeId);
+      described = await driver.describeNode(backendNodeId, point);
     } catch (err) {
       new Notice(`Terminus: ${err instanceof Error ? err.message : String(err)}`);
       if (this.picking) this.pickSurface.show();
@@ -294,7 +298,9 @@ export class ReviewLayer {
   private async addNote(pending: Pending, intent: ReviewIntent, text: string): Promise<void> {
     const url = this.view.currentUrl() ?? "";
     // How a kept element looks now, so a later change to it can be noticed.
-    const baseline = intent === "keep" ? ((await this.view.driver.fingerprintsFor([pending.element.selector]).catch(() => [null]))[0] ?? null) : null;
+    const query: PinQuery = { selector: pending.element.selector, tag: pending.element.tag, place: pending.place };
+    const baseline = intent === "keep" ? ((await this.view.driver.fingerprintsFor([query]).catch(() => [null]))[0] ?? null) : null;
+    const place = pending.place;
     try {
       const note = this.browser.review.add({
         pageKey: this.browser.pageKey(this.view, url),
@@ -307,7 +313,7 @@ export class ReviewLayer {
         text,
         screenshotPath: pending.screenshotPath,
         baseline,
-        anchor: anchorWithin(pending.point, pending.rect),
+        anchor: place?.rx !== undefined && place.ry !== undefined ? { rx: place.rx, ry: place.ry } : anchorWithin(pending.point, pending.rect),
         place: pending.place,
       });
       this.focusedNote = note.id;
@@ -365,7 +371,7 @@ export class ReviewLayer {
     if (keeps.length === 0) return;
     let looks: (Fingerprint | null)[];
     try {
-      looks = await this.view.driver.fingerprintsFor(keeps.map((note) => note.element.selector));
+      looks = await this.view.driver.fingerprintsFor(keeps.map(queryFor));
     } catch {
       return; // Still loading; the next load checks again.
     }
@@ -460,9 +466,10 @@ export class ReviewLayer {
         pin.hide();
         continue;
       }
-      const anchor = note.anchor ?? { rx: 1, ry: 0 };
-      const x = state.x + anchor.rx * state.width;
-      const y = state.y + anchor.ry * state.height;
+      // The page works out the tip (see PINS_FOR): on the element, or where
+      // it was dropped when the element is gone, which the pin then says.
+      const { x, y } = state;
+      pin.toggleClass("is-lost", state.lost !== undefined);
       if (!pinInSight(x, y, state.clip, viewport)) {
         pin.hide();
         continue;
@@ -489,9 +496,9 @@ export class ReviewLayer {
       }
       if (this.view.isShown()) {
         try {
-          const states = await this.view.driver.pinsFor(notes.map((n) => ({ selector: n.element.selector, tag: n.element.tag, place: n.place })));
+          const states = await this.view.driver.pinsFor(notes.map(queryFor));
           notes.forEach((note, i) => {
-            const state = states[i] ?? { state: "missing" };
+            const state: PinState = states[i] ?? { state: "missing", why: "rewritten" };
             this.pins.set(note.id, state);
             if (state.state === "shown" && state.text !== undefined) this.browser.review.retext(note.id, state.text);
           });
@@ -506,20 +513,26 @@ export class ReviewLayer {
     void tick();
   }
 
-  /** Tray cards whose element isn't on the page, or is on another slide
-   *  or screen of it, say so. */
+  /** Each tray card says where its element is when that isn't plainly
+   *  on screen: on another slide or screen, in a closed dialog, or lost,
+   *  and why. Retrace shows where only clicks get there. */
   private markMissing(notes: ReviewNote[]): void {
     for (const note of notes) {
-      const card = this.trayEl.querySelector(`[data-note="${note.id}"]`);
-      const state = this.pins.get(note.id)?.state;
-      card?.toggleClass("is-missing", state === "missing");
-      card?.toggleClass("is-other-view", state === "elsewhere");
+      const card = this.trayEl.querySelector<HTMLElement>(`[data-note="${note.id}"]`);
+      if (!card) continue;
+      const state = this.pins.get(note.id);
+      const text = state ? whereText(state) : "";
+      const where = card.querySelector<HTMLElement>(".terminus-review-where");
+      if (where && where.textContent !== text) where.setText(text);
+      card.toggleClass("is-away", text !== "");
+      card.toggleClass("is-lost", state?.state === "missing" || (state?.state === "shown" && state.lost !== undefined));
+      card.toggleClass("can-retrace", state !== undefined && state.state !== "shown" && (note.place?.trail?.length ?? 0) > 0);
     }
   }
 
   private outlineFor(id: string): void {
     const state = this.pins.get(id);
-    if (state?.state === "shown") this.showOutline(state);
+    if (state?.state === "shown" && state.rect) this.showOutline(state.rect);
   }
 
   private showOutline(rect: Rect): void {
@@ -652,8 +665,17 @@ export class ReviewLayer {
     const [first, ...rest] = note.thread;
     if (first?.by === "user") card.createDiv({ cls: "terminus-review-comment", text: first.text });
     card.createDiv({ cls: "terminus-review-element", text: elementLabel(note.element) });
-    if (note.intent !== "keep") card.createDiv({ cls: "terminus-review-missing", text: "Not on the page now: it may have changed or moved." });
-    card.createDiv({ cls: "terminus-review-other-view", text: "On another slide or screen of this page, or out of sight." });
+    card.createDiv({ cls: "terminus-review-where" });
+    const steps = note.place?.trail?.length ?? 0;
+    if (steps) {
+      const retrace = card.createEl("button", {
+        cls: "terminus-review-retrace",
+        text: `Retrace ${steps === 1 ? "1 click" : `${steps} clicks`}`,
+        attr: { type: "button" },
+      });
+      setTooltip(retrace, "Click again what you clicked to get to this screen, then show the comment. It runs the page's own code, so a click that changed something changes it again.");
+      retrace.addEventListener("click", () => void this.retrace(note));
+    }
     if (note.drift) {
       const drift = card.createDiv({ cls: "terminus-review-drift" });
       drift.createDiv({ cls: "terminus-review-drift-title", text: "Changed since you kept it" });
@@ -759,31 +781,55 @@ export class ReviewLayer {
 
   /**
    * Takes the user to the note's element wherever it is on the page: the
-   * screen it was left on, the slide of a deck, the dialog it was in (see
-   * GO_TO_PIN), scrolled into view and outlined.
+   * screen it was left on (the page's, or a device frame's), the slide of
+   * a deck, the dialog it was in (see GO_TO_PIN), scrolled into view and
+   * outlined. Where only clicks get there, says so: repeating them is the
+   * user's call (Retrace on the card).
    */
   private async reveal(note: ReviewNote): Promise<void> {
     this.focusedNote = note.id;
     const driver = this.view.driver;
-    const query = { selector: note.element.selector, tag: note.element.tag, place: note.place };
-    let result = await driver.goToPin(query).catch(() => "missing" as const);
-    if (result === "route") {
-      // Another screen of the page: go there, then look again.
+    const query = queryFor(note);
+    const number = note.id.slice(1);
+    let go = await driver.goToPin(query).catch(() => ({ result: "missing" as const }));
+    for (let tries = 0; tries < 3 && (go.result === "route" || go.result === "frame"); tries++) {
       try {
-        await this.view.navigate(this.view.urlForPage(note) + (note.place?.route ?? ""));
-        await driver.waitForLoad().catch(() => undefined);
-        result = await driver.goToPin(query).catch(() => "missing" as const);
+        if (go.result === "route") {
+          // Another screen of the page: go there, then look again.
+          await this.view.navigate(this.view.urlForPage(note) + (note.place?.route ?? ""));
+          await driver.waitForLoad().catch(() => undefined);
+        } else {
+          // A device frame sent to the screen: let it load.
+          await sleep(FRAME_SETTLE_MS);
+        }
       } catch (err) {
         new Notice(`Terminus: ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
+      go = await driver.goToPin(query).catch(() => ({ result: "missing" as const }));
     }
-    const number = note.id.slice(1);
-    if (result === "missing") new Notice(`Terminus: what comment ${number} is about isn't on the page now. It may have changed or moved.`);
-    else if (result !== "shown") new Notice(`Terminus: comment ${number} is on this page, but in a part of it that only the page itself can open.`);
+    if (go.result === "missing") new Notice(`Terminus: what comment ${number} is about isn't on the page now.`);
+    else if (go.result === "trail") new Notice(`Terminus: comment ${number} is on a screen only clicks get to. Retrace on its card clicks the way there again.`, 8000);
+    else if (go.result !== "shown") new Notice(`Terminus: comment ${number} is on this page, but in a part of it that only the page itself can open.`);
     this.render();
     window.setTimeout(() => this.outlineFor(note.id), PIN_POLL_MS * 2);
     window.setTimeout(() => this.outlineEl.hide(), 1600);
+  }
+
+  /** Clicks again what the user clicked to get to the note's screen, then
+   *  shows it. Only on the user's say-so: the clicks run the page's code. */
+  private async retrace(note: ReviewNote): Promise<void> {
+    const trail = note.place?.trail ?? [];
+    const driver = this.view.driver;
+    for (const [i, step] of trail.entries()) {
+      const clicked = await driver.replayStep(step).catch(() => false);
+      if (!clicked) {
+        new Notice(`Terminus: couldn't retrace click ${i + 1} of ${trail.length} ("${step.text}"): it isn't on the page now.`);
+        break;
+      }
+      await sleep(RETRACE_STEP_MS);
+    }
+    await this.reveal({ ...note, place: note.place ? { ...note.place, trail: [] } : null });
   }
 
   // ---- Sending ----
@@ -869,6 +915,23 @@ function statusLabel(note: ReviewNote): string {
 }
 
 /** Where a click fell within an element, as fractions across and down it. */
+/** What the page needs to find a note's element. */
+function queryFor(note: ReviewNote): PinQuery {
+  return { selector: note.element.selector, tag: note.element.tag, place: note.place };
+}
+
+/** Where a pin is, in words, when it isn't plainly on screen. */
+function whereText(state: PinState): string {
+  if (state.state === "missing") return LOST_REASONS[state.why];
+  if (state.state === "shown") return state.lost ? `${LOST_REASONS[state.lost]} Shown where you left it.` : "";
+  if (state.where && state.kind === "screen") return `On another screen of this page (${state.where}).`;
+  if (state.where && state.kind === "closed") return `In the ${state.where}, which is closed now.`;
+  if (state.where && state.kind === "view") return `On ${state.where}, which isn't showing.`;
+  return "On another slide or screen of this page, or out of sight.";
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
+
 function anchorWithin(point: { x: number; y: number }, rect: Rect | null): { rx: number; ry: number } | null {
   if (!rect || rect.width <= 0 || rect.height <= 0) return null;
   const clamp = (n: number): number => Math.min(1, Math.max(0, n));
