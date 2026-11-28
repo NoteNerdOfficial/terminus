@@ -28189,7 +28189,7 @@ var AgentBrowserView = class extends import_obsidian26.ItemView {
       return this.reloading;
     }
     const run = async () => {
-      let problem = null;
+      let problem;
       do {
         this.reloadAgain = false;
         problem = await this.reloadOnce();
